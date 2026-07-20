@@ -23,6 +23,7 @@ from app.raw_audio_serializer import RawAudioSerializer
 from app.session_manager import SessionManager
 from app.audio_recording_service import AudioRecordingService
 from app.phase_emitter import PhaseEmitter
+from app.output_lead_buffer import OutputLeadBuffer
 from app.transcript_logger import TranscriptLogger
 
 logger = logging.getLogger(__name__)
@@ -564,6 +565,14 @@ class WebSocketHandler:
         )
         if output_recorder:
             pipeline_components.append(output_recorder)
+
+        # Prime the device's playout buffer against the resampler cold-start
+        # starve: hold the first LEAD_MS of each reply's audio and burst it so the
+        # device gets a buffer lead even on a cold turn. Placed LAST, right before
+        # transport.output(), so it acts on the final audio stream the device
+        # receives (the recorder above still captures the true, un-delayed frames).
+        # Pass-through when OUTPUT_LEAD_BUFFER_MS=0.
+        pipeline_components.append(OutputLeadBuffer())
 
         pipeline_components.append(transport.output())
         
