@@ -28,6 +28,27 @@ logger = logging.getLogger(__name__)
 # the model gets the bridge's own "took too long" message, not a dead socket.
 ASK_TIMEOUT_S = 145
 
+# recall_memory is a conversational fast path: the bridge greps local files and
+# normally answers well under a second. If it hasn't answered in a few seconds
+# something is wrong, and a clean miss keeps the conversation moving — the
+# person is standing there waiting; a long stall is worse than "not handy".
+RECALL_TIMEOUT_S = 3
+# Bound what gets injected into the realtime context, whatever the bridge
+# returns: a spoken answer only ever uses a couple of lines.
+RECALL_MAX_LINES = 10
+RECALL_MAX_LINE_CHARS = 300
+
+RECALL_MISS_NOTE = (
+    "nothing found — answer briefly that you don't have that handy; do not "
+    "call recall_memory again for this question. Use ask_openclaw only if it "
+    "likely knows more or the request needs action."
+)
+RECALL_UNAVAILABLE_NOTE = (
+    "recall unavailable right now — do not retry recall_memory; use "
+    "ask_openclaw if the question matters, otherwise say you can't check "
+    "at the moment."
+)
+
 
 def openclaw_url() -> str:
     return os.environ.get("OPENCLAW_URL", "").strip()
@@ -117,19 +138,22 @@ def register_openclaw_tool(llm) -> None:
             await params.result_callback({"matches": [], "error": "empty query"})
             return
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(timeout=RECALL_TIMEOUT_S) as client:
                 r = await client.post(openclaw_url(), json={"recall": query})
                 r.raise_for_status()
                 matches = (r.json() or {}).get("matches", [])
         except Exception as e:
             logger.warning(f"⚠️ recall_memory failed: {e!r}")
             await params.result_callback({
-                "matches": [], "note": "recall unavailable — use ask_openclaw"})
+                "matches": [], "note": RECALL_UNAVAILABLE_NOTE})
             return
+        matches = [
+            str(m)[:RECALL_MAX_LINE_CHARS] for m in matches[:RECALL_MAX_LINES]
+        ]
         logger.info(f"🔎 recall_memory '{query}' -> {len(matches)} lines")
         await params.result_callback({
             "matches": matches,
-            "note": "" if matches else "nothing found — ask_openclaw may know more",
+            "note": "" if matches else RECALL_MISS_NOTE,
         })
 
     llm.register_function("ask_openclaw", _ask)

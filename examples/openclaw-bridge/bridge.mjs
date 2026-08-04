@@ -116,7 +116,18 @@ function localRecall(query) {
     }
   }
   scored.sort((x, y) => y.hits - x.hits);
-  return scored.slice(0, 25).map((m) => `[${m.src}] ${m.line}`);
+  // Bounded on purpose: every line lands in the realtime model's context, and
+  // a spoken answer only ever uses a couple of them. Dedupe repeated lines
+  // (dailies restate MEMORY.md facts) so the cap isn't spent on copies.
+  const seen = new Set();
+  const out = [];
+  for (const m of scored) {
+    if (seen.has(m.line)) continue;
+    seen.add(m.line);
+    out.push(`[${m.src}] ${m.line}`);
+    if (out.length >= 10) break;
+  }
+  return out;
 }
 
 function runAgent(question, room) {
