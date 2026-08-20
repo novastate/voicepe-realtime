@@ -1,5 +1,5 @@
 name: OpenAI Realtime 2 Voice Agent
-version: "0.16.8"
+version: "0.16.9"
 slug: openai_realtime_voice_agent
 description: Talk to your home with OpenAI gpt-realtime-2 — a voice agent for the Home Assistant Voice PE, with live device control and web search.
 url: https://github.com/TristanBrotherton/voicepe-realtime
@@ -190,7 +190,7 @@ schema:
   websocket_port: int(1024,65535)
   session_reuse_timeout_seconds: int(0,3600)
   max_context_messages: int(0,100)
-  transcription_model: "list(gpt-4o-transcribe|gpt-realtime-whisper|gpt-4o-mini-transcribe|whisper-1|custom)"
+  transcription_model: "list(gpt-live-transcribe|gpt-transcribe|gpt-4o-transcribe|gpt-realtime-whisper|gpt-4o-mini-transcribe|whisper-1|custom)"
   transcription_model_custom: str?
   # Legacy server_vad escape hatch — optional, hidden until "Show unused
   # optional configuration options" is toggled (or a value is saved).

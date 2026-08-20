@@ -2,6 +2,12 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.16.9 (fork)
+
+- Added selectable OpenAI transcription models, including `gpt-live-transcribe`
+  and `gpt-transcribe`. Both now receive their required `languages` array when
+  a transcription language is configured.
+
 ## 0.16.8 (fork)
 
 - **Multiple Voice PE devices on one add-on instance**: every connected device

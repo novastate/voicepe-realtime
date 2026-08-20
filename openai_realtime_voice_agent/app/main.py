@@ -30,6 +30,7 @@ from app.voice_memory import (
     get_memory_tool_definitions,
     register_memory_tools,
 )
+from app.realtime_payload import transform_gpt_transcription_language
 from app.enrollment import (
     EnrollmentRecorder,
     EnrollmentConductor,
@@ -98,6 +99,17 @@ class SafeRealtimeLLMService(OpenAIRealtimeLLMService):
 
     async def _truncate_current_audio_response(self):  # type: ignore[override]
         return
+
+    async def send_client_event(self, event):  # type: ignore[override]
+        """Serialize GPT transcription models with their required `languages` field.
+
+        Pipecat 0.0.97 only exposes the legacy singular `language` field on
+        InputAudioTranscription. OpenAI rejects that field for newer GPT
+        transcription models, which instead expect `languages: [<ISO code>]`.
+        """
+        payload = event.model_dump(exclude_none=True)
+        transform_gpt_transcription_language(payload)
+        await self._ws_send(payload)
 
     # Per-response cost accounting (fork). The API reports exact token usage in
     # every response.done; pipecat only pushes it as metrics frames. Log the
@@ -373,10 +385,10 @@ class Application:
         # in logs + put in the context). NOTE: this is NOT what gpt-realtime-2
         # uses to understand you — the main model hears the audio natively; this
         # only affects the side-channel transcript. Default "gpt-4o-transcribe".
-        # Alternatives: "gpt-4o-mini-transcribe", "whisper-1", and the newer
-        # streaming "gpt-realtime-whisper" (purpose-built for the Realtime API,
-        # faster/cheaper). If the API rejects a value, transcription silently
-        # falls back; check the logs.
+        # Alternatives include "gpt-live-transcribe" (optimized for low-latency
+        # live transcription) and "gpt-transcribe" (optimized for completed
+        # audio). If the API rejects a value, transcription silently falls back;
+        # check the logs.
         transcription_model = _resolve_choice(
             "TRANSCRIPTION_MODEL", "TRANSCRIPTION_MODEL_CUSTOM", "gpt-4o-transcribe"
         )

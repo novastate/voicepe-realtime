@@ -87,7 +87,7 @@ session and is not an authentication credential; do not expose `websocket_port`
 outside that network.
 | `session_reuse_timeout_seconds` | `300` | If the device reconnects within this window (Wi-Fi blip, add-on restart), the conversation resumes where it left off. `0` = always start fresh. |
 | `max_context_messages` | `12` | How many recent exchanges the session keeps. More = better in-conversation memory, but every answer re-bills the whole history — long chats get expensive and can hit rate limits. `0` = unlimited. |
-| `transcription_model` | `gpt-4o-transcribe` | Writes your speech into the log when `transcription_language` is set. Does **not** affect understanding — the main model hears your audio natively. Also: `gpt-realtime-whisper`, `gpt-4o-mini-transcribe`, `whisper-1`. |
+| `transcription_model` | `gpt-4o-transcribe` | Writes your speech into the log when `transcription_language` is set. Does **not** affect understanding — the main model hears your audio natively. Also: `gpt-live-transcribe` (low-latency live transcription), `gpt-transcribe` (completed audio), `gpt-realtime-whisper`, `gpt-4o-mini-transcribe`, `whisper-1`. |
 | `transcription_model_custom` | *(hidden)* | Custom transcription model id. |
 | `turn_detection_type` | *(unset)* | Leave unset: `semantic_vad` (understands when your sentence is finished) is the hardwired default. `server_vad` is the legacy silence-timer method, kept as an escape hatch, tuned by the three fields below. |
 | `vad_threshold` | *(unset)* | server_vad only: loudness to count as speech, 0–1 (default 0.5). Higher = fewer false triggers from background noise. |

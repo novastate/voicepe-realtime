@@ -194,9 +194,11 @@ configuration:
     description: >-
       Alleen gebruikt als bij Basis een spreektaal is ingesteld. Dit model
       schrijft jouw spraak als tekst in het log — het beïnvloedt NIET hoe de
-      assistent je verstaat (die hoort je echte stem). gpt-4o-transcribe
-      (standaard) is het nauwkeurigst. Voor een ander model: kies "custom" en
-      zet onderaan "Toon ongebruikte optionele configuratie-opties" aan.
+      assistent je verstaat (die hoort je echte stem). gpt-live-transcribe is
+      geoptimaliseerd voor snelle live-transcriptie; gpt-transcribe voor
+      voltooide audio. gpt-4o-transcribe blijft de standaard. Voor een ander
+      model: kies "custom" en zet onderaan "Toon ongebruikte optionele
+      configuratie-opties" aan.
   transcription_model_custom:
     name: "⚙️ Geavanceerd · Transcriptmodel (custom)"
     description: >-
