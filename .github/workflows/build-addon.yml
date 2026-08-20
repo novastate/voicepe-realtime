@@ -20,7 +20,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}/openai-realtime-voice-agent
 
 jobs:
   build:
@@ -47,6 +46,12 @@ jobs:
           VERSION=$(grep '^version:' openai_realtime_voice_agent/config.yaml | sed 's/version: "\(.*\)"/\1/')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Extracted version: $VERSION"
+
+      - name: Normalize image name
+        id: image
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: echo "name=${REPOSITORY,,}/openai-realtime-voice-agent" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -84,9 +89,9 @@ jobs:
           platforms: ${{ steps.arch-map.outputs.platform }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.arch }}:${{ steps.version.outputs.version }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.arch }}:${{ steps.version.outputs.version }}-${{ github.sha }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.arch }}:latest
+            ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}-${{ matrix.arch }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}-${{ matrix.arch }}:${{ steps.version.outputs.version }}-${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}-${{ matrix.arch }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
@@ -95,4 +100,4 @@ jobs:
       - name: Generate image manifest
         if: github.event_name != 'pull_request' && matrix.arch == 'amd64'
         run: |
-          echo "Image built: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.arch }}:${{ steps.version.outputs.version }}"
+          echo "Image built: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}-${{ matrix.arch }}:${{ steps.version.outputs.version }}"

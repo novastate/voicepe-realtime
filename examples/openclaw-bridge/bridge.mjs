@@ -28,12 +28,15 @@
  *   ANNOUNCE_MAP        room=port list, e.g. "kitchen=8090,workshop=8091"
  *   ANNOUNCE_TOKEN      bearer token for the announce endpoint, or put it in a
  *                       .announce-token file next to this script
+ *   IMESSAGE_ROUTES     JSON object mapping destination aliases to OpenClaw
+ *                       targets and Messages chat IDs, or put it in an ignored
+ *                       .imessage-routes.json file next to this script
  *
  * Generate secrets:  echo "/ask-$(openssl rand -hex 12)" > .ask-path
  *                    openssl rand -hex 24 > .announce-token
  * Then set openclaw_url in the add-on to http://<this-machine>:3338<ask path>.
  */
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -60,6 +63,107 @@ const ANNOUNCE_PORTS = Object.fromEntries(
     .map(([room, port]) => [room.toLowerCase(), Number(port)]),
 );
 const DEFAULT_ROOM = Object.keys(ANNOUNCE_PORTS)[0];
+
+function loadIMessageRoutes() {
+  const raw = process.env.IMESSAGE_ROUTES || readOptional(".imessage-routes.json");
+  if (!raw) return new Map();
+  try {
+    const parsed = JSON.parse(raw);
+    return new Map(Object.entries(parsed).flatMap(([alias, route]) => {
+      const target = String(route?.target || "").trim();
+      const chatId = Number(route?.chat_id);
+      return alias.trim() && target && Number.isInteger(chatId) && chatId > 0
+        ? [[alias.trim().toLowerCase(), { target, chatId }]] : [];
+    }));
+  } catch (error) {
+    console.error(`[bridge] invalid IMESSAGE_ROUTES: ${String(error).slice(0, 160)}`);
+    return new Map();
+  }
+}
+
+const IMESSAGE_DESTINATIONS = loadIMessageRoutes();
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function execFileResult(command, args, timeout = 20000) {
+  return new Promise((resolve) => {
+    execFile(command, args, { timeout, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+      resolve({
+        ok: !error,
+        stdout: String(stdout || ""),
+        stderr: String(stderr || ""),
+        error: error ? String(error.message || error) : "",
+      });
+    });
+  });
+}
+
+async function findOutgoingMessage(chatId, message, notBeforeMs, requireMedia = false) {
+  const history = await execFileResult("imsg", [
+    "history", "--chat-id", String(chatId), "--limit", "40", "--attachments", "--json",
+  ]);
+  if (!history.ok) return null;
+  const rows = history.stdout.split("\n").filter((line) => line.trim()).flatMap((line) => {
+    try { return [JSON.parse(line)]; } catch { return []; }
+  });
+  const textRow = rows.find((item) => {
+    const createdMs = Date.parse(item.created_at || "");
+    return item.is_from_me === true && item.text === message &&
+      Number.isFinite(createdMs) && createdMs >= notBeforeMs - 2000;
+  });
+  if (!textRow) return null;
+  const textCreatedMs = Date.parse(textRow.created_at || "");
+  const mediaRow = requireMedia ? rows.find((item) => {
+    const createdMs = Date.parse(item.created_at || "");
+    const attachments = Array.isArray(item.attachments) ? item.attachments : [];
+    return item.is_from_me === true && attachments.some((attachment) =>
+      attachment.missing !== true && Number(attachment.total_bytes ?? 0) > 0) &&
+      Number.isFinite(createdMs) && createdMs >= notBeforeMs - 2000 &&
+      createdMs <= textCreatedMs + 2000;
+  }) : null;
+  if (requireMedia && !mediaRow) return null;
+  return { guid: textRow.guid || "", created_at: textRow.created_at || "",
+    media_verified: !requireMedia || Boolean(mediaRow), media_guid: mediaRow?.guid || "" };
+}
+
+async function sendVerifiedIMessage(destination, message, media = "") {
+  const route = IMESSAGE_DESTINATIONS.get(destination.trim().toLowerCase());
+  if (!route) {
+    return { delivered: false, error: `unsupported destination: ${destination}` };
+  }
+  const { target, chatId } = route;
+  const startedMs = Date.now();
+  let lastError = "message did not appear in Messages history";
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const args = [
+      "message", "send", "--channel", "imessage", "--target", target,
+      "--message", message, "--json",
+    ];
+    if (media) args.splice(args.length - 1, 0, "--media", media);
+    const sent = await execFileResult(BIN, args);
+    if (!sent.ok) {
+      lastError = sent.stderr.trim() || sent.error || lastError;
+    } else {
+      try {
+        const result = JSON.parse(sent.stdout);
+        const receiptId = result?.payload?.result?.receipt?.primaryPlatformMessageId;
+        if (!receiptId) lastError = "OpenClaw returned no iMessage delivery receipt";
+      } catch {
+        lastError = "OpenClaw returned an unreadable iMessage delivery response";
+      }
+    }
+    for (let check = 0; check < 8; check += 1) {
+      const receipt = await findOutgoingMessage(chatId, message, startedMs, Boolean(media));
+      if (receipt) {
+        console.log(`[bridge] ${new Date().toISOString()} iMessage verified chat=${chatId} attempt=${attempt} guid=${receipt.guid}`);
+        return { delivered: true, destination, chat_id: chatId, attempt, ...receipt };
+      }
+      await delay(1000);
+    }
+    console.error(`[bridge] ${new Date().toISOString()} iMessage attempt ${attempt} not verified chat=${chatId}: ${lastError.slice(0, 180)}`);
+  }
+  return { delivered: false, destination, chat_id: chatId, error: lastError };
+}
 
 if (!ASK_PATH) {
   console.error("[bridge] ASK_PATH is required (env or .ask-path file). See header.");
@@ -179,12 +283,29 @@ const server = createServer((req, res) => {
   req.on("data", (d) => (body += d));
   req.on("end", async () => {
     let question = "", recall = "", room = "";
+    let notificationDestination = "", notificationMessage = "", notificationMedia = "";
     try {
       const parsed = JSON.parse(body);
       question = String(parsed?.question || "").trim();
       recall = String(parsed?.recall || "").trim();
       room = String(parsed?.room || "").trim().toLowerCase();
+      notificationDestination = String(parsed?.notification_destination || "").trim();
+      notificationMessage = String(parsed?.notification_message || "").trim();
+      notificationMedia = String(parsed?.notification_media || "").trim();
     } catch { /* fall through to 400 */ }
+    if (notificationDestination || notificationMessage) {
+      if (!notificationDestination || !notificationMessage) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ delivered: false, error: "destination and message required" }));
+        return;
+      }
+      const result = await sendVerifiedIMessage(notificationDestination, notificationMessage, notificationMedia);
+      // Always return JSON to Home Assistant. The caller inspects `delivered`
+      // and raises a fallback alert when verification fails.
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(result));
+      return;
+    }
     if (recall) {
       const matches = localRecall(recall);
       console.log(`[bridge] recall: ${recall.slice(0, 80)} -> ${matches.length} lines`);

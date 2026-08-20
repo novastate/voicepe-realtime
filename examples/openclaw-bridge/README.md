@@ -53,6 +53,24 @@ Then in the **add-on configuration** (each instance):
 | `ANNOUNCE_HOST` | *(unset)* | Home Assistant host — required for report-back |
 | `ANNOUNCE_MAP` | *(unset)* | `room=port` pairs matching each instance's `announce_port` |
 | `ANNOUNCE_TOKEN` | *(from `.announce-token`)* | Bearer token for `/announce` |
+| `IMESSAGE_ROUTES` | *(from `.imessage-routes.json`)* | JSON map of private destination aliases to OpenClaw targets and Messages chat IDs |
+
+### Optional verified iMessage delivery
+
+The bridge can accept `notification_destination`, `notification_message`, and
+optional `notification_media` fields. Destinations are deliberately kept out of
+the public repository. Configure them locally in `.imessage-routes.json`:
+
+```json
+{
+  "owner": { "target": "owner@example.com", "chat_id": 1 },
+  "family": { "target": "chat_id:2", "chat_id": 2 }
+}
+```
+
+The file is gitignored. The bridge sends through OpenClaw, then verifies the
+exact outgoing text (and a non-empty attachment when requested) in Messages
+history before returning `delivered: true`.
 
 ## Teach OpenClaw the announce endpoint
 
