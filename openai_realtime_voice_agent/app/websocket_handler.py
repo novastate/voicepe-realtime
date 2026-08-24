@@ -375,6 +375,7 @@ class WebSocketHandler:
         follow_up_open_delay_ms: int = 700,
         wake_open_delay_ms: int = 700,
         playback_prebuffer_ms: int = 0,
+        output_lead_buffer_ms: int = 0,
     ):
         """
         Initialize WebSocket handler.
@@ -402,6 +403,7 @@ class WebSocketHandler:
         self.follow_up_open_delay_ms = max(0, int(follow_up_open_delay_ms))
         self.wake_open_delay_ms = max(0, int(wake_open_delay_ms))
         self.playback_prebuffer_ms = max(0, int(playback_prebuffer_ms))
+        self.output_lead_buffer_ms = max(0, int(output_lead_buffer_ms))
 
         # Per-device connections. Everything that used to be a singleton here —
         # transport, serializer, OpenAI session, pipeline, task — now lives on a
@@ -572,7 +574,7 @@ class WebSocketHandler:
         # transport.output(), so it acts on the final audio stream the device
         # receives (the recorder above still captures the true, un-delayed frames).
         # Pass-through when OUTPUT_LEAD_BUFFER_MS=0.
-        pipeline_components.append(OutputLeadBuffer())
+        pipeline_components.append(OutputLeadBuffer(lead_ms=self.output_lead_buffer_ms))
 
         pipeline_components.append(transport.output())
         
