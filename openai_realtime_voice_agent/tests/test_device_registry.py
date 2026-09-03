@@ -47,8 +47,9 @@ async def main():
     # --- targeting --------------------------------------------------------
     reg = DeviceRegistry()
     kitchen = DeviceConnection("kitchen", FakeWS())
-    office = DeviceConnection("office", FakeWS())
     await reg.add(kitchen)
+    assert reg.resolve() is kitchen, "sole connected device must work before first activity"
+    office = DeviceConnection("office", FakeWS())
     await reg.add(office)
     assert len(reg) == 2
     assert reg.ids() == ["kitchen", "office"]

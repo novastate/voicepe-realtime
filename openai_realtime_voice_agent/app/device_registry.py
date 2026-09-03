@@ -222,6 +222,12 @@ class DeviceRegistry:
             return self._devices.get(sanitize_device_id(device_id))
         if not self._devices:
             return None
+        # A single-device instance has no ambiguity: it must be addressable
+        # immediately after reconnect, before the first wake/audio frame has
+        # had a chance to call touch(). This is required for timer and HTTP
+        # announcements delivered just after a device reboot.
+        if len(self._devices) == 1:
+            return next(iter(self._devices.values()))
         connection = max(self._devices.values(), key=lambda c: c.last_active)
         return connection if connection.last_active > 0 else None
 

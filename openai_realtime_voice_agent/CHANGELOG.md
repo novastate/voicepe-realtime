@@ -2,6 +2,13 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.16.11 (fork)
+
+- Fixed announcements immediately after a single Voice PE reconnect. The sole
+  connected device is now addressable before its first wake/audio activity;
+  multi-device instances still require activity or an explicit target when
+  more than one idle device is connected.
+
 ## 0.16.10 (fork)
 
 - Added an opt-in relay-side output lead buffer for the measured Voice PE
