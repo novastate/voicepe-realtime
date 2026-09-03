@@ -2,6 +2,16 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.16.10 (fork)
+
+- Added an opt-in relay-side output lead buffer for the measured Voice PE
+  resampler cold-start defect. It holds the first part of a reply and releases
+  it as a burst, giving the device a playout lead before normal streaming.
+- The buffer is safe across interruption, connection recovery, short replies,
+  and mid-reply pauses, with a bounded watchdog for a stalled source. It is
+  disabled by default; our two-device deployment enables 400 ms while the
+  existing device playback prebuffer remains 250 ms.
+
 ## 0.16.9 (fork)
 
 - Added selectable OpenAI transcription models, including `gpt-live-transcribe`
