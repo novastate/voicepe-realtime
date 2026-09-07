@@ -13,6 +13,7 @@ from app.mcp_service import HomeAssistantMCPService
 from app.phase_emitter import TurnLiveness
 from app.disconnect_tool import get_disconnect_tool_definition, create_disconnect_tool_handler
 from app.web_search_tool import get_web_search_tool_definition, create_web_search_tool_handler
+from app.search_home_tool import get_search_home_tool_definition, create_search_home_tool_handler
 from app.audio_recording_service import AudioRecordingService
 from app.session_manager import SessionManager
 from app.websocket_handler import WebSocketHandler
@@ -774,6 +775,11 @@ class Application:
             if self.enable_web_search:
                 all_tools.append(get_web_search_tool_definition())
 
+            # Keyword search across the house. The Hass* tools only match whole
+            # sentences against exact names, so without this the assistant can
+            # only read what it already knows the name of. See search_home_tool.
+            all_tools.append(get_search_home_tool_definition())
+
             # Voice enrollment tool (fork): guided voice-training capture.
             all_tools.append(get_enrollment_tool_definition())
             all_tools.append(get_false_alarm_tool_definition())
@@ -943,6 +949,9 @@ class Application:
                     create_web_search_tool_handler(self.openai_api_key, self.web_search_model),
                 )
                 logger.info(f"✅ Registered web_search tool handler (model={self.web_search_model})")
+
+            service.register_function("search_home", create_search_home_tool_handler())
+            logger.info("✅ Registered search_home tool handler")
             
             # Register voice enrollment tool handler (fork). The speaker-name
             # getter lets the tool default to the voice-identified person.
