@@ -1,6 +1,8 @@
 """Every error must be answered with the right thing, not the same thing."""
 
-from app.provider_failures import Failure, classify
+import re
+
+from app.provider_failures import Failure, classify, _TRANSIENT_CODES, _OURS_PATTERNS
 
 
 def test_openai_out_of_money_switches_immediately():
@@ -46,9 +48,15 @@ def test_a_dead_socket_is_worth_one_retry():
 
 
 def test_numeric_codes_match_word_boundaries_only():
-    # 500 in "1500" should not be matched as an error code.
-    assert classify("Reached maximum call duration of 1500 seconds") is Failure.TRANSIENT
+    # Word boundary test: "500" should not match inside "1500".
+    # We test the regex matcher directly because both a broken (bare "500") and
+    # correct (\b500\b) matcher would return TRANSIENT (the fallback value).
+    # Testing the private _TRANSIENT_CODES is the honest way to verify the fix.
+    text = "reached maximum call duration of 1500 seconds"
+    assert not any(re.search(pattern, text) for pattern in _TRANSIENT_CODES)
+
     # 403 in a request ID like "req_1403abc" should not be matched as auth failure.
+    # This one can discriminate via return value: broken matcher → AUTH, correct → TRANSIENT.
     assert classify("Unknown error in req_1403abc") is Failure.TRANSIENT
 
 
@@ -61,10 +69,12 @@ def test_our_own_faults_never_switch_engine():
 
 
 def test_tool_name_alone_must_not_claim_an_error():
-    # A provider error that happens to contain the word "remember" should not
-    # be classified as our own fault. The tool name must be followed by
-    # "failed" or ":" to match.
-    assert classify("The server remembered your quota was exceeded") is Failure.TRANSIENT
+    # Tool name alone must not claim an error. Both a broken (bare "remember")
+    # and correct (remember with " failed" or ":") matcher would pass this if
+    # we only test the return value (both → TRANSIENT, the fallback). Test the
+    # regex pattern directly to verify it does NOT match a bare tool name.
+    text = "the server remembered your quota was exceeded"
+    assert not any(re.search(pattern, text) for pattern in _OURS_PATTERNS)
 
 
 def test_money_wins_over_rate_limit_when_both_words_appear():
