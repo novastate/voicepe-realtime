@@ -1,4 +1,6 @@
-"""Telling the model who is speaking must work on both engines.
+"""Telling the model who is speaking must work on both engines -- or, where
+it genuinely cannot, must fail LOUDLY and SILENTLY-TO-THE-USER rather than
+either vanishing quietly or making the assistant talk unprompted.
 
 FIX ROUND 1. The first version of this test replaced the context aggregator
 with a stub whose push_frame just appended to a list -- green whether the
@@ -11,9 +13,25 @@ pipeline (the LLM service), and neither OpenAIRealtimeLLMService nor
 GeminiLiveLLMService does anything with LLMMessagesUpdateFrame -- both just
 forward it on unchanged. Nothing was ever sent on either websocket.
 
-These tests instead build REAL service instances the same way production
-code does (app.providers.build_service), fake only the websocket/session (no
-network), and assert a genuine outbound send happened -- for both engines.
+FIX ROUND 2. Round 1's fix for Gemini (`LLMMessagesAppendFrame` ->
+`_create_single_response`) DID reach the model, but that method hardcodes
+`turn_complete=True`, so Gemini spoke an unprompted reply every time a voice
+was recognised -- worse than the silent loss this task started from. The
+only other channel, `send_client_content(turn_complete=False)`, is real and
+reachable (pipecat's own `_create_initial_response` uses it) but is silently
+IGNORED by the model unless explicitly closed by a later
+`send_client_content(turn_complete=True)` tied to the service's own
+`UserStoppedSpeakingFrame` handling -- state this caller has no supported way
+to hook. Verified against `GeminiLiveLLMService._handle_user_stopped_speaking`
+directly (see its "without this, the model ignores the context" comment).
+No channel exists that both reaches the model and doesn't force a reply, so
+Gemini now gets NO model-facing injection at all -- these tests prove that
+choice: Gemini sends nothing to its session and logs one clear warning
+instead of a per-call "no-op"; OpenAI is provably unaffected.
+
+These tests build REAL service instances the same way production code does
+(app.providers.build_service), fake only the websocket/session (no network),
+and assert on the real outbound behaviour -- what was sent, and what wasn't.
 """
 
 import pytest
@@ -129,14 +147,16 @@ async def test_the_speaker_name_reaches_a_real_openai_service():
 
 
 @pytest.mark.asyncio
-async def test_the_speaker_name_reaches_a_real_gemini_service():
-    """Drives make_speaker_note's Gemini branch against a real, unconnected
-    GeminiLiveLLMService (built via app.providers.build_service) with a
-    faked session, calling the service's own `process_frame` -- the actual
-    entry point make_speaker_note calls, and the one GeminiLiveLLMService
-    explicitly special-cases LLMMessagesAppendFrame in (its docstring says
-    this exists for callers with no user context aggregator, which is
-    exactly this caller)."""
+async def test_gemini_never_sends_anything_to_its_session():
+    """ROUND 2's hard requirement: Gemini must not speak unprompted when a
+    voice is recognised. Drives make_speaker_note's Gemini branch against a
+    real, unconnected GeminiLiveLLMService with a faked session across
+    several verdicts (guest, confident match, ambiguous match) and asserts
+    the session's `send_client_content` -- the ONLY real send method
+    reachable from this service, per the installed source -- is never called
+    at all. A regression back to round 1's `_create_single_response` path
+    (or any other path that reaches the session) would show up here as a
+    non-empty `calls` list."""
     from app.websocket_handler import make_speaker_note
 
     service = build_service(GEMINI, _gemini_options(), [])
@@ -146,20 +166,66 @@ async def test_the_speaker_name_reaches_a_real_gemini_service():
     connection = DeviceConnection(device_id="kitchen", websocket=object())
     connection.provider = GEMINI
 
-    await make_speaker_note(connection, service)("male", "Henrik", 132.0)
+    note = make_speaker_note(connection, service)
+    await note("unknown", None, 0.0)
+    await note("male", "Henrik", 132.0)
+    await note("uncertain", None, 90.0)
 
-    assert len(fake_session.calls) == 1
-    call = fake_session.calls[0]
-    # turn_complete=True is real, current behaviour of this path (flagged as
-    # a concern in the task report, not something this test should paper
-    # over by not checking it).
-    assert call["turn_complete"] is True
-    turns = call["turns"]
-    assert any(
-        "Henrik" in (part.text or "")
-        for content in turns
-        for part in content.parts
-    )
+    assert fake_session.calls == []
+
+
+@pytest.mark.asyncio
+async def test_gemini_logs_one_clear_warning_not_a_per_call_no_op(caplog):
+    """The skip must be loud and unambiguous -- not worded like the "no-op"
+    log lines that let the original bug hide for however long it shipped --
+    and it must not spam once per wake for the life of a connection (the
+    speaker probe fires on every wake)."""
+    import logging
+    from app.websocket_handler import make_speaker_note
+
+    service = build_service(GEMINI, _gemini_options(), [])
+    service._session = _FakeGeminiSession()
+
+    connection = DeviceConnection(device_id="kitchen", websocket=object())
+    connection.provider = GEMINI
+
+    note = make_speaker_note(connection, service)
+    with caplog.at_level(logging.WARNING, logger="app.websocket_handler"):
+        await note("male", "Henrik", 132.0)
+        await note("male", "Henrik", 132.0)
+        await note("male", "Henrik", 132.0)
+
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warnings) == 1
+    message = warnings[0].message.lower()
+    assert "no-op" not in message
+    assert "gemini" in message
+
+
+@pytest.mark.asyncio
+async def test_openai_is_unaffected_by_the_gemini_change():
+    """ROUND 2 touched only the `else` (non-OpenAI) branch of note() --
+    confirm the OpenAI path still reaches a real, unconnected
+    OpenAIRealtimeLLMService exactly as before, via the same
+    send_client_event call, with no dependency introduced on anything Gemini-
+    specific (this test never constructs a Gemini service at all)."""
+    from app.websocket_handler import make_speaker_note
+
+    service = build_service(OPENAI, _openai_options(), [])
+    fake_ws = _FakeOpenAIWebSocket()
+    service._websocket = fake_ws
+
+    connection = DeviceConnection(device_id="kitchen", websocket=object())
+    connection.provider = OPENAI
+
+    note = make_speaker_note(connection, service)
+    await note("male", "Henrik", 132.0)
+    await note("male", "Henrik", 132.0)
+
+    # Unlike Gemini, OpenAI sends on every call -- no once-per-connection
+    # suppression, because there is nothing to warn about.
+    assert len(fake_ws.sent) == 2
+    assert all("Henrik" in payload for payload in fake_ws.sent)
 
 
 @pytest.mark.asyncio
