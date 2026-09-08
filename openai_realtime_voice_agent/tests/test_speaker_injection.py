@@ -16,22 +16,35 @@ forward it on unchanged. Nothing was ever sent on either websocket.
 FIX ROUND 2. Round 1's fix for Gemini (`LLMMessagesAppendFrame` ->
 `_create_single_response`) DID reach the model, but that method hardcodes
 `turn_complete=True`, so Gemini spoke an unprompted reply every time a voice
-was recognised -- worse than the silent loss this task started from. The
-only other channel, `send_client_content(turn_complete=False)`, is real and
-reachable (pipecat's own `_create_initial_response` uses it) but is silently
-IGNORED by the model unless explicitly closed by a later
-`send_client_content(turn_complete=True)` tied to the service's own
-`UserStoppedSpeakingFrame` handling -- state this caller has no supported way
-to hook. Verified against `GeminiLiveLLMService._handle_user_stopped_speaking`
-directly (see its "without this, the model ignores the context" comment).
-No channel exists that both reaches the model and doesn't force a reply, so
-Gemini now gets NO model-facing injection at all -- these tests prove that
-choice: Gemini sends nothing to its session and logs one clear warning
-instead of a per-call "no-op"; OpenAI is provably unaffected.
+was recognised -- worse than the silent loss this task started from. Round 2
+looked for `send_client_content(turn_complete=False)` as a silent
+alternative, found `_handle_user_stopped_speaking`'s own comment ("without
+this, the model ignores the context") and concluded the bridge that makes a
+`turn_complete=False` seed actually count required hooking
+`UserStoppedSpeakingFrame` ourselves -- something this caller has no
+supported way to do -- and shipped "no model-facing injection on Gemini"
+instead.
+
+FIX ROUND 3 found that conclusion wrong: the bridge round 2 thought needed
+building already exists and is already running. `_create_initial_response`
+sets a plain instance flag, `_needs_turn_complete_message = True`, after
+sending with `turn_complete=False`; `_handle_user_stopped_speaking` --
+already wired into `GeminiLiveLLMService.process_frame`'s
+`UserStoppedSpeakingFrame` branch, so it runs on every real turn boundary the
+live pipeline produces with no help from us -- checks that same flag and
+silently closes the turn. Setting the flag from outside is a plain attribute
+write, not a hook, subclass, or monkeypatch. So: Gemini DOES get the note,
+silently, folded in when the model next responds to a real turn (one turn
+later than OpenAI's immediate injection -- a real, disclosed cost, not
+hidden). A structural guard covers the one way this could quietly break
+again: if a future pipecat renames or removes
+`_needs_turn_complete_message`, the injection is skipped and an ERROR is
+logged naming the attribute, every time, deliberately not deduplicated.
 
 These tests build REAL service instances the same way production code does
 (app.providers.build_service), fake only the websocket/session (no network),
-and assert on the real outbound behaviour -- what was sent, and what wasn't.
+and assert on the real outbound behaviour -- what was sent, with what flag,
+and what wasn't.
 """
 
 import pytest
@@ -147,59 +160,62 @@ async def test_the_speaker_name_reaches_a_real_openai_service():
 
 
 @pytest.mark.asyncio
-async def test_gemini_never_sends_anything_to_its_session():
-    """ROUND 2's hard requirement: Gemini must not speak unprompted when a
-    voice is recognised. Drives make_speaker_note's Gemini branch against a
-    real, unconnected GeminiLiveLLMService with a faked session across
-    several verdicts (guest, confident match, ambiguous match) and asserts
-    the session's `send_client_content` -- the ONLY real send method
-    reachable from this service, per the installed source -- is never called
-    at all. A regression back to round 1's `_create_single_response` path
-    (or any other path that reaches the session) would show up here as a
-    non-empty `calls` list."""
+async def test_gemini_note_is_appended_silently_and_flags_the_turn_close():
+    """ROUND 3's core proof: the note reaches Gemini's real session via
+    send_client_content, with turn_complete=False (nothing audible at
+    injection time -- there is no second, turn_complete=True call made by
+    this code at all), and the service's own pending-turn-close flag ends up
+    True so that its ALREADY-WIRED _handle_user_stopped_speaking silently
+    closes the turn on the next real turn boundary. This is the exact
+    behaviour _create_initial_response itself relies on for the same
+    no-immediate-reply purpose."""
     from app.websocket_handler import make_speaker_note
 
     service = build_service(GEMINI, _gemini_options(), [])
     fake_session = _FakeGeminiSession()
     service._session = fake_session
+    assert service._needs_turn_complete_message is False  # sanity: real default
 
     connection = DeviceConnection(device_id="kitchen", websocket=object())
     connection.provider = GEMINI
 
-    note = make_speaker_note(connection, service)
-    await note("unknown", None, 0.0)
-    await note("male", "Henrik", 132.0)
-    await note("uncertain", None, 90.0)
+    await make_speaker_note(connection, service)("male", "Henrik", 132.0)
 
-    assert fake_session.calls == []
+    assert len(fake_session.calls) == 1
+    call = fake_session.calls[0]
+    assert call["turn_complete"] is False
+    assert any("Henrik" in (part.text or "") for content in call["turns"] for part in content.parts)
+    assert service._needs_turn_complete_message is True
 
 
 @pytest.mark.asyncio
-async def test_gemini_logs_one_clear_warning_not_a_per_call_no_op(caplog):
-    """The skip must be loud and unambiguous -- not worded like the "no-op"
-    log lines that let the original bug hide for however long it shipped --
-    and it must not spam once per wake for the life of a connection (the
-    speaker probe fires on every wake)."""
+async def test_gemini_missing_turn_close_bridge_skips_and_logs_error(caplog):
+    """The structural guard: if `_needs_turn_complete_message` is gone (a
+    future pipecat rename/removal), the injection must be skipped -- not
+    raise, and not silently do nothing -- and it must say exactly which
+    attribute vanished, at ERROR level. Simulated by deleting the attribute
+    off an otherwise-real, fully-constructed GeminiLiveLLMService instance,
+    rather than replacing the service with a hand-rolled stub -- everything
+    else about the service (get_llm_adapter, _session) stays real."""
     import logging
     from app.websocket_handler import make_speaker_note
 
     service = build_service(GEMINI, _gemini_options(), [])
-    service._session = _FakeGeminiSession()
+    fake_session = _FakeGeminiSession()
+    service._session = fake_session
+    del service._needs_turn_complete_message
 
     connection = DeviceConnection(device_id="kitchen", websocket=object())
     connection.provider = GEMINI
 
-    note = make_speaker_note(connection, service)
-    with caplog.at_level(logging.WARNING, logger="app.websocket_handler"):
-        await note("male", "Henrik", 132.0)
-        await note("male", "Henrik", 132.0)
-        await note("male", "Henrik", 132.0)
+    with caplog.at_level(logging.ERROR, logger="app.websocket_handler"):
+        # Must not raise.
+        await make_speaker_note(connection, service)("male", "Henrik", 132.0)
 
-    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
-    assert len(warnings) == 1
-    message = warnings[0].message.lower()
-    assert "no-op" not in message
-    assert "gemini" in message
+    assert fake_session.calls == []  # skipped, not sent
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1
+    assert "_needs_turn_complete_message" in errors[0].message
 
 
 @pytest.mark.asyncio

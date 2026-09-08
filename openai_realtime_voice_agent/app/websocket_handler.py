@@ -368,6 +368,95 @@ class ConnectionRecovery(FrameProcessor):
             logger.warning(f"⚠️ could not emit idle after turn-ending error: {e!r}")
 
 
+_GEMINI_TURN_CLOSE_FLAG = "_needs_turn_complete_message"
+
+
+async def _send_gemini_note_silently(service, text: str) -> bool:
+    """Append a system note to a Gemini Live session without an immediate reply.
+
+    Returns True if the note was actually queued for the session, False if it
+    was skipped (no session yet, or nothing to send after conversion).
+
+    FIX ROUND 3: round 2 concluded no silent channel existed. Re-review found
+    the bridge that makes one work, already built and already running:
+    `_create_initial_response` (gemini_live/llm.py:1355-1384) calls
+
+        await self._session.send_client_content(
+            turns=messages, turn_complete=self._inference_on_context_initialization
+        )
+        ...
+        if not self._inference_on_context_initialization:
+            self._needs_turn_complete_message = True
+
+    and `_handle_user_stopped_speaking` (gemini_live/llm.py:874-882) -- already
+    wired into GeminiLiveLLMService.process_frame's UserStoppedSpeakingFrame
+    branch, so it runs automatically on every REAL turn boundary the live
+    pipeline produces -- checks that exact flag and silently closes the turn:
+
+        if self._needs_turn_complete_message:
+            self._needs_turn_complete_message = False
+            # NOTE: without this, the model ignores the context it's been
+            # seeded with before the user started speaking
+            await self._session.send_client_content(turn_complete=True)
+
+    Round 2's mistake was treating "no supported way to hook
+    UserStoppedSpeakingFrame ourselves" as blocking -- it isn't, because we
+    don't need to hook it: the service already hooks its own
+    UserStoppedSpeakingFrame handling on every real turn. Setting
+    `_needs_turn_complete_message = True` is a plain instance-attribute write
+    (grep of the whole file: `_needs_turn_complete_message` appears at exactly
+    these three sites -- init, this setter, that one checker/resetter -- so
+    there is nothing else to coordinate with or race against). No subclassing,
+    no monkeypatching, no new dispatch logic: the existing, live-running code
+    does the closing call for us the next time the user's real speech ends.
+
+    THE ONE REAL COST (say it plainly, not leave it to be discovered): the
+    note is not spoken about the instant a voice is recognised -- it is
+    folded into the model's awareness only when the CURRENT (or, if the probe
+    fires after the user already stopped talking this turn, the NEXT) user
+    turn completes and the model responds to it. That is the same
+    "may not land until a later turn" characteristic this feature has always
+    had on OpenAI (see the wiring comment below) -- just one turn-boundary
+    later on Gemini, and never audible on its own.
+
+    Structural guard: if a future pipecat renames or removes
+    `_needs_turn_complete_message`, silently doing nothing here would be
+    exactly the failure mode this whole task exists to end. So existence is
+    checked explicitly and logged as an ERROR (not folded into the general
+    try/except below) if missing, and the injection is skipped rather than
+    guessed at.
+    """
+    if not hasattr(service, _GEMINI_TURN_CLOSE_FLAG):
+        logger.error(
+            f"⚠️ {type(service).__name__} has no `{_GEMINI_TURN_CLOSE_FLAG}` "
+            f"attribute -- the silent turn-close bridge this code depends on "
+            f"to tell Gemini who is speaking is gone (renamed or removed "
+            f"upstream). Skipping the model-facing note rather than guessing "
+            f"at a replacement."
+        )
+        return False
+
+    session = getattr(service, "_session", None)
+    if session is None:
+        return False
+
+    from pipecat.processors.aggregators.llm_context import LLMContext
+
+    context = LLMContext(messages=[{"role": "system", "content": text}])
+    adapter = service.get_llm_adapter()
+    turns = adapter.get_llm_invocation_params(context).get("messages", [])
+    if not turns:
+        return False
+
+    await session.send_client_content(turns=turns, turn_complete=False)
+    # Mirrors _create_initial_response's own bookkeeping exactly: the next
+    # real UserStoppedSpeakingFrame (already wired into process_frame, driven
+    # by the live pipeline's own VAD -- nothing we trigger) will see this
+    # flag and silently close the turn via _handle_user_stopped_speaking.
+    service._needs_turn_complete_message = True
+    return True
+
+
 def make_speaker_note(connection, openai_service, probe=None):
     """Build the callback that tells the model who is speaking.
 
@@ -381,55 +470,17 @@ def make_speaker_note(connection, openai_service, probe=None):
     every single time a voice was recognised. Worse than the silent loss this
     task exists to fix.
 
-    FIX ROUND 2: is there a channel that appends to Gemini's session without
-    asking it to respond? The Live API supports `send_client_content(...,
-    turn_complete=False)` -- pipecat's own `_create_initial_response`
-    (gemini_live/llm.py) uses exactly this to seed history without an
-    immediate reply, by calling `self._session.send_client_content(turns=...,
-    turn_complete=False)` directly on the session object (no wrapping method
-    exists on GeminiLiveLLMService for this). So the call itself is real and
-    reachable. But that same method's neighbour,
-    `_handle_user_stopped_speaking`, carries this comment:
-
-        # NOTE: without this, the model ignores the context it's been
-        # seeded with before the user started speaking
-        await self._session.send_client_content(turn_complete=True)
-
-    -- i.e. a turn sent with turn_complete=False is NOT automatically folded
-    into the next turn once real audio (which flows over a *different*
-    channel, `send_realtime_input`, with its own server-side turn detection)
-    completes. Pipecat only makes its own turn_complete=False seed actually
-    count by explicitly closing it with a second, empty
-    `send_client_content(turn_complete=True)` the moment the user's real
-    speech ends -- state (`_needs_turn_complete_message`) tracked entirely
-    inside GeminiLiveLLMService, tied to its own StartFrame/audio-frame
-    lifecycle, that we have no supported way to hook without subclassing or
-    monkeypatching that service.
-
-    Doing the same for a note that can fire on ANY wake, mid-conversation,
-    with no equivalent bridge, has two only possible outcomes verified against
-    this source: turn_complete=True (an audible reply every time -- the exact
-    failure mode this round exists to remove) or turn_complete=False with no
-    matching close (silently ignored by the model -- a different-shaped
-    silent no-op than the one this whole task started from, achieved instead
-    of fixed). Neither is acceptable, and there is no third call this
-    installed pipecat version exposes. So: **no model-facing injection on
-    Gemini.** The name still reaches the model on OpenAI, unchanged; on
-    Gemini it still reaches everything that isn't the model -- the male-only
-    tool gate (`SpeakerProbe.gate_speaker()`, read directly in
-    `main.py`/`SafeRealtimeLLMService.register_function`, never through this
-    callback) and the Home Assistant sensor publish
-    (`SpeakerProbe._classify()` calls `PUBLISHER.speaker(...)` before
-    `on_verdict` even runs) -- both already independent of this function,
-    confirmed by reading `speaker_context.py` end to end again.
+    FIX ROUND 2 concluded no silent channel existed for Gemini and shipped a
+    warn-and-skip instead. FIX ROUND 3 found that conclusion was wrong -- see
+    `_send_gemini_note_silently`'s docstring for the bridge that makes
+    `send_client_content(turn_complete=False)` actually reach the model
+    without an unprompted reply.
 
     `probe` is the connection's SpeakerProbe; it is only read by verdict_text
     for the "not confidently matched" fallback message (to name the household
     members it might be), so tests exercising just the confident-match branch
     can omit it.
     """
-
-    _warned_no_silent_channel = {"done": False}
 
     async def note(label, name, f0):
         # verdict_text carries every case this feature has been tuned for:
@@ -442,24 +493,25 @@ def make_speaker_note(connection, openai_service, probe=None):
         # those branches exist to give the model.
         from .speaker_context import verdict_text
 
+        text = verdict_text(probe, label, name, f0)
+
         if not supports_client_events(connection.provider):
-            # Gemini: no channel exists that both reaches the model and
-            # doesn't force it to speak (see docstring). Log once per
-            # connection, clearly -- not a per-call "no-op", which is
-            # exactly the log wording that let the original bug hide.
-            # Everything else the name feeds (tool gating, HA sensors) is
-            # unaffected; only the model's own awareness is skipped.
-            if not _warned_no_silent_channel["done"]:
-                _warned_no_silent_channel["done"] = True
-                logger.warning(
-                    f"🗣️ {connection.provider} has no channel to tell the model who is "
-                    f"speaking without forcing an audible reply -- skipping the "
-                    f"model-facing note for this connection. Tool gating and HA "
-                    f"sensors still get the name; only address-by-name is lost."
-                )
+            # Gemini: append silently via send_client_content(turn_complete=
+            # False) + the service's own pending-turn-close bridge -- see
+            # _send_gemini_note_silently's docstring. Its own structural
+            # "does the bridge still exist" check logs an ERROR every time it
+            # fails, deliberately not deduplicated -- a vanished bridge is a
+            # library-compatibility break, not an expected steady-state
+            # condition, and is exactly the kind of thing this task exists to
+            # stop hiding after the first sighting. "No session yet" is not
+            # an error (mirrors _create_single_response's own quiet `if not
+            # self._session: return`) and is left unlogged for that reason.
+            try:
+                await _send_gemini_note_silently(openai_service, text)
+            except Exception as e:
+                logger.warning(f"⚠️ speaker verdict injection failed: {e!r}")
             return
 
-        text = verdict_text(probe, label, name, f0)
         try:
             await openai_service.send_client_event(
                 openai_rt_events.ConversationItemCreateEvent(
@@ -939,15 +991,19 @@ class WebSocketHandler:
             serializer.set_wake_handler(_on_device_wake)
 
             # Speaker context v1 (fork): per-wake voice-type verdict → injected
-            # straight into the LLM service (make_speaker_note) on OpenAI
-            # only -- see make_speaker_note's docstring for why Gemini gets
-            # no model-facing injection at all (every reachable channel
-            # either forces an audible reply or is silently ignored by the
-            # model; round 2 chose neither over shipping the former).
-            # Out-of-band w.r.t. the audio path on OpenAI; it lands ~2.5 s
-            # after the wake, so the FIRST reply of a turn may not have it
-            # yet — follow-ups and later turns do. Gating of
-            # speaker-restricted tools does NOT depend on this injection (see
+            # straight into the LLM service (make_speaker_note). OpenAI gets
+            # it immediately as a conversation item; Gemini gets it silently
+            # appended via send_client_content(turn_complete=False) plus the
+            # service's own pending-turn-close bridge, folded in only when
+            # the model next responds to a real user turn -- see
+            # make_speaker_note's and _send_gemini_note_silently's
+            # docstrings for the full trace and that one-turn-later cost.
+            # Out-of-band w.r.t. the audio path either way; on OpenAI it
+            # lands ~2.5 s after the wake, so the FIRST reply of a turn may
+            # not have it yet — follow-ups and later turns do; on Gemini it
+            # never lands before the current/next turn completes, by
+            # construction. Gating of speaker-restricted tools does NOT
+            # depend on this injection (see
             # SafeRealtimeLLMService.register_function in main.py) and is
             # unaffected on both engines.
             if connection.speaker_probe is not None and connection.speaker_probe.enabled:
