@@ -222,8 +222,10 @@ class ConnectionRecovery(FrameProcessor):
         # repairs in place and never fails over, which is today's behaviour.
         self._router = router
         # Async callable(), no arguments — rebuilds this connection on the
-        # engine the router just switched to. None until Task 8 wires it in;
-        # until then a failover decision is logged but not carried out.
+        # engine the router just switched to (see make_failover). Wired to
+        # that in serve_connection's real pipeline; still defaults to None so
+        # any test or caller that constructs ConnectionRecovery directly
+        # without one just logs a failover decision without carrying it out.
         self._on_failover = on_failover
         self._reconnecting = False
         # Stamped ONLY when a repair (reset_conversation) is actually
@@ -388,7 +390,8 @@ class ConnectionRecovery(FrameProcessor):
                 if self._on_failover is not None:
                     await self._on_failover()
                     return True
-                # Task 8 wires on_failover in; until then, returning True
+                # No callback wired (e.g. a test-built ConnectionRecovery, or
+                # any caller that hasn't passed on_failover): returning True
                 # here would suppress the idle nudge below while nothing
                 # actually rebuilds the connection — the device would get
                 # neither a switch nor a way out.
@@ -603,6 +606,60 @@ class ConnectionRecovery(FrameProcessor):
             await self._go_idle(f"turn ended on error: {reason[:60]}")
         except Exception as e:
             logger.warning(f"⚠️ could not emit idle after turn-ending error: {e!r}")
+
+
+def make_failover(connection):
+    """Build the action that moves one device to the other engine.
+
+    A pipecat pipeline owns its service object; swapping that object while the
+    pipeline runs is not something pipecat supports. So the pipeline is torn
+    down instead. The device notices the closed socket and calls back within
+    about a second -- the same path every add-on update already takes -- and
+    the new session is built with whatever the router now says, with the
+    conversation restored from the session cache.
+
+    Tearing down means `connection.task.cancel()` -- exactly what
+    `serve_connection`'s own `on_client_disconnected` handler already does.
+    That cancellation is what makes `runner.run(task)` return, which runs
+    `serve_connection`'s `finally` block: `_teardown()` (closes the recovery
+    processor and phase emitter, disconnects the service, clears the
+    connection's fields) and the registry/recording/callback bookkeeping. None
+    of that is repeated here -- this function only pulls the one lever that
+    starts it.
+
+    Args:
+        connection: The DeviceConnection to move.
+
+    Returns:
+        An async callable taking no arguments. Calling it more than once is
+        harmless: several error frames arrive for the same death.
+    """
+    done = {"fired": False}
+
+    async def failover():
+        if done["fired"]:
+            return
+        done["fired"] = True
+        # Unstick the device first, so the LED does not blink through the gap
+        # and leave the user thinking it is still listening.
+        try:
+            await connection.send_phase("idle")
+        except Exception as e:
+            logger.warning(f"⚠️ could not emit idle before failover: {e!r}")
+        task = getattr(connection, "task", None)
+        if task is None:
+            logger.warning("⚠️ no pipeline task to tear down for failover")
+            return
+        logger.warning(
+            f"🔀 tearing down {connection.device_id}'s pipeline so it reconnects "
+            f"on the other engine"
+        )
+        try:
+            await task.cancel()
+        except Exception as e:
+            logger.error(f"❌ failover teardown failed: {e!r}")
+
+    return failover
 
 
 _GEMINI_TURN_CLOSE_FLAG = "_needs_turn_complete_message"
@@ -932,9 +989,12 @@ class WebSocketHandler:
             # so a failure reported here can move the NEXT connection's
             # current() -- or None in any test that builds a WebSocketHandler
             # directly, which keeps repair-in-place-only behaviour.
-            # on_failover is wired in Task 8; None here means a failover
-            # decision is logged but not yet carried out.
-            provider=connection.provider or OPENAI, router=self.router, on_failover=None,
+            # on_failover tears this connection's pipeline down so the device
+            # reconnects on the engine the router just switched to -- see
+            # make_failover's docstring for why a teardown+reconnect and not
+            # an in-place service swap.
+            provider=connection.provider or OPENAI, router=self.router,
+            on_failover=make_failover(connection),
         )
         # connection.provider was decided once in serve_connection, before
         # the transport was even built, and create_service (which built
