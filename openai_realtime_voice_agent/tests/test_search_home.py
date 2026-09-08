@@ -56,3 +56,46 @@ def test_offline_sensors_say_so_instead_of_vanishing():
 def test_falls_back_to_the_entity_id_when_unnamed():
     e = _entity("sensor.mystery", state="7")
     assert _format(e) == "sensor.mystery: 7"
+
+
+def test_finds_swedish_names_written_without_umlauts():
+    # Speech-to-text and the model both spell these inconsistently.
+    from app.search_home_tool import _matches
+    e = _entity("sensor.tvattmaskin_state", "Tvättmaskin", "running")
+    assert _matches(e, ["tvattmaskin"])
+    assert _matches(e, ["Tvättmaskin"])
+
+
+def test_falls_back_to_partial_when_nothing_matches_every_word():
+    # The house is named in English, the household speaks Swedish. Requiring
+    # every word to hit made the assistant claim the car does not exist.
+    from app.search_home_tool import _search
+    states = [
+        _entity("sensor.rocket_battery_level", "Rocket Battery level", "33"),
+        _entity("sensor.rocket_battery_range", "Rocket Battery range", "152"),
+        _entity("light.hall", "Hall", "off"),
+    ]
+    hits, partial = _search(states, ["rocket", "batteri"])
+    assert partial is True
+    assert {h["entity_id"] for h in hits} == {
+        "sensor.rocket_battery_level",
+        "sensor.rocket_battery_range",
+    }
+
+
+def test_exact_match_wins_and_is_not_flagged_as_partial():
+    from app.search_home_tool import _search
+    states = [
+        _entity("sensor.rocket_battery_level", "Rocket Battery level", "33"),
+        _entity("light.hall", "Hall", "off"),
+    ]
+    hits, partial = _search(states, ["rocket", "battery"])
+    assert partial is False
+    assert len(hits) == 1
+
+
+def test_single_word_never_falls_back():
+    # One word that matches nothing means nothing; guessing would be noise.
+    from app.search_home_tool import _search
+    hits, partial = _search([_entity("light.hall", "Hall", "off")], ["garage"])
+    assert hits == [] and partial is False

@@ -22,7 +22,8 @@ safety and confirmation behaviour.
 """
 import logging
 import os
-from typing import Any, Awaitable, Callable, Dict, List, TYPE_CHECKING
+import unicodedata
+from typing import Any, Awaitable, Callable, Dict, List, Tuple, TYPE_CHECKING
 
 import httpx
 
@@ -96,10 +97,51 @@ def _format(entity: Dict[str, Any]) -> str:
     return f"{name}: {state} {unit}".rstrip() if unit else f"{name}: {state}"
 
 
-def _matches(entity: Dict[str, Any], words: List[str]) -> bool:
+def _fold(text: str) -> str:
+    """Lowercase and strip diacritics so 'tvattmaskin' finds 'Tvättmaskin'.
+
+    Speech-to-text and the model both spell Swedish names inconsistently, and a
+    query that misses by one umlaut should not come back empty.
+    """
+    decomposed = unicodedata.normalize("NFKD", text.lower())
+    return "".join(c for c in decomposed if not unicodedata.combining(c))
+
+
+def _haystack(entity: Dict[str, Any]) -> str:
     attrs = entity.get("attributes") or {}
-    haystack = f"{entity['entity_id']} {attrs.get('friendly_name') or ''}".lower()
-    return all(word in haystack for word in words)
+    return _fold(f"{entity['entity_id']} {attrs.get('friendly_name') or ''}")
+
+
+def _matches(entity: Dict[str, Any], words: List[str]) -> bool:
+    haystack = _haystack(entity)
+    return all(_fold(word) in haystack for word in words)
+
+
+def _score(entity: Dict[str, Any], words: List[str]) -> int:
+    """How many of the query words this entity matches."""
+    haystack = _haystack(entity)
+    return sum(1 for word in words if _fold(word) in haystack)
+
+
+def _search(states: List[Dict[str, Any]], words: List[str]) -> Tuple[List[Dict[str, Any]], bool]:
+    """Find entities, falling back to partial matches rather than nothing.
+
+    The house is named in English while the household speaks Swedish, so
+    "rocket batteri" matches no entity on every word -- "Rocket Battery level"
+    has the car but not the Swedish word. Requiring every word to hit made the
+    assistant answer "there is nothing like that", which is worse than useless:
+    it sounds authoritative and it is wrong.
+
+    Returns the hits and whether the fallback was used, so the caller can say so.
+    """
+    exact = [e for e in states if _matches(e, words)]
+    if exact or len(words) < 2:
+        return exact, False
+    scored = [(e, _score(e, words)) for e in states]
+    best = max((n for _, n in scored), default=0)
+    if best == 0:
+        return [], False
+    return [e for e, n in scored if n == best], True
 
 
 def create_search_home_tool_handler() -> Callable[["FunctionCallParams"], Awaitable[None]]:
@@ -123,7 +165,7 @@ def create_search_home_tool_handler() -> Callable[["FunctionCallParams"], Awaita
             await params.result_callback("I cannot reach the house right now.")
             return
 
-        words = [w for w in query.lower().split() if w]
+        words = [w for w in query.split() if w]
         try:
             async with httpx.AsyncClient(timeout=8) as client:
                 response = await client.get(
@@ -137,7 +179,7 @@ def create_search_home_tool_handler() -> Callable[["FunctionCallParams"], Awaita
             await params.result_callback("I could not search the house just now.")
             return
 
-        hits = [e for e in states if _matches(e, words)]
+        hits, partial = _search(states, words)
         if not hits:
             logger.info(f"🔦 search_home: no match for {query!r}")
             await params.result_callback(
@@ -153,6 +195,10 @@ def create_search_home_tool_handler() -> Callable[["FunctionCallParams"], Awaita
         logger.info(f"🔦 search_home: {total} match(es), returning {len(shown)}")
 
         answer = "\n".join(lines)
+        if partial:
+            answer = (
+                f"No exact match for '{query}'; closest things in the house:\n" + answer
+            )
         if total > len(shown):
             answer += f"\n({total} matches in total, showing the {len(shown)} shortest names.)"
         await params.result_callback(answer)
