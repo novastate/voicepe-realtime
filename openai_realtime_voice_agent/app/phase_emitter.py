@@ -158,6 +158,20 @@ class PhaseEmitter(FrameProcessor):
         # genuine new utterance — never cancel ITS response).
         self._on_dangling_stop = None
         self._on_real_speech = None
+        # Set by set_turn_success_handler() — called from
+        # _emit_idle_after_debounce() the moment a reply genuinely finishes
+        # (never from force_idle's turn-death path). ConnectionRecovery wires
+        # this to reset its provider-router retry budget: BotStoppedSpeaking
+        # is produced downstream of ConnectionRecovery's position in the
+        # pipeline and never flows back to it on its own, so this callback is
+        # what actually gets "the assistant finished answering" there.
+        self._on_turn_success = None
+
+    def set_turn_success_handler(self, callback) -> None:
+        """Wire a callable(), no arguments, invoked when a reply finishes
+        cleanly (debounce elapsed, no tool still running) — see
+        _emit_idle_after_debounce."""
+        self._on_turn_success = callback
 
     def note_wake(self) -> None:
         """Device woke (or a follow-up window closed without speech). Until the
@@ -256,6 +270,11 @@ class PhaseEmitter(FrameProcessor):
             await self._emit("thinking")
             self._arm_watchdog()
             return
+        # The bot's reply is genuinely over: no more speech arrived before
+        # the debounce elapsed, and no tool is still working. This IS "a turn
+        # just finished well" — see set_turn_success_handler.
+        if self._on_turn_success is not None:
+            self._on_turn_success()
         await self._emit("idle")
 
     async def _thinking_watchdog(self) -> None:

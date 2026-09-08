@@ -63,8 +63,30 @@ _TRANSIENT = (
     "realtime receive loop",
     "timeout",
     "internal error",
+    # The OpenAI Realtime 60-minute session cap. It can arrive as a proactive
+    # error event (code='session_expired', "Your session hit the maximum
+    # duration of 60 minutes.") with none of the socket-close markers above --
+    # explicit here, rather than relying on the catch-all default below, so it
+    # keeps classifying as TRANSIENT even if that default's behaviour ever
+    # changes. (ConnectionRecovery in app/websocket_handler.py also checks
+    # these two strings directly, as part of its own narrower "is this
+    # specifically a dead OpenAI socket worth reset_conversation()" gate --
+    # kept separate from this list because that gate additionally needs the
+    # "client event" send-flood pairing this generic classifier does not.)
+    "session_expired",
+    "maximum duration",
 )
 _TRANSIENT_CODES = (r"\b500\b", r"\b502\b", r"\b503\b", r"\b504\b", r"\b1001\b", r"\b1006\b", r"\b1011\b")
+
+# NOTE: several of the substrings above (keepalive ping timeout, going away,
+# no close frame, connectionclosed, connection is closed, realtime receive
+# loop) also appear as ConnectionRecovery's own connection-death signatures in
+# app/websocket_handler.py (_DEATH_MARKERS, _SESSION_DEAD_MARKERS, and the
+# reader_dead check). The two lists answer different questions -- this one
+# decides whether the ROUTER should hear about a failure at all (and can
+# therefore fail an engine over); that one decides whether OUR OpenAI socket
+# is specifically dead enough that calling reset_conversation() makes sense --
+# so they are kept as two lists rather than one importing the other.
 
 # Names of the tools this add-on runs itself. An error carrying one of these is
 # ours, and swapping engines would only hide it. Tool names must be followed by
