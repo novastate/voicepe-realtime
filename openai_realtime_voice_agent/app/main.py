@@ -600,6 +600,8 @@ class Application:
                 api_key=self.openai_api_key,
                 model=self.model,
                 voice=self.voice,
+                # Voice-instructed memory: standing household notes are folded
+                # into the instructions at every session creation.
                 instructions=self.instructions + memory_instructions(),
                 max_output_tokens=self.max_output_tokens,
                 speed=self.openai_speed,
