@@ -83,6 +83,11 @@ class DeviceConnection:
     serializer: Any = None
     transport: Any = None
     openai_service: Any = None
+    # Which engine this connection's session actually runs ("openai" or
+    # "gemini"), set by Application.create_service before it returns the
+    # service. The source of truth for which engine is live -- not the
+    # router's current answer, which can move on before this is read.
+    provider: str = ""
     pipeline: Any = None
     task: Any = None
     runner: Any = None

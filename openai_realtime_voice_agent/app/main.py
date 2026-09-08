@@ -73,6 +73,38 @@ def _resolve_choice(env_var: str, custom_env_var: str, default: str) -> str:
         return default
     return choice or default
 
+
+def build_router():
+    """Build the engine router from the add-on options.
+
+    Returns:
+        A ProviderRouter. A backup equal to the primary, or the literal
+        "none", means no failover -- the same as not configuring one.
+    """
+    from app.provider_router import ProviderRouter
+    from app.providers import OPENAI, PROVIDERS
+
+    primary = (os.environ.get("VOICE_PROVIDER") or OPENAI).strip().lower()
+    if primary not in PROVIDERS:
+        logger.warning(f"⚠️ unknown voice_provider {primary!r}, using {OPENAI}")
+        primary = OPENAI
+
+    backup = (os.environ.get("VOICE_PROVIDER_BACKUP") or "none").strip().lower()
+    if backup in ("none", "", primary) or backup not in PROVIDERS:
+        backup = None
+
+    try:
+        minutes = float(os.environ.get("PROVIDER_COOLDOWN_MINUTES") or 30)
+    except ValueError:
+        minutes = 30.0
+
+    logger.info(
+        f"🔀 voice engine: {primary}"
+        + (f", backup {backup} (cooldown {minutes:.0f} min)" if backup else ", no backup")
+    )
+    return ProviderRouter(primary, backup, cooldown_s=minutes * 60.0)
+
+
 dotenv.load_dotenv()
 
 
@@ -88,6 +120,7 @@ class Application:
         self.websocket_handler: Optional[WebSocketHandler] = None
         self.mcp_service: Optional[HomeAssistantMCPService] = None
         self.audio_recording_service: Optional[AudioRecordingService] = None
+        self.router = None
         self.session_manager: Optional[SessionManager] = None
         self._pipeline_lock: Optional[asyncio.Lock] = None
         self.speaker_male_name = ""
@@ -132,7 +165,7 @@ class Application:
         # service only auto-creates a response for the FIRST context (turn 1) and
         # after tool results; plain 2nd/3rd user turns get NO response unless the
         # server makes it. FALSE reproduces the old single-turn-only behaviour
-        # (turn 1 answers, turn 2 hangs in "thinking"). See create_openai_service.
+        # (turn 1 answers, turn 2 hangs in "thinking"). See create_service.
         semantic_vad_create_response = os.environ.get("SEMANTIC_VAD_CREATE_RESPONSE", "true").strip().lower() == "true"
         # Expose the `disconnect_client` tool to the model. DEFAULT FALSE: on the
         # Voice PE the device owns its own session lifecycle (wake word starts a
@@ -444,6 +477,14 @@ class Application:
         elif announce_port or announce_token:
             logger.warning("⚠️ announce endpoint needs BOTH announce_port and announce_token — disabled")
 
+        # Which engine builds the next session, and each engine's own key,
+        # model and voice. The instructions/tools/VAD knobs below stay shared
+        # -- see provider_options().
+        self.router = build_router()
+        self.gemini_api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+        self.gemini_model = os.environ.get("GEMINI_MODEL", "").strip()
+        self.gemini_voice = os.environ.get("GEMINI_VOICE", "").strip()
+
         # Store configuration for session creation
         self.openai_api_key = openai_api_key
         self.vad_threshold = vad_threshold
@@ -478,20 +519,68 @@ class Application:
         probe = getattr(connection, "speaker_probe", None)
         return probe.name_for(probe.gate_speaker()) if probe else None
     
-    async def create_openai_service(self, connection):
-        """Create an OpenAI Realtime session for ONE device.
+    def provider_options(self, provider: str):
+        """The knobs for one engine, from the add-on options.
+
+        Args:
+            provider: "openai" or "gemini".
+
+        Returns:
+            A ProviderOptions. The instructions are the same for both engines,
+            memory included -- only the key, model and voice differ.
+        """
+        from app.providers import GEMINI, ProviderOptions
+
+        instructions = self.instructions + memory_instructions()
+        if provider == GEMINI:
+            return ProviderOptions(
+                api_key=self.gemini_api_key,
+                model=self.gemini_model,
+                voice=self.gemini_voice,
+                instructions=instructions,
+                max_output_tokens=self.max_output_tokens,
+                language=self.transcription_language or "sv-SE",
+            )
+        return ProviderOptions(
+            api_key=self.openai_api_key,
+            model=self.model,
+            voice=self.voice,
+            instructions=instructions,
+            max_output_tokens=self.max_output_tokens,
+            speed=self.openai_speed,
+            noise_reduction=self.noise_reduction,
+            turn_detection_type=self.turn_detection_type,
+            vad_eagerness=self.vad_eagerness,
+            vad_threshold=self.vad_threshold,
+            vad_prefix_padding_ms=self.vad_prefix_padding_ms,
+            vad_silence_duration_ms=self.vad_silence_duration_ms,
+            semantic_vad_create_response=self.semantic_vad_create_response,
+            interrupt_response=self.interrupt_response,
+            transcription_model=self.transcription_model,
+            transcription_language=self.transcription_language,
+        )
+
+    async def create_service(self, connection):
+        """Create a voice-engine session for ONE device.
 
         This used to assign the single `self.openai_service`, so a second
         device connecting replaced the first device's live session and wiped
         its conversation. It now returns a fresh service that belongs to the
         calling connection and to nothing else.
 
+        It also used to build only OpenAI sessions. It now asks `self.router`
+        which engine the next session should use, so a failover recorded
+        against the router (see Task 7/8) actually changes what gets built.
+
         Args:
             connection: The DeviceConnection the session will serve. Its
                 transport is needed so device-scoped tools act on that device.
+                `connection.provider` is set here, before the service is
+                returned, to the engine actually used to build it -- it is
+                the source of truth for which engine this connection runs.
 
         Returns:
-            A newly created SafeRealtimeLLMService.
+            A newly created pipecat LLMService.
         """
         client_id = connection.device_id
         if self._pipeline_lock is None:
@@ -499,13 +588,13 @@ class Application:
 
         async with self._pipeline_lock:
             if client_id is None:
-                logger.warning("⚠️ No client_id provided to create_openai_service")
+                logger.warning("⚠️ No client_id provided to create_service")
 
             # Create new session
             if client_id:
-                logger.info(f"🆕 Creating new OpenAI Session for Client {client_id}...")
+                logger.info(f"🆕 Creating new session for Client {client_id}...")
             else:
-                logger.info("🆕 Creating new OpenAI Session...")
+                logger.info("🆕 Creating new session...")
 
             # Cache context from this DEVICE's previous session (if it is
             # reconnecting) so the conversation survives the reconnect.
@@ -594,33 +683,24 @@ class Application:
                 except Exception as e:
                     logger.warning(f"⚠️ Failed to fetch MCP tool definitions: {e}")
             
-            from app.providers import ProviderOptions, build_service
+            from app.providers import build_service
 
-            options = ProviderOptions(
-                api_key=self.openai_api_key,
-                model=self.model,
-                voice=self.voice,
-                # Voice-instructed memory: standing household notes are folded
-                # into the instructions at every session creation.
-                instructions=self.instructions + memory_instructions(),
-                max_output_tokens=self.max_output_tokens,
-                speed=self.openai_speed,
-                noise_reduction=self.noise_reduction,
-                turn_detection_type=self.turn_detection_type,
-                vad_eagerness=self.vad_eagerness,
-                vad_threshold=self.vad_threshold,
-                vad_prefix_padding_ms=self.vad_prefix_padding_ms,
-                vad_silence_duration_ms=self.vad_silence_duration_ms,
-                semantic_vad_create_response=self.semantic_vad_create_response,
-                interrupt_response=self.interrupt_response,
-                transcription_model=self.transcription_model,
-                transcription_language=self.transcription_language,
-            )
+            # Ask the router which engine this session should use, then hand
+            # that engine its own key/model/voice. `connection.provider` is the
+            # source of truth for which engine this connection is running --
+            # set here, from the same local variable that build_service()
+            # actually gets, never re-derived from the router's (possibly
+            # later, possibly different) current answer.
+            provider = self.router.current()
+            connection.provider = provider
+            options = self.provider_options(provider)
+            if not options.api_key:
+                logger.error(f"❌ no API key configured for {provider}")
             logger.info(
-                f"🔧 Creating session with {len(all_tools)} tools: "
+                f"🔧 Creating {provider} session with {len(all_tools)} tools: "
                 f"{[tool.get('name', 'unknown') for tool in all_tools]}"
             )
-            service = build_service("openai", options, all_tools)
+            service = build_service(provider, options, all_tools)
             service.speaker_probe = None
             service.male_only_tools = set()
             connection.turn_liveness = TurnLiveness()
@@ -631,7 +711,7 @@ class Application:
                 )
                 service.speaker_probe = connection.speaker_probe
                 service.male_only_tools = self.male_only_tools
-            logger.info(f"✅ OpenAI Service created: {type(service).__name__}")
+            logger.info(f"✅ {provider} service created: {type(service).__name__}")
             
             # Register disconnect tool handler (only when the tool is exposed)
             if self.enable_disconnect_tool:
@@ -697,7 +777,7 @@ class Application:
 
             self._preseed_context(service)
 
-            logger.info("✅ New OpenAI Session created")
+            logger.info("✅ New session created")
             return service
 
     def _preseed_context(self, service) -> None:
@@ -785,7 +865,11 @@ class Application:
 
         # No pipeline is built here any more. There is no process-wide session
         # to build one around: each device brings its own when it connects.
-        self.websocket_handler.openai_service_factory = self.create_openai_service
+        self.websocket_handler.openai_service_factory = self.create_service
+        # The handler needs the same router instance to pick each new
+        # connection's initial engine (for the mic sample rate) and, later,
+        # to recover a failed session onto the backup engine.
+        self.websocket_handler.router = self.router
 
         config = uvicorn.Config(
             self.build_web_app(),

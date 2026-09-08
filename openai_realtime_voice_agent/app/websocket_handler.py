@@ -19,6 +19,7 @@ from pipecat.services.openai.realtime import events as openai_rt_events
 
 from app.device_registry import DeviceConnection, DeviceRegistry, device_id_from_websocket
 from app.multi_client_transport import MixedFastAPIWebsocketTransport
+from app.providers import OPENAI, input_sample_rate
 from app.raw_audio_serializer import RawAudioSerializer
 from app.session_manager import SessionManager
 from app.audio_recording_service import AudioRecordingService
@@ -35,6 +36,11 @@ logger = logging.getLogger(__name__)
 # Literal[24000]) — you cannot tell it the audio is 16 kHz. So the device's
 # 16 kHz frames would be read 1.5x too fast / pitched up, garbling the whole
 # transcript. The InputResampler below upsamples 16k->24k in the pipeline.
+#
+# Gemini Live has no such lock -- it takes the device's native 16 kHz, so its
+# declared input rate is app.providers.input_sample_rate("gemini") instead of
+# this constant. PIPELINE_SAMPLE_RATE remains the OUTPUT rate for both
+# engines (what the device already plays at) and OpenAI's own input rate.
 PIPELINE_SAMPLE_RATE = 24000
 
 
@@ -415,6 +421,14 @@ class WebSocketHandler:
         # per-device tools (e.g. disconnect_client) can bind to that device's
         # transport rather than to a process-wide one.
         self.openai_service_factory: Optional[Callable[[DeviceConnection], Awaitable[Any]]] = None
+        # Set by main.py, alongside openai_service_factory, to the same
+        # ProviderRouter the application holds. Used to pick the engine for a
+        # brand-new connection's transport (before a session exists to ask),
+        # and by connection recovery to fail a session over to the backup
+        # engine. None (its default here, and in every test that builds a
+        # WebSocketHandler directly) means "openai, no failover" -- unchanged
+        # behaviour for anyone who hasn't wired a router in.
+        self.router = None
         # Which device's audio the (single-file) recorder is following.
         self._recording_owner: Optional[str] = None
         # Voice enrollment remains single-user, but is explicitly targeted to
@@ -423,13 +437,16 @@ class WebSocketHandler:
         self.enrollment_conductor = None
     
     def create_transport(
-        self, websocket, serializer: RawAudioSerializer
+        self, websocket, serializer: RawAudioSerializer, provider: str = OPENAI
     ) -> MixedFastAPIWebsocketTransport:
         """Create a transport for one accepted connection.
 
         Args:
             websocket: The accepted FastAPI/starlette WebSocket.
             serializer: This connection's serializer.
+            provider: The engine this connection's session will use. Sets the
+                declared input rate to what that engine wants; the output rate
+                stays PIPELINE_SAMPLE_RATE for both engines.
 
         Returns:
             A transport bound to that one connection.
@@ -440,7 +457,7 @@ class WebSocketHandler:
                 serializer=serializer,
                 audio_in_enabled=True,
                 audio_out_enabled=True,
-                audio_in_sample_rate=PIPELINE_SAMPLE_RATE,
+                audio_in_sample_rate=input_sample_rate(provider),
                 audio_out_sample_rate=PIPELINE_SAMPLE_RATE,
             ),
         )
@@ -507,13 +524,19 @@ class WebSocketHandler:
             openai_service=openai_service, emit_idle=send_phase,
             phase_emitter=connection.phase_emitter,
         )
+        # connection.provider is set by create_service before this runs, to
+        # whichever engine actually built `openai_service` above. For Gemini
+        # that's 16000 -- exactly what the device already streams, so the
+        # resampler below sees frame.sample_rate == out_rate and becomes a
+        # pass-through (see InputResampler.process_frame).
+        in_rate = input_sample_rate(connection.provider or OPENAI)
         pipeline_components = [
             transport.input(),
             # Watch for OpenAI connection-death ErrorFrames (they travel upstream
             # to the task source, so place this upstream of the service) and
             # reconnect in place. Without it a 1011/1001 drop bricks the session.
             connection.recovery,
-            InputResampler(out_rate=PIPELINE_SAMPLE_RATE),
+            InputResampler(out_rate=in_rate),
             input_activity_tracker,
         ]
         
@@ -1035,7 +1058,16 @@ class WebSocketHandler:
         connection = DeviceConnection(
             device_id=device_id, websocket=websocket, serializer=serializer
         )
-        connection.transport = self.create_transport(websocket, serializer)
+        # Ask the router (if main.py wired one in) which engine is current, so
+        # the transport declares the mic rate that engine wants. This is a
+        # provisional answer: create_service below asks the router again and
+        # overwrites connection.provider with whatever it actually built the
+        # session with -- that second read is the source of truth. The two
+        # can only disagree if another connection's failure flips the router
+        # in the gap between them, and nothing awaits in that gap here.
+        provider = self.router.current() if self.router is not None else OPENAI
+        connection.provider = provider
+        connection.transport = self.create_transport(websocket, serializer, provider)
 
         # Keepalive. The device sends {"type":"ping"} and waits for a pong;
         # the previous implementation registered this on an event pipecat
