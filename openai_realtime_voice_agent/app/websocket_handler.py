@@ -226,12 +226,23 @@ class ConnectionRecovery(FrameProcessor):
         # until then a failover decision is logged but not carried out.
         self._on_failover = on_failover
         self._reconnecting = False
+        # Stamped ONLY when a repair (reset_conversation) is actually
+        # attempted — by handle_error's dead-socket branch, force_reconnect,
+        # or the proactive refresh loop. Deliberately NOT stamped by every
+        # error handle_error sees: a rate limit or any other non-repairing
+        # failure must not delay force_reconnect's wedge detector, which
+        # gates on this same field, by up to RECONNECT_COOLDOWN_S for no
+        # reason.
         self._last_attempt = 0.0
-        # The text of the last error handle_error actually acted on, paired
-        # with _last_attempt above, so a flood of identical messages (a dead
-        # socket delivers the same one ~15x/s) collapses into a single router
-        # report/reconnect per RECONNECT_COOLDOWN_S instead of one per frame.
+        # The text of the last error handle_error actually processed (not
+        # deduped), paired with _last_reported_at below, so a flood of
+        # identical messages (a dead socket delivers the same one ~15x/s)
+        # collapses into a single router report/reconnect per
+        # RECONNECT_COOLDOWN_S instead of one per frame. Kept separate from
+        # _last_attempt above precisely so a message that never repairs still
+        # gets deduped without touching the repair-cooldown clock.
         self._last_error_message = None
+        self._last_reported_at = 0.0
         self._last_idle_unstick = 0.0
         # Diagnostics: when the current OpenAI session connected, so we can log its
         # age at a drop (the 60-min cap shows up as ~3600 s) and the reconnect
@@ -279,13 +290,30 @@ class ConnectionRecovery(FrameProcessor):
         router hear about this") and returns TRANSIENT for a rate limit and
         for anything it does not recognise, not only for a dead socket — so
         it cannot double as this gate. Only a genuine connection-death
-        signature is worth calling reset_conversation() over.
+        signature is worth calling reset_conversation() over. Three SEPARATE
+        conditions, restored to their exact pre-Task-7 shape (see
+        `git show c54eb29:app/websocket_handler.py`):
+
+          (a) the OpenAI send-side flood ("Error sending client event: …" + a
+              close-code marker) — OUR WS died mid-send. The "client event"
+              pairing is required: without it, some unrelated error that
+              merely happens to mention a close code (e.g. a normal
+              DEVICE-side disconnect, also possibly 1011/ConnectionClosed)
+              could tear down a perfectly working OpenAI session.
+          (b) an unambiguous OpenAI session-dead error event (session_expired
+              / "maximum duration") — the 60-min cap surfacing as a proactive
+              error event with NO send-flood, so (a) misses it. It can only
+              come from OpenAI, not a device close, so it needs no pairing.
+          (c) the OpenAI READ side died or ended ("realtime receive loop …",
+              from SafeRealtimeLLMService) — pipecat produces no ErrorFrame
+              for this at all otherwise. Also OpenAI-only, no pairing needed.
         """
-        if any(marker in message for marker in self._DEATH_MARKERS):
-            return True
-        if any(marker in message for marker in self._SESSION_DEAD_MARKERS):
-            return True
-        return "realtime receive loop" in message
+        send_flood = "client event" in message and any(
+            marker in message for marker in self._DEATH_MARKERS
+        )
+        session_dead = any(marker in message for marker in self._SESSION_DEAD_MARKERS)
+        reader_dead = "realtime receive loop" in message
+        return send_flood or session_dead or reader_dead
 
     async def handle_error(self, message: str) -> bool:
         """Decide what one error means and do that.
@@ -303,14 +331,16 @@ class ConnectionRecovery(FrameProcessor):
             working connection for nothing.
 
         Returns:
-            True if a repair or a failover was attempted (the caller need do
-            nothing more). False if this error needed no action from us —
-            our own tool, a terminal failure with nowhere to go, an engine
-            that heals its own connection, a reported-but-not-dead-socket
-            failure (a rate limit, say), a failover decision with no callback
-            yet to carry it out, or a duplicate of the same message inside
-            the flood-collapse window — in which case the caller still owes
-            the device an idle nudge so a stuck turn does not sit forever.
+            True if a repair or a failover was attempted, OR if this is a
+            duplicate of a connection-death message already being handled
+            (the caller need do nothing more either way). False if this
+            error needed no action from us — our own tool, a terminal
+            failure with nowhere to go, an engine that heals its own
+            connection, a reported-but-not-dead-socket failure (a rate
+            limit, say), a failover decision with no callback yet to carry
+            it out, or a duplicate of a non-death message — in which case
+            the caller still owes the device an idle nudge so a stuck turn
+            does not sit forever.
         """
         from app.provider_failures import Failure, classify
         from app.providers import self_heals
@@ -328,14 +358,28 @@ class ConnectionRecovery(FrameProcessor):
         # ~66ms. One report per RECONNECT_COOLDOWN_S — the window a reconnect
         # attempt already waits out, not a second number — is enough; the
         # same message recurring after the window elapses is still reported.
+        # Keyed by _last_reported_at, NOT _last_attempt: _last_attempt only
+        # moves when a repair is actually attempted (see __init__), so a
+        # duplicate that never repairs (a repeated rate limit, say) would
+        # otherwise never be recognised as a duplicate at all.
         duplicate = (
             message == self._last_error_message
-            and now - self._last_attempt < self.RECONNECT_COOLDOWN_S
+            and now - self._last_reported_at < self.RECONNECT_COOLDOWN_S
         )
         if duplicate:
-            return False
+            # A duplicate DEAD-SOCKET message must report back "handled"
+            # (True), not "nothing to do" (False): False would make
+            # _route_error call the plain idle-unstick, which routes through
+            # PhaseEmitter.force_idle() and sets _suppress_thinking — and if
+            # the earlier repair already succeeded and the user has since
+            # started a fresh turn, this straggler frame would clobber that
+            # turn's phase (the exact race documented at
+            # app/phase_emitter.py:35-48). A duplicate NON-death message (a
+            # repeated rate limit) still needs its idle nudge, so it still
+            # returns False, gated by IDLE_UNSTICK_COOLDOWN_S as before.
+            return self._is_dead_socket(message)
         self._last_error_message = message
-        self._last_attempt = now
+        self._last_reported_at = now
 
         if self._router is not None:
             after = self._router.report_failure(self._provider, message)
@@ -367,6 +411,7 @@ class ConnectionRecovery(FrameProcessor):
             return False
 
         self._reconnecting = True
+        self._last_attempt = now  # only stamped here, where a repair is actually attempted
         await self._recover(message)
         return True
 
@@ -488,32 +533,40 @@ class ConnectionRecovery(FrameProcessor):
         while True:
             try:
                 await asyncio.sleep(self.REFRESH_CHECK_S)
-                if self._reconnecting:
-                    continue
-                now = time.monotonic()
-                age = now - self._connected_at
-                quiet = now - self._last_input_audio
-                busy = getattr(self._service, "_current_assistant_response", None) is not None
-                if (age >= self.REFRESH_AGE_S and quiet >= self.REFRESH_QUIET_S
-                        and not busy and now - self._last_attempt >= self.RECONNECT_COOLDOWN_S):
-                    self._reconnecting = True
-                    self._last_attempt = now
-                    logger.info(
-                        f"🔄 proactive session refresh (session {age/60:.0f} min old, "
-                        f"quiet for {quiet:.0f}s) — staying ahead of the 60-min cap"
-                    )
-                    refreshed = await self._recover(
-                        "proactive refresh before the 60-min session cap"
-                    )
-                    if refreshed and self._router is not None:
-                        # Not a failure report either (see _recover's
-                        # docstring) — a clean scheduled refresh is as good a
-                        # proof of health as a finished turn.
-                        self._router.note_success(self._provider)
+                await self._maybe_proactive_refresh()
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.warning(f"⚠️ proactive refresh loop error: {e!r}")
+
+    async def _maybe_proactive_refresh(self) -> None:
+        """Refresh if the session is old, quiet, and not already mid-repair.
+
+        Split out from the sleep loop above so this decision + success-credit
+        path is directly testable without waiting on REFRESH_CHECK_S/
+        REFRESH_AGE_S/REFRESH_QUIET_S — behaviour is unchanged either way.
+        """
+        if self._reconnecting:
+            return
+        now = time.monotonic()
+        age = now - self._connected_at
+        quiet = now - self._last_input_audio
+        busy = getattr(self._service, "_current_assistant_response", None) is not None
+        if not (age >= self.REFRESH_AGE_S and quiet >= self.REFRESH_QUIET_S
+                and not busy and now - self._last_attempt >= self.RECONNECT_COOLDOWN_S):
+            return
+        self._reconnecting = True
+        self._last_attempt = now
+        logger.info(
+            f"🔄 proactive session refresh (session {age/60:.0f} min old, "
+            f"quiet for {quiet:.0f}s) — staying ahead of the 60-min cap"
+        )
+        refreshed = await self._recover("proactive refresh before the 60-min session cap")
+        if refreshed and self._router is not None:
+            # Not a failure report either (see _recover's docstring) — a
+            # clean scheduled refresh is as good a proof of health as a
+            # finished turn.
+            self._router.note_success(self._provider)
 
     async def close(self) -> None:
         """Stop background work owned by this pipeline processor."""

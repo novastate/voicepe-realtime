@@ -38,8 +38,13 @@ async def test_a_tool_still_running_does_not_signal_turn_success():
     liveness.tool_started()
     pe = PhaseEmitter(_noop, idle_debounce_s=0, liveness=liveness)
     pe.set_turn_success_handler(lambda: calls.append(True))
-    await pe._emit_idle_after_debounce()
-    assert calls == []
+    try:
+        await pe._emit_idle_after_debounce()
+        assert calls == []
+    finally:
+        # The "thinking" branch arms the watchdog task -- close() cancels it
+        # so it doesn't stay pending after the test ends.
+        await pe.close()
 
 
 @pytest.mark.asyncio
