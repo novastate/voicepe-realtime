@@ -7,7 +7,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.device_registry import DeviceConnection
-from app.main import SafeRealtimeLLMService
+from app.providers.openai_realtime import SafeRealtimeLLMService
 from app.phase_emitter import PhaseEmitter
 from app.websocket_handler import ConnectionRecovery, WebSocketHandler
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
