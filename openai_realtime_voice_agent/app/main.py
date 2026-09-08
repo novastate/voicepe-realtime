@@ -14,6 +14,7 @@ from app.phase_emitter import TurnLiveness
 from app.disconnect_tool import get_disconnect_tool_definition, create_disconnect_tool_handler
 from app.web_search_tool import get_web_search_tool_definition, create_web_search_tool_handler
 from app.search_home_tool import get_search_home_tool_definition, create_search_home_tool_handler
+from app.play_media_tool import get_play_media_tool_definition, create_play_media_tool_handler
 from app.audio_recording_service import AudioRecordingService
 from app.session_manager import SessionManager
 from app.websocket_handler import WebSocketHandler
@@ -780,6 +781,12 @@ class Application:
             # only read what it already knows the name of. See search_home_tool.
             all_tools.append(get_search_home_tool_definition())
 
+            # Playing something by name. HassMediaSearchAndPlay ranks every
+            # provider together and picks a Spotify track when the user asked
+            # for a radio station; this one searches per kind. See
+            # play_media_tool.
+            all_tools.append(get_play_media_tool_definition())
+
             # Voice enrollment tool (fork): guided voice-training capture.
             all_tools.append(get_enrollment_tool_definition())
             all_tools.append(get_false_alarm_tool_definition())
@@ -807,6 +814,12 @@ class Application:
                         if self.mcp_tool_allowlist and function_schema.name not in self.mcp_tool_allowlist:
                             continue
                         if openclaw_url() and function_schema.name == "ask_openclaw":
+                            continue
+                        # Our play_media does the same job and can be told what
+                        # kind of thing to look for. Leaving both in place means
+                        # the model sometimes picks the one that answers "play
+                        # P3" with a Spotify track. See play_media_tool.
+                        if function_schema.name == "HassMediaSearchAndPlay":
                             continue
                         openai_tool = {
                             "type": "function",
@@ -952,6 +965,9 @@ class Application:
 
             service.register_function("search_home", create_search_home_tool_handler())
             logger.info("✅ Registered search_home tool handler")
+
+            service.register_function("play_media", create_play_media_tool_handler())
+            logger.info("✅ Registered play_media tool handler")
             
             # Register voice enrollment tool handler (fork). The speaker-name
             # getter lets the tool default to the voice-identified person.
