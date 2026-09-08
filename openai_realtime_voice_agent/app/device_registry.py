@@ -84,9 +84,11 @@ class DeviceConnection:
     transport: Any = None
     openai_service: Any = None
     # Which engine this connection's session actually runs ("openai" or
-    # "gemini"), set by Application.create_service before it returns the
-    # service. The source of truth for which engine is live -- not the
-    # router's current answer, which can move on before this is read.
+    # "gemini"), decided once by WebSocketHandler.serve_connection before the
+    # transport is even built, and only ever read back afterwards (by
+    # Application.create_service, and by build_pipeline) -- never re-decided.
+    # The source of truth for which engine is live -- not the router's
+    # current answer, which can move on before this is read.
     provider: str = ""
     pipeline: Any = None
     task: Any = None

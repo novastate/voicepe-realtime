@@ -524,11 +524,14 @@ class WebSocketHandler:
             openai_service=openai_service, emit_idle=send_phase,
             phase_emitter=connection.phase_emitter,
         )
-        # connection.provider is set by create_service before this runs, to
-        # whichever engine actually built `openai_service` above. For Gemini
-        # that's 16000 -- exactly what the device already streams, so the
-        # resampler below sees frame.sample_rate == out_rate and becomes a
-        # pass-through (see InputResampler.process_frame).
+        # connection.provider was decided once in serve_connection, before
+        # the transport was even built, and create_service (which built
+        # `openai_service` above) only ever reads that same value back --
+        # never re-decides it -- so this is guaranteed to name the engine
+        # `openai_service` actually is. For Gemini that's 16000 -- exactly
+        # what the device already streams, so the resampler below sees
+        # frame.sample_rate == out_rate and becomes a pass-through (see
+        # InputResampler.process_frame).
         in_rate = input_sample_rate(connection.provider or OPENAI)
         pipeline_components = [
             transport.input(),
@@ -1058,13 +1061,15 @@ class WebSocketHandler:
         connection = DeviceConnection(
             device_id=device_id, websocket=websocket, serializer=serializer
         )
-        # Ask the router (if main.py wired one in) which engine is current, so
-        # the transport declares the mic rate that engine wants. This is a
-        # provisional answer: create_service below asks the router again and
-        # overwrites connection.provider with whatever it actually built the
-        # session with -- that second read is the source of truth. The two
-        # can only disagree if another connection's failure flips the router
-        # in the gap between them, and nothing awaits in that gap here.
+        # Decide the engine for this ENTIRE connection right here, once, if
+        # main.py wired a router in. This is the only read of self.router
+        # for this connection: the transport needs the answer immediately
+        # (to declare the mic rate), and create_service below reads it back
+        # off connection.provider rather than asking the router again -- a
+        # second read, taken after the pipeline lock and an awaited MCP
+        # tool-schema fetch, could come back different if another
+        # connection's failure landed in that real gap, splitting the
+        # transport's declared rate from the engine actually built.
         provider = self.router.current() if self.router is not None else OPENAI
         connection.provider = provider
         connection.transport = self.create_transport(websocket, serializer, provider)

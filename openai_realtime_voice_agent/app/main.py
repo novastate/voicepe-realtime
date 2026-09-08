@@ -568,16 +568,20 @@ class Application:
         its conversation. It now returns a fresh service that belongs to the
         calling connection and to nothing else.
 
-        It also used to build only OpenAI sessions. It now asks `self.router`
-        which engine the next session should use, so a failover recorded
-        against the router (see Task 7/8) actually changes what gets built.
+        It also used to build only OpenAI sessions. It now builds whichever
+        engine `connection.provider` already names -- WebSocketHandler.
+        serve_connection decides that once per connection (see its own
+        docstring) before this is ever called, so a failover recorded
+        against the router (see Task 7/8) changes what gets built by
+        changing what the caller stamps onto connection.provider, not by
+        this method asking the router itself.
 
         Args:
             connection: The DeviceConnection the session will serve. Its
-                transport is needed so device-scoped tools act on that device.
-                `connection.provider` is set here, before the service is
-                returned, to the engine actually used to build it -- it is
-                the source of truth for which engine this connection runs.
+                transport is needed so device-scoped tools act on that
+                device, and `connection.provider` must already hold the
+                engine to build -- this method does not decide it and does
+                not consult `self.router`.
 
         Returns:
             A newly created pipecat LLMService.
@@ -685,14 +689,18 @@ class Application:
             
             from app.providers import build_service
 
-            # Ask the router which engine this session should use, then hand
-            # that engine its own key/model/voice. `connection.provider` is the
-            # source of truth for which engine this connection is running --
-            # set here, from the same local variable that build_service()
-            # actually gets, never re-derived from the router's (possibly
-            # later, possibly different) current answer.
-            provider = self.router.current()
-            connection.provider = provider
+            # The engine is decided exactly ONCE per connection, by
+            # WebSocketHandler.serve_connection, before the transport is even
+            # built (it needs to know the mic rate up front). That decision
+            # is what's on connection.provider already -- read it back here
+            # rather than asking self.router again. Querying the router a
+            # second time here used to be able to disagree with the first
+            # query (another connection's failure landing in the gap, which
+            # includes the pipeline lock and an MCP tool-schema fetch above --
+            # a real, awaited gap, not a theoretical one), splitting the
+            # transport's declared mic rate and the actually-built session
+            # across two different engines.
+            provider = connection.provider
             options = self.provider_options(provider)
             if not options.api_key:
                 logger.error(f"❌ no API key configured for {provider}")
@@ -857,19 +865,28 @@ class Application:
 
         return web_app
 
+    def _wire_websocket_handler(self) -> None:
+        """Point the handler at this app's session factory and router.
+
+        Split out of run() so this wiring -- not uvicorn startup -- is what a
+        test calls and asserts on directly. `self.websocket_handler.router`
+        must end up the SAME ProviderRouter object as `self.router`: the
+        handler picks each new connection's initial engine from it (for the
+        mic sample rate) and, later, uses it to recover a failed session onto
+        the backup engine. A copy or a missing assignment leaves failover
+        reading a router nobody ever reports failures against.
+        """
+        # No pipeline is built here any more. There is no process-wide session
+        # to build one around: each device brings its own when it connects.
+        self.websocket_handler.openai_service_factory = self.create_service
+        self.websocket_handler.router = self.router
+
     async def run(self) -> None:
         """Run the application."""
         import uvicorn
 
         await self.initialize()
-
-        # No pipeline is built here any more. There is no process-wide session
-        # to build one around: each device brings its own when it connects.
-        self.websocket_handler.openai_service_factory = self.create_service
-        # The handler needs the same router instance to pick each new
-        # connection's initial engine (for the mic sample rate) and, later,
-        # to recover a failed session onto the backup engine.
-        self.websocket_handler.router = self.router
+        self._wire_websocket_handler()
 
         config = uvicorn.Config(
             self.build_web_app(),

@@ -26,11 +26,25 @@ def test_the_cooldown_is_read_in_minutes(monkeypatch):
     assert build_router().cooldown_s == 45 * 60
 
 
-def test_an_unreadable_cooldown_falls_back_to_thirty_minutes(monkeypatch):
+def test_an_empty_cooldown_env_var_falls_back_to_thirty_minutes(monkeypatch):
+    """An empty string is falsy, so `os.environ.get(...) or 30` substitutes
+    the int default BEFORE float() is ever called -- this exercises that
+    short-circuit, not the except branch below (see the "abc" test for that)."""
     from app.main import build_router
     monkeypatch.setenv("VOICE_PROVIDER", "openai")
     monkeypatch.setenv("VOICE_PROVIDER_BACKUP", "gemini")
     monkeypatch.setenv("PROVIDER_COOLDOWN_MINUTES", "")
+    assert build_router().cooldown_s == 1800.0
+
+
+def test_an_unparseable_cooldown_falls_back_to_thirty_minutes(monkeypatch):
+    """A non-empty, non-numeric value IS truthy, so it reaches float() and
+    must be caught there by the except branch -- "" alone can't prove that
+    branch works, since it never gets that far."""
+    from app.main import build_router
+    monkeypatch.setenv("VOICE_PROVIDER", "openai")
+    monkeypatch.setenv("VOICE_PROVIDER_BACKUP", "gemini")
+    monkeypatch.setenv("PROVIDER_COOLDOWN_MINUTES", "abc")
     assert build_router().cooldown_s == 1800.0
 
 
@@ -51,7 +65,16 @@ def test_an_unknown_primary_falls_back_to_openai(monkeypatch):
 
 
 def test_provider_options_gives_each_engine_its_own_key_model_and_voice(monkeypatch):
-    """The knobs must actually differ per engine, not just exist per engine."""
+    """The knobs must actually differ per engine, not just exist per engine.
+
+    Every value below that has a ProviderOptions dataclass default is
+    deliberately set to something OTHER than that default (speed=1.25 not
+    1.0, turn_detection_type="server_vad" not "semantic_vad",
+    transcription_language="nl-NL" not "" / "sv-SE") -- otherwise a dropped
+    kwarg in provider_options() would silently fall back to the same value
+    the test expects, and the assertion would pass whether or not the code
+    actually wired that field through.
+    """
     from app.main import Application
     from app.providers import GEMINI, OPENAI
 
@@ -60,14 +83,14 @@ def test_provider_options_gives_each_engine_its_own_key_model_and_voice(monkeypa
     app.gemini_api_key = "gm-key"
     app.gemini_model = "models/gemini-3.1-flash-live-preview"
     app.gemini_voice = "Charon"
-    app.transcription_language = ""
+    app.transcription_language = "nl-NL"
     app.max_output_tokens = None
     app.openai_api_key = "sk-key"
     app.model = "gpt-realtime-2"
     app.voice = "marin"
-    app.openai_speed = 1.0
+    app.openai_speed = 1.25
     app.noise_reduction = ""
-    app.turn_detection_type = "semantic_vad"
+    app.turn_detection_type = "server_vad"
     app.vad_eagerness = "low"
     app.vad_threshold = 0.5
     app.vad_prefix_padding_ms = 300
@@ -82,22 +105,26 @@ def test_provider_options_gives_each_engine_its_own_key_model_and_voice(monkeypa
     assert gemini_options.api_key == "gm-key"
     assert gemini_options.model == "models/gemini-3.1-flash-live-preview"
     assert gemini_options.voice == "Charon"
-    assert gemini_options.language == "sv-SE"
+    # Gemini's own field, fed from transcription_language when set.
+    assert gemini_options.language == "nl-NL"
 
     assert openai_options.api_key == "sk-key"
     assert openai_options.model == "gpt-realtime-2"
     assert openai_options.voice == "marin"
+    # provider_options() never sets `language=` in the OpenAI branch, so this
+    # must stay the dataclass default -- if it read "nl-NL" too, the two
+    # branches would be sharing/mutating one ProviderOptions instead of each
+    # building its own.
+    assert openai_options.language == "sv-SE"
+    assert openai_options.transcription_language == "nl-NL"
 
     # Both engines get the same instructions -- there is only one prompt.
     assert gemini_options.instructions == openai_options.instructions
-    # But a value one engine doesn't have (Gemini's default language) must
-    # not leak into the other engine's, and vice versa: if provider_options
-    # secretly built ONE ProviderOptions and just overwrote a couple of
-    # fields, the openai one would end up with language="sv-SE" too even
-    # though nothing ever sets that for openai from these inputs.
-    assert openai_options.language == "sv-SE"  # dataclass default, unset either way
-    assert openai_options.speed == 1.0
-    assert openai_options.turn_detection_type == "semantic_vad"
+
+    # OpenAI-only knobs, set above to non-default values so a dropped kwarg
+    # can't hide behind the dataclass default matching the test's input.
+    assert openai_options.speed == 1.25
+    assert openai_options.turn_detection_type == "server_vad"
 
 
 def _bare_app(provider: str, backup=None):
@@ -144,27 +171,48 @@ def _bare_app(provider: str, backup=None):
     return app
 
 
+def _is_gemini_service(service) -> bool:
+    """Tell a built Gemini service from a built OpenAI one without importing
+    either provider module -- Gemini's carries a voice_id, OpenAI's realtime
+    service does not use that attribute name."""
+    return hasattr(service, "voice_id") or "Gemini" in type(service).__name__
+
+
+class _PoisonRouter:
+    """Explodes if asked. create_service must never consult the router --
+    the engine was already decided once, by WebSocketHandler.serve_connection,
+    and stored on connection.provider before create_service ever runs."""
+
+    def current(self) -> str:
+        raise AssertionError("create_service must not read the router")
+
+
 @pytest.mark.asyncio
-async def test_create_service_sets_connection_provider_to_the_engine_it_built(monkeypatch):
-    """Ruling 2: connection.provider must hold the engine actually used to
-    build the session -- not whatever the router says NOW, later."""
+async def test_create_service_never_reads_the_router_it_uses_the_stored_decision():
+    """Fix 1 / ruling 2: create_service must build whichever engine
+    connection.provider already names, without asking self.router again. A
+    router that raises the moment it's asked proves the "again" -- if
+    create_service still called self.router.current() (as it used to, to
+    decide the engine for build_service), this test fails immediately with
+    the poison router's AssertionError instead of the one below."""
     from app.device_registry import DeviceConnection
     from app.providers import GEMINI
 
     app = _bare_app(GEMINI)
+    app.router = _PoisonRouter()
     connection = DeviceConnection(device_id="kitchen", websocket=object())
-    await app.create_service(connection)
-    assert connection.provider == GEMINI
-    # A failure recorded against the router after the session was built must
-    # not retroactively change what this connection says it runs.
-    app.router.report_failure(GEMINI, "insufficient_quota")
+    connection.provider = GEMINI  # decided elsewhere, before create_service runs
+
+    service = await app.create_service(connection)
+
+    assert _is_gemini_service(service)
     assert connection.provider == GEMINI
 
 
 class _FlakyRouter:
-    """A router whose answer moves between two calls -- standing in for
-    another connection's failure landing between create_service's own two
-    reads, if it had two. current() flips openai/gemini on every call."""
+    """A router whose answer moves between successive calls -- standing in
+    for another connection's failure landing in the real gap (pipeline lock +
+    an awaited MCP fetch) between two reads, if the code still took two."""
 
     def __init__(self, first: str, second: str):
         self._answers = [first, second]
@@ -173,27 +221,96 @@ class _FlakyRouter:
         return self._answers.pop(0) if len(self._answers) > 1 else self._answers[0]
 
 
+class _FakeURL:
+    query = "device_id=kitchen"
+
+
+class _FakeWebSocket:
+    url = _FakeURL()
+    client = None
+
+    async def accept(self):
+        return None
+
+    async def send_text(self, _payload):
+        return None
+
+
+class _RateSpyTransport:
+    """Stands in for the real transport in the integration test below, and
+    simply remembers which provider it was built for -- create_transport's
+    own rate math is covered separately by
+    test_create_transport_declares_the_providers_input_rate."""
+
+    def __init__(self, provider: str):
+        self.provider = provider
+
+    def event_handler(self, _name):
+        def register(fn):
+            return fn
+        return register
+
+
+def _fake_build_pipeline(_connection, activity_callback=None):
+    """A pipeline stand-in that runs and finishes immediately -- this test
+    is about which engine gets picked, not about pipecat's frame plumbing
+    (covered separately by test_build_pipeline_resamples_to_the_connections_provider_rate)."""
+
+    class _Runner:
+        async def run(self, _task):
+            return None
+
+    class _Task:
+        async def cancel(self):
+            return None
+
+    return object(), _Runner(), _Task()
+
+
 @pytest.mark.asyncio
-async def test_connection_provider_matches_the_engine_build_service_got():
-    """Ruling 2, defended against a subtler bug than a stale value: if
-    create_service asked the router twice -- once to pick the engine for
-    build_service, again to stamp connection.provider -- a router that moved
-    between those two reads would leave connection.provider naming an engine
-    OTHER than the one actually built. That must be structurally impossible:
-    there must be exactly one read, reused for both."""
-    from app.device_registry import DeviceConnection
-    from app.providers import GEMINI, OPENAI
+async def test_transport_and_service_agree_on_the_engine_even_if_the_router_moves():
+    """Fix 1, at the level the reviewer asked for: run the REAL
+    WebSocketHandler.serve_connection with a router double that answers
+    "openai" then "gemini" on successive current() calls, and check that the
+    transport built for this connection and the session actually built for
+    it agree on which engine that is.
+
+    Before the fix, serve_connection read the router once (for the
+    transport) and create_service read it again (for the service) -- two
+    reads against a router that moves would give the transport "openai" and
+    the session "gemini". This must fail on the OLD code and pass on the
+    fixed one, because there is now exactly one read per connection.
+    """
+    from app.providers import GEMINI, OPENAI, input_sample_rate
+    from app.websocket_handler import WebSocketHandler
 
     app = _bare_app(GEMINI)
-    app.router = _FlakyRouter(GEMINI, OPENAI)
-    connection = DeviceConnection(device_id="kitchen", websocket=object())
+    app.router = _FlakyRouter(OPENAI, GEMINI)
 
-    service = await app.create_service(connection)
+    handler = WebSocketHandler()
+    handler.router = app.router
+    handler.create_transport = lambda _ws, _ser, provider: _RateSpyTransport(provider)
+    handler.build_pipeline = _fake_build_pipeline
 
-    # What engine did build_service actually construct? Gemini's service has
-    # a voice_id; OpenAI's realtime service does not use that attribute name.
-    built_gemini = hasattr(service, "voice_id") or "Gemini" in type(service).__name__
-    assert connection.provider == (GEMINI if built_gemini else OPENAI)
+    seen = {}
+
+    async def factory(connection):
+        service = await app.create_service(connection)
+        seen["connection"] = connection
+        seen["service"] = service
+        return service
+
+    handler.openai_service_factory = factory
+
+    await handler.serve_connection(_FakeWebSocket())
+
+    connection = seen["connection"]
+    # The transport's provider and the connection's (set inside
+    # create_service, from the very same decision) must be the identical
+    # single answer the router gave out -- not two different ones.
+    assert connection.transport.provider == connection.provider
+    assert connection.provider in (OPENAI, GEMINI)
+    assert _is_gemini_service(seen["service"]) == (connection.provider == GEMINI)
 
 
 def test_create_transport_declares_the_providers_input_rate():
@@ -255,11 +372,21 @@ async def test_build_pipeline_resamples_to_the_connections_provider_rate():
 
 
 def test_the_websocket_handler_gets_the_same_router_instance():
-    """Ruling 1: app.run() wires self.router onto the handler beside the
-    service factory, so the next task's failover can read handler.router."""
-    import inspect
-
+    """Ruling 1: _wire_websocket_handler() (called from run(), split out so
+    it's directly testable without starting uvicorn) must point the handler
+    at the SAME ProviderRouter object the app holds -- not an equal-looking
+    one, not none at all. A source-text search for the assignment can stay
+    green even if the line is commented out or dead; asserting object
+    identity on the actual, executed result cannot."""
     from app.main import Application
+    from app.provider_router import ProviderRouter
+    from app.websocket_handler import WebSocketHandler
 
-    source = inspect.getsource(Application.run)
-    assert "self.websocket_handler.router = self.router" in source
+    app = Application()
+    app.router = ProviderRouter("openai", None)
+    app.websocket_handler = WebSocketHandler()
+
+    app._wire_websocket_handler()
+
+    assert app.websocket_handler.router is app.router
+    assert app.websocket_handler.openai_service_factory == app.create_service
