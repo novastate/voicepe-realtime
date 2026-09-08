@@ -15,6 +15,7 @@ from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
 from pipecat.frames.frames import (
     Frame, InputAudioRawFrame, OutputAudioRawFrame, StartFrame, EndFrame, ErrorFrame,
+    TranscriptionFrame,
 )
 from pipecat.audio.utils import create_stream_resampler
 from pipecat.services.openai.realtime import events as openai_rt_events
@@ -123,7 +124,7 @@ class InputResampler(FrameProcessor):
 
 
 class ConnectionRecovery(FrameProcessor):
-    """Auto-reconnect the OpenAI Realtime session when its WebSocket dies.
+    """Nurse whichever engine this connection is running, the way IT needs.
 
     pipecat 0.0.97's OpenAIRealtimeLLMService has NO reconnect logic: when the
     OpenAI WS drops (1011 keepalive ping timeout, 1001 going away on the 60-min
@@ -131,24 +132,43 @@ class ConnectionRecovery(FrameProcessor):
     floods ErrorFrame — ~15/s, one per forwarded mic frame — forever. The single
     persistent session is then dead until the add-on restarts, so the device gets
     no answer to any further turn (observed live: a 1011 flood after which the
-    next question got silence).
+    next question got silence). Gemini's service is the opposite: it has its own
+    `_reconnect`, `_handle_connection_error` and session resumption, so calling
+    `reset_conversation` on it would just be a second hand fighting the first.
 
     This processor watches the ErrorFrames as they travel upstream to the task
-    source, and on the first connection-death signature it:
-      1. emits `idle` to the device so it unsticks (LED + mic reset), and
-      2. calls service.reset_conversation() — the one PUBLIC method that does
-         _disconnect() + _connect() + re-sends the session config (instructions,
-         tools, turn detection) — to bring the session back IN PLACE. No pipeline
+    source and hands every one of them to `handle_error`, which classifies the
+    message (`app.provider_failures.classify`), asks the router whether this
+    engine should be replaced (`app.provider_router.ProviderRouter`), and only
+    then decides whether OUR job is to:
+      1. do nothing (our own tool's fault, or an engine that heals itself), or
+      2. fail the connection over to the backup engine (nowhere to repair to), or
+      3. repair this engine's session in place — emit `idle` to unstick the
+         device (LED + mic reset) and call service.reset_conversation() — the
+         one PUBLIC method that does _disconnect() + _connect() + re-sends the
+         session config (instructions, tools, turn detection). No pipeline
          rebuild: the running pipeline keeps the same service object, which is
          exactly the one reset_conversation reconnects.
-    A guard + cooldown collapse the error flood into a single reconnect attempt,
-    retrying at most every RECONNECT_COOLDOWN_S while the link stays down.
+    A guard + cooldown collapse an error flood into a single reconnect attempt,
+    retrying at most every RECONNECT_COOLDOWN_S while the link stays down. When
+    handle_error decides there is nothing for IT to do, the plain idle-unstick
+    still runs, so a stuck device always gets a way out.
     """
 
+    # Substrings that used to mark a dead/closed OpenAI websocket by hand,
+    # before app.provider_failures.classify() existed (Task 1). classify()'s
+    # TRANSIENT patterns absorbed every one of these signatures (plus the
+    # equivalent close codes), so handle_error now decides through it instead
+    # of this list. Left here — unused — because the reasoning below (why each
+    # of these specifically means the socket is gone, not just an app error)
+    # is the same reasoning baked into classify(), and losing it would leave
+    # that choice unexplained.
+    #
     # Substrings that mark a dead/closed OpenAI websocket (vs an app-level error
-    # like a tool failure, which we must NOT reconnect on). These appear on the
-    # SEND-side flood ("Error sending client event: …"), so they're paired with
-    # the "client event" check below to avoid reacting to a device disconnect.
+    # like a tool failure, which we must NOT reconnect on). These appeared on the
+    # SEND-side flood ("Error sending client event: …" — pipecat's own
+    # OpenAIRealtimeLLMService._send_client_event is the only place that
+    # phrase is ever produced, so it always meant OUR send to OpenAI failed).
     _DEATH_MARKERS = (
         "keepalive ping timeout",
         "going away",
@@ -166,11 +186,18 @@ class ConnectionRecovery(FrameProcessor):
     # send-flood and NO close-code marker — so the paired check above misses it
     # and the session stays dead until the add-on restarts. These markers force a
     # reconnect on their own. They can only come from OpenAI (not a device close),
-    # so no "client event" guard is needed.
+    # so no "client event" guard is needed. (Also superseded by classify() — see
+    # the note above _DEATH_MARKERS.)
     _SESSION_DEAD_MARKERS = (
         "session_expired",
         "maximum duration",
     )
+    # The third signature this class used to match by hand: the OpenAI READ
+    # side died or ended (network drop / silent server close). pipecat
+    # produces no ErrorFrame for these at all — SafeRealtimeLLMService wraps
+    # the receive loop and reports them as "realtime receive loop …", one of
+    # classify()'s own TRANSIENT patterns — so a wedged reader is exactly as
+    # covered under handle_error as it was under the marker check it replaces.
     RECONNECT_COOLDOWN_S = 5.0
     IDLE_UNSTICK_COOLDOWN_S = 2.0
     # Proactive refresh: reconnect BEFORE OpenAI's 60-min session cap, but only
@@ -180,7 +207,8 @@ class ConnectionRecovery(FrameProcessor):
     REFRESH_QUIET_S = 60.0    # ... and no mic audio flowed for this long
     REFRESH_CHECK_S = 60.0    # poll cadence of the background check
 
-    def __init__(self, openai_service, emit_idle=None, phase_emitter=None, **kwargs):
+    def __init__(self, openai_service, emit_idle=None, phase_emitter=None,
+                 provider="openai", router=None, on_failover=None, **kwargs):
         super().__init__(**kwargs)
         self._service = openai_service
         self._emit_idle = emit_idle  # async callable(value:str), this device's send_phase
@@ -190,6 +218,20 @@ class ConnectionRecovery(FrameProcessor):
         # overridden 400 ms later and the device sat in `thinking` with an
         # open mic for 44 s). emit_idle stays as fallback wiring.
         self._phase_emitter = phase_emitter
+        # The engine THIS connection's service actually is (resolved once, in
+        # serve_connection, before the transport even existed) — the only
+        # thing that lets handle_error tell an OpenAI dead-socket apart from a
+        # Gemini one that heals itself. Defaults to "openai" so every existing
+        # direct construction (tests included) keeps today's behaviour.
+        self._provider = provider
+        # The same ProviderRouter the application holds, or None in any test
+        # (and any caller) that hasn't wired one in — handle_error then just
+        # repairs in place and never fails over, which is today's behaviour.
+        self._router = router
+        # Async callable(), no arguments — rebuilds this connection on the
+        # engine the router just switched to. None until Task 8 wires it in;
+        # until then a failover decision is logged but not carried out.
+        self._on_failover = on_failover
         self._reconnecting = False
         self._last_attempt = 0.0
         self._last_idle_unstick = 0.0
@@ -216,46 +258,109 @@ class ConnectionRecovery(FrameProcessor):
             # sends {"type":"flush"} when a follow-up window times out — not
             # reactively on mic-resume, which disturbed the VAD and caused garbage.)
             self._last_input_audio = time.monotonic()
+        if isinstance(frame, TranscriptionFrame) and self._router is not None:
+            # Both engines push the user's finished transcript UPSTREAM (see
+            # pipecat's openai/realtime/llm.py and google/gemini_live/llm.py),
+            # which is exactly why it reaches us here even though we sit near
+            # the front of the pipeline — everything else this service
+            # produces (bot speech, phase frames) flows further downstream and
+            # never comes back through this processor. A finished transcript
+            # means the round trip to the engine just worked, so this is the
+            # "a turn just finished well" signal: forget any earlier hiccup
+            # charged against this engine. Without this, one hiccup today and
+            # an unrelated one next month would count as two-in-a-row and
+            # switch engines for nothing — the one-retry budget must reset on
+            # real success, not just with the passage of time.
+            self._router.note_success(self._provider)
         if isinstance(frame, ErrorFrame) and not self._reconnecting:
             msg = str(getattr(frame, "error", "") or "")
-            # Two reconnect triggers:
-            #  (a) the OpenAI send-side flood ("Error sending client event: …" +
-            #      a close-code marker) — OUR WS died mid-send. We require the
-            #      "client event" signature so a normal DEVICE-side disconnect
-            #      (also 1011/ConnectionClosed, but the device went away) does NOT
-            #      trigger an OpenAI reconnect.
-            #  (b) an unambiguous OpenAI session-dead error event (session_expired
-            #      / "maximum duration") — this is the 60-min cap surfacing as a
-            #      proactive error event with NO send-flood, so (a) misses it.
-            #      It can only come from OpenAI, so it needs no "client event" guard.
-            send_flood = "client event" in msg and any(m in msg for m in self._DEATH_MARKERS)
-            session_dead = any(m in msg for m in self._SESSION_DEAD_MARKERS)
-            # (c) the OpenAI READ side died or ended (network drop / silent
-            #     server close). pipecat produces no ErrorFrame for these at
-            #     all — SafeRealtimeLLMService wraps the receive loop and
-            #     reports them with this message. Without it the session sat
-            #     deaf for hours until the next utterance hit the dead socket.
-            reader_dead = "realtime receive loop" in msg
-            if send_flood or session_dead or reader_dead:
-                now = time.monotonic()
-                if now - self._last_attempt >= self.RECONNECT_COOLDOWN_S:
-                    self._reconnecting = True
-                    self._last_attempt = now
-                    self._recover_task = asyncio.create_task(self._recover(msg))
-            else:
-                # Non-connection-death error that ENDS a turn without a reply:
-                # most importantly an OpenAI rate-limit ("Rate limit reached …"),
-                # but also any other transient response.create failure. No bot
-                # speech was produced, so PhaseEmitter never fires
-                # BotStopped→idle; the device is left stuck in `thinking`
-                # (LED keeps blinking) with no device-side watchdog to recover.
-                # Emit one `idle` to unstick it so the user can just try again.
-                # Guarded by a short cooldown so a rare flood collapses to one.
-                now = time.monotonic()
-                if now - self._last_idle_unstick >= self.IDLE_UNSTICK_COOLDOWN_S:
-                    self._last_idle_unstick = now
-                    asyncio.create_task(self._unstick_idle(msg))
+            # EVERY error goes through handle_error now — including the ones
+            # that used to fall straight to the plain idle-unstick below (a
+            # rate limit, an out-of-money account, our own tool's failure).
+            # Out-of-money in particular arrives as an ordinary error with
+            # none of the close-socket signatures this comment block used to
+            # gate on, so a check that only reconnected on those signatures
+            # would never even ask the router about the very failure the
+            # router exists to fail over. handle_error is what now tells a
+            # dead OpenAI socket, an engine that heals itself (Gemini), a
+            # permanent failure and our own bug apart — see its docstring.
+            self._recover_task = asyncio.create_task(self._route_error(msg))
         await self.push_frame(frame, direction)
+
+    async def handle_error(self, message: str) -> bool:
+        """Decide what one error means and do that.
+
+        Three answers, and the wrong one is expensive each way. Repairing a
+        socket that ran out of money loops forever; switching engine on a tool
+        that threw hides our own bug and spends the other account; reconnecting
+        an engine that repairs itself is a second hand on a wheel already being
+        turned.
+
+        Returns:
+            True if a repair or a failover was attempted (the caller need do
+            nothing more). False if this error needed no action from us —
+            our own tool, a terminal failure with nowhere to go, an engine
+            that heals its own connection, or a reconnect already cooling
+            down — in which case the caller still owes the device an idle
+            nudge so a stuck turn does not sit forever.
+        """
+        from app.provider_failures import Failure, classify
+        from app.providers import self_heals
+
+        failure = classify(message)
+        if failure is Failure.APP:
+            return False
+
+        if self._router is not None:
+            after = self._router.report_failure(self._provider, message)
+            if after != self._provider:
+                logger.warning(f"🔀 failing over {self._provider} → {after}")
+                if self._on_failover is not None:
+                    await self._on_failover()
+                return True
+
+        if failure in (Failure.MONEY, Failure.AUTH):
+            # Nothing here can be repaired, and there is nowhere to go.
+            return False
+
+        if self_heals(self._provider):
+            # This engine reconnects on its own; a second hand on the wheel
+            # only fights it.
+            logger.debug(f"{self._provider} repairs its own connection — standing back")
+            return False
+
+        now = time.monotonic()
+        if now - self._last_attempt >= self.RECONNECT_COOLDOWN_S:
+            self._reconnecting = True
+            self._last_attempt = now
+            await self._recover(message)
+            return True
+        return False
+
+    async def _route_error(self, msg: str) -> None:
+        """Run handle_error, then fall back to the plain idle-unstick if it
+        decided there was nothing FOR IT to do.
+
+        A stuck device (LED blinking `thinking`, mic still open) is the
+        failure mode this exists to prevent — handle_error only ever repairs
+        or fails over, it never itself just nudges the UI, so whenever it
+        stands back this is the only thing left that will.
+        """
+        acted = await self.handle_error(msg)
+        if acted:
+            return
+        # Non-connection-death error that ENDS a turn without a reply:
+        # most importantly an out-of-money/auth failure or a rate-limit, but
+        # also our own tool's failure or an engine standing back to heal
+        # itself. No bot speech was produced, so PhaseEmitter never fires
+        # BotStopped→idle; the device is left stuck in `thinking`
+        # (LED keeps blinking) with no device-side watchdog to recover.
+        # Emit one `idle` to unstick it so the user can just try again.
+        # Guarded by a short cooldown so a rare flood collapses to one.
+        now = time.monotonic()
+        if now - self._last_idle_unstick >= self.IDLE_UNSTICK_COOLDOWN_S:
+            self._last_idle_unstick = now
+            await self._unstick_idle(msg)
 
     async def force_reconnect(self, reason: str) -> None:
         """Positive-liveness reconnect: for wedged (half-open) sockets that
@@ -688,6 +793,16 @@ class WebSocketHandler:
         connection.recovery = ConnectionRecovery(
             openai_service=openai_service, emit_idle=send_phase,
             phase_emitter=connection.phase_emitter,
+            # provider names the engine THIS connection's service actually is
+            # (see the comment below) -- the only thing that lets handle_error
+            # tell an OpenAI dead-socket apart from a Gemini one that heals
+            # itself. router is the same ProviderRouter self.router points at,
+            # so a failure reported here can move the NEXT connection's
+            # current() -- or None in any test that builds a WebSocketHandler
+            # directly, which keeps repair-in-place-only behaviour.
+            # on_failover is wired in Task 8; None here means a failover
+            # decision is logged but not yet carried out.
+            provider=connection.provider or OPENAI, router=self.router, on_failover=None,
         )
         # connection.provider was decided once in serve_connection, before
         # the transport was even built, and create_service (which built
