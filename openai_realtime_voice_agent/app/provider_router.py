@@ -1,0 +1,136 @@
+"""Which engine runs, which one is broken, and when do we try the good one again.
+
+Deliberately free of network, pipecat and Home Assistant, so the awkward parts
+-- the cooldown, the second chance, both engines down at once -- can be tested
+in milliseconds instead of by emptying an account.
+"""
+import logging
+import time
+from typing import Callable, Dict, Optional
+
+from app.provider_failures import Failure, classify
+
+logger = logging.getLogger(__name__)
+
+# A transient error gets this many tries on the same engine before the switch.
+# One: enough to ride out a dropped socket, few enough that a real outage does
+# not cost the user several dead turns.
+TRANSIENT_RETRIES = 1
+
+
+class ProviderRouter:
+    """Decides which engine the next session is built with."""
+
+    def __init__(
+        self,
+        primary: str,
+        backup: Optional[str] = None,
+        cooldown_s: float = 1800.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        """
+        Args:
+            primary: The engine to use when nothing is wrong.
+            backup: The engine to switch to, or None for no failover at all.
+            cooldown_s: How long the backup runs before the primary is tried
+                again.
+            clock: Monotonic time source. Injected so tests need not sleep.
+        """
+        self.primary = primary
+        self.backup = backup or None
+        self.cooldown_s = cooldown_s
+        self._clock = clock
+        self._active = primary
+        self._reason = ""
+        self._switched_at = 0.0
+        # Failures counted against the engine currently running, cleared by a
+        # good turn. Keyed by engine so a late frame from the one we left
+        # cannot spend the new engine's budget.
+        self._strikes: Dict[str, int] = {}
+
+    def current(self) -> str:
+        """The engine the next session should be built with."""
+        if (
+            self._active != self.primary
+            and self._switched_at
+            and self._clock() - self._switched_at >= self.cooldown_s
+        ):
+            logger.info(
+                f"⏳ cooldown over ({self.cooldown_s:.0f}s) — trying {self.primary} again"
+            )
+            self._active = self.primary
+            self._reason = "cooldown over, retrying primary"
+            self._switched_at = 0.0
+            self._strikes.pop(self.primary, None)
+        return self._active
+
+    def report_failure(self, provider: str, message: str) -> str:
+        """Record one failure and say which engine is in charge afterwards.
+
+        Args:
+            provider: The engine the failure came from.
+            message: The error text.
+
+        Returns:
+            The engine to run from now on. Equal to ``provider`` means no
+            switch: either the failure was ours, or this engine has a retry
+            left, or there is nowhere else to go.
+        """
+        active = self.current()
+        if provider != active:
+            # A late error frame from the session we already left. Answering it
+            # would bounce us straight back to the engine we just abandoned.
+            logger.debug(f"ignoring stale failure from {provider} (running {active})")
+            return active
+
+        failure = classify(message)
+        if failure is Failure.APP:
+            return active
+
+        if failure is Failure.TRANSIENT:
+            strikes = self._strikes.get(provider, 0) + 1
+            self._strikes[provider] = strikes
+            if strikes <= TRANSIENT_RETRIES:
+                logger.info(
+                    f"🔁 {provider} hiccup ({strikes}/{TRANSIENT_RETRIES + 1}): {message[:80]}"
+                )
+                return active
+
+        return self._switch(failure, message)
+
+    def note_success(self, provider: str) -> None:
+        """A turn completed on this engine, so forget its earlier hiccups."""
+        self._strikes.pop(provider, None)
+
+    def status(self) -> Dict[str, object]:
+        """What a dashboard needs to show which engine is live and why."""
+        active = self.current()
+        remaining = 0.0
+        if active != self.primary and self._switched_at:
+            remaining = max(0.0, self.cooldown_s - (self._clock() - self._switched_at))
+        return {
+            "provider": active,
+            "primary": self.primary,
+            "backup": self.backup,
+            "reason": self._reason,
+            "switched_at": self._switched_at,
+            "retry_primary_in_s": round(remaining, 1),
+        }
+
+    def _switch(self, failure: Failure, message: str) -> str:
+        other = self.backup if self._active == self.primary else self.primary
+        if not other or other == self._active:
+            logger.warning(
+                f"⚠️ {self._active} failed ({failure.value}) and there is no backup: {message[:120]}"
+            )
+            self._reason = f"{failure.value}: {message[:160]}"
+            return self._active
+
+        logger.warning(
+            f"🔀 switching {self._active} → {other} ({failure.value}): {message[:120]}"
+        )
+        self._active = other
+        self._reason = f"{failure.value}: {message[:160]}"
+        self._switched_at = self._clock() if other != self.primary else 0.0
+        self._strikes.clear()
+        return self._active
