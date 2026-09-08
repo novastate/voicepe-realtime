@@ -45,6 +45,13 @@ def test_a_dead_socket_is_worth_one_retry():
     assert classify("realtime receive loop ended — connection closed") is Failure.TRANSIENT
 
 
+def test_numeric_codes_match_word_boundaries_only():
+    # 500 in "1500" should not be matched as an error code.
+    assert classify("Reached maximum call duration of 1500 seconds") is Failure.TRANSIENT
+    # 403 in a request ID like "req_1403abc" should not be matched as auth failure.
+    assert classify("Unknown error in req_1403abc") is Failure.TRANSIENT
+
+
 def test_our_own_faults_never_switch_engine():
     # A tool that threw is not the engine's fault. Switching would hide our bug
     # behind a provider change and cost money on the other account.
@@ -53,7 +60,20 @@ def test_our_own_faults_never_switch_engine():
     assert classify("") is Failure.APP
 
 
+def test_tool_name_alone_must_not_claim_an_error():
+    # A provider error that happens to contain the word "remember" should not
+    # be classified as our own fault. The tool name must be followed by
+    # "failed" or ":" to match.
+    assert classify("The server remembered your quota was exceeded") is Failure.TRANSIENT
+
+
 def test_money_wins_over_rate_limit_when_both_words_appear():
     # OpenAI's quota error is delivered as a 429 and says "rate limit" in some
     # phrasings. The money reading is the one that must win.
     assert classify("Rate limit reached: you exceeded your current quota") is Failure.MONEY
+
+
+def test_auth_wins_over_transient_when_both_markers_appear():
+    # AUTH (permanent, reconfiguration needed) is checked before TRANSIENT
+    # (temporary, try again soon). When both patterns appear, AUTH must win.
+    assert classify("401 Unauthorized: rate limit exceeded") is Failure.AUTH

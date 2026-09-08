@@ -8,7 +8,13 @@ account for a day.
 The classes below are ordered by how sure we are. MONEY and AUTH are checked
 first because their phrasings often also contain the words a transient error
 uses -- OpenAI delivers a spent quota as a 429 that reads like a rate limit.
+
+If an error message contains no recognized pattern, it is classified as TRANSIENT.
+Unrecognized errors are far more likely to be a provider fault (a new error type,
+a temporary condition, a backend rollout) than an app fault. Defaulting to retry
+is safer than defaulting to silence. Empty messages (nothing to act on) remain APP.
 """
+import re
 from enum import Enum
 
 
@@ -23,6 +29,8 @@ class Failure(str, Enum):
 
 # Checked in this order. The first list that matches wins, so the permanent
 # failures get to claim a message before the transient patterns see it.
+# Numeric codes are matched with word boundaries to avoid false matches
+# (e.g., "402" in a request ID or "500" in a duration).
 _MONEY = (
     "insufficient_quota",
     "exceeded your current quota",
@@ -30,14 +38,12 @@ _MONEY = (
     "billing_hard_limit_reached",
     "resource_exhausted",
     "quota exceeded",
-    "402",
 )
+_MONEY_CODES = (r"\b402\b",)
 _AUTH = (
     "incorrect api key",
     "invalid_api_key",
     "api key not valid",
-    "401",
-    "403",
     "unauthorized",
     "permission_denied",
     "unauthenticated",
@@ -46,6 +52,7 @@ _AUTH = (
     "is not found for api version",
     "not supported for bidigeneratecontent",
 )
+_AUTH_CODES = (r"\b401\b", r"\b403\b")
 _TRANSIENT = (
     "rate limit",
     "keepalive ping timeout",
@@ -53,20 +60,15 @@ _TRANSIENT = (
     "no close frame",
     "connectionclosed",
     "connection is closed",
-    "1011",
-    "1001",
-    "1006",
     "realtime receive loop",
     "timeout",
-    "500",
-    "502",
-    "503",
-    "504",
     "internal error",
 )
+_TRANSIENT_CODES = (r"\b500\b", r"\b502\b", r"\b503\b", r"\b504\b", r"\b1001\b", r"\b1006\b", r"\b1011\b")
 
 # Names of the tools this add-on runs itself. An error carrying one of these is
-# ours, and swapping engines would only hide it.
+# ours, and swapping engines would only hide it. Tool names must be followed by
+# "failed" or ":" to avoid false matches (e.g., "remember" in a provider error).
 _OURS = (
     "play_media",
     "search_home",
@@ -81,8 +83,8 @@ _OURS = (
     "ask_openclaw",
     "recall_memory",
     "web_search",
-    "supervisor_token",
 )
+_OURS_PATTERNS = tuple(rf"{tool}(?:\s+failed|:)" for tool in _OURS)
 
 
 def classify(message: str) -> Failure:
@@ -97,12 +99,18 @@ def classify(message: str) -> Failure:
     text = (message or "").lower()
     if not text:
         return Failure.APP
-    if any(name in text for name in _OURS):
+    if any(re.search(pattern, text) for pattern in _OURS_PATTERNS):
         return Failure.APP
     if any(marker in text for marker in _MONEY):
         return Failure.MONEY
+    if any(re.search(pattern, text) for pattern in _MONEY_CODES):
+        return Failure.MONEY
     if any(marker in text for marker in _AUTH):
+        return Failure.AUTH
+    if any(re.search(pattern, text) for pattern in _AUTH_CODES):
         return Failure.AUTH
     if any(marker in text for marker in _TRANSIENT):
         return Failure.TRANSIENT
-    return Failure.APP
+    if any(re.search(pattern, text) for pattern in _TRANSIENT_CODES):
+        return Failure.TRANSIENT
+    return Failure.TRANSIENT
