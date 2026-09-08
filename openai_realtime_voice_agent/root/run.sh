@@ -3,6 +3,13 @@ set -e
 
 # --- 🔑 Basics ---
 OPENAI_API_KEY=$(bashio::config 'openai_api_key')
+# --- 🔀 Röstmotor ---
+VOICE_PROVIDER=$(bashio::config 'voice_provider')
+VOICE_PROVIDER_BACKUP=$(bashio::config 'voice_provider_backup')
+GEMINI_API_KEY=$(bashio::config 'gemini_api_key')
+GEMINI_MODEL=$(bashio::config 'gemini_model')
+GEMINI_VOICE=$(bashio::config 'gemini_voice')
+PROVIDER_COOLDOWN_MINUTES=$(bashio::config 'provider_cooldown_minutes')
 SPEAKER_MALE_NAME=$(bashio::config 'speaker_male_name')
 WAKE_SOUND_ENTITY=$(bashio::config 'wake_sound_entity')
 TIMER_RING_ENTITY=$(bashio::config 'timer_ring_entity')
@@ -62,6 +69,12 @@ fi
 
 # Export environment variables
 export OPENAI_API_KEY
+export VOICE_PROVIDER
+export VOICE_PROVIDER_BACKUP
+export GEMINI_API_KEY
+export GEMINI_MODEL
+export GEMINI_VOICE
+export PROVIDER_COOLDOWN_MINUTES
 export SPEAKER_MALE_NAME
 export WAKE_SOUND_ENTITY
 export TIMER_RING_ENTITY

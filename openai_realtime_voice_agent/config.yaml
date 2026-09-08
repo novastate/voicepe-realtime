@@ -47,6 +47,17 @@ map:
 options:
   # --- 🔑 Basics ---
   openai_api_key: ""
+  # --- 🔀 Röstmotor ---
+  # Which engine answers. The backup takes over on its own when the primary
+  # runs out of money, loses its key or goes down; "none" turns failover off.
+  # The defaults are exactly today's behaviour: OpenAI, no failover.
+  voice_provider: "openai"
+  voice_provider_backup: "none"
+  gemini_api_key: ""
+  gemini_model: "models/gemini-3.1-flash-live-preview"
+  gemini_voice: "Charon"
+  # How long the backup runs before the primary is tried again.
+  provider_cooldown_minutes: 30
   instructions: >-
     You are the cheerful, friendly voice assistant of Home Assistant and you
     control the smart home. LANGUAGE: Speak and understand only English, with a
@@ -152,6 +163,13 @@ options:
 schema:
   # --- 🔑 Basics ---
   openai_api_key: password
+  # --- 🔀 Röstmotor ---
+  voice_provider: "list(openai|gemini)"
+  voice_provider_backup: "list(none|openai|gemini)"
+  gemini_api_key: password
+  gemini_model: str
+  gemini_voice: str
+  provider_cooldown_minutes: int(1,1440)
   instructions: str
   transcription_language: str?
   # --- 🗣️ Model & voice ---

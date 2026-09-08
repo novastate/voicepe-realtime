@@ -101,7 +101,33 @@ The **complete option reference** (every option, purpose, default, when to chang
 it) is in the
 [Configuration Reference](https://github.com/TristanBrotherton/voicepe-realtime/blob/main/docs/configuration.md).
 
-## 5. Web search
+## 5. Voice provider & failover
+
+By default, the assistant uses **OpenAI Realtime** (`gpt-realtime-2`). You can
+also enable **Google Gemini Live** (`gemini-3.1-flash-live-preview`) as either
+the primary or as an automatic fallback when OpenAI runs out of credits, loses
+its key, or goes down.
+
+| Option | Default | Purpose |
+|---|---|---|
+| `voice_provider` | `openai` | Which engine answers (either `openai` or `gemini`) |
+| `voice_provider_backup` | `none` | Automatic failover when primary is unavailable (`none` / `openai` / `gemini`) |
+| `gemini_api_key` | *(blank)* | Google Gemini API key (required only if using Gemini) |
+| `gemini_model` | `models/gemini-3.1-flash-live-preview` | Gemini live model (preview names are retired in turn; you can update it here) |
+| `gemini_voice` | `Charon` | Gemini voice name |
+| `provider_cooldown_minutes` | `30` | How long the backup runs before trying the primary again |
+
+**Automatic failover** is off by default (`voice_provider_backup: "none"`). When
+enabled, if the primary runs out of money or its key becomes invalid, the backup
+takes over automatically on the next turn; after `provider_cooldown_minutes` the
+add-on tries the primary again. Set the backup to the same engine if you want
+load-balancing across two API keys (e.g., two OpenAI accounts).
+
+**These defaults reproduce today's behaviour exactly**: OpenAI primary, no
+failover. If you just update the add-on, you will notice nothing — the new
+options only take effect if you change them.
+
+## 6. Web search
 
 When **`enable_web_search`** is on (**the default**), the assistant gets a `web_search`
 tool. When it needs current or general info (weather, news, facts), it calls that
