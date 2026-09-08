@@ -82,3 +82,19 @@ def test_an_exact_speaker_name_outranks_a_partial_one():
 def test_an_unknown_room_matches_nothing():
     assert _score_player("Kontor", "badrummet") == 0
     assert _score_player("Hela Huset", "garaget") == 0
+
+
+# --- a result that looks right but will not play ----------------------------
+
+def test_rank_returns_every_match_best_first():
+    # Radio Browser hands out streams Music Assistant cannot resolve, so the
+    # handler needs somewhere to go after the first choice fails.
+    from app.play_media_tool import _rank
+    ordered = _rank({"radio": [P3_TUNEIN, P3_LIBRARY]}, "P3", "radio")
+    assert [item["uri"] for item in ordered] == [P3_LIBRARY["uri"], P3_TUNEIN["uri"]]
+
+
+def test_rank_leaves_out_what_does_not_match():
+    from app.play_media_tool import _rank
+    ordered = _rank({"radio": [P3_TUNEIN, BABY_STATION]}, "P3", "radio")
+    assert [item["name"] for item in ordered] == ["P3"]

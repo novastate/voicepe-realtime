@@ -58,6 +58,10 @@ _MA_MARKER = "mass_player_type"
 
 _SEARCH_LIMIT = 8
 
+# How many results to try before giving up. Dead streams come in ones and twos,
+# not in tens, and every attempt is a second of the user waiting.
+_PLAY_ATTEMPTS = 3
+
 # Cached because it never changes while the add-on runs.
 _config_entry_id: Optional[str] = None
 
@@ -166,8 +170,13 @@ def _score_player(name: str, wanted: str) -> int:
     return score + max(0, 20 - len(folded_name) // 3)
 
 
-def _pick(buckets: Dict[str, Any], query: str, media_type: str) -> Optional[Dict[str, Any]]:
-    """Choose one result out of the search response.
+def _rank(buckets: Dict[str, Any], query: str, media_type: str) -> List[Dict[str, Any]]:
+    """Order the search results, best first.
+
+    A whole list rather than one winner, because a result that looks right can
+    still refuse to play: Radio Browser hands out streams that Music Assistant
+    then cannot resolve, and answers the play call with MediaNotFoundError. The
+    caller works down the list.
 
     Args:
         buckets: The service response, one list per plural media kind.
@@ -175,11 +184,10 @@ def _pick(buckets: Dict[str, Any], query: str, media_type: str) -> Optional[Dict
         media_type: The requested kind, or "" to consider every kind.
 
     Returns:
-        The winning item with its kind added as "_kind", or None.
+        Matching items, each with its kind added as "_kind", best first.
     """
     kinds = [media_type] if media_type in _BUCKET else MEDIA_TYPES
-    best = None
-    best_score = 0
+    scored: List[Any] = []
     for rank, kind in enumerate(kinds):
         for item in buckets.get(_BUCKET[kind]) or []:
             uri = item.get("uri")
@@ -199,10 +207,15 @@ def _pick(buckets: Dict[str, Any], query: str, media_type: str) -> Optional[Dict
                 score += 15
             # And prefer the kinds listed first when no kind was asked for.
             score += (len(kinds) - rank)
-            if score > best_score:
-                best_score = score
-                best = {**item, "_kind": kind}
-    return best
+            scored.append((score, {**item, "_kind": kind}))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return [item for _, item in scored]
+
+
+def _pick(buckets: Dict[str, Any], query: str, media_type: str) -> Optional[Dict[str, Any]]:
+    """The single best result, or None."""
+    ordered = _rank(buckets, query, media_type)
+    return ordered[0] if ordered else None
 
 
 async def _get(client: httpx.AsyncClient, path: str, **params) -> Any:
@@ -324,30 +337,48 @@ def create_play_media_tool_handler() -> Callable[["FunctionCallParams"], Awaitab
                 )
                 buckets = (result or {}).get("service_response") or {}
 
-                match = _pick(buckets, query, media_type)
-                if not match:
-                    looked = media_type or "anything"
+                candidates = _rank(buckets, query, media_type)
+                looked = media_type or "anything"
+                if not candidates:
                     logger.info(f"🎵 play_media: nothing found for {query!r} ({looked})")
                     await params.result_callback(
                         f"I could not find {looked} called '{query}'."
                     )
                     return
 
-                await _post(
-                    client,
-                    "/services/music_assistant/play_media",
-                    {
-                        "entity_id": target["entity_id"],
-                        "media_id": match["uri"],
-                        "media_type": match["_kind"],
-                    },
-                )
-                logger.info(
-                    f"🎵 play_media: {match.get('name')!r} ({match['_kind']}, {match['uri']}) "
-                    f"on {target['name']}"
-                )
+                # The best-looking result can still refuse to play: Radio
+                # Browser lists streams that Music Assistant cannot resolve, and
+                # the play call comes back as MediaNotFoundError. So work down
+                # the list instead of giving up on the first dud.
+                for match in candidates[:_PLAY_ATTEMPTS]:
+                    try:
+                        await _post(
+                            client,
+                            "/services/music_assistant/play_media",
+                            {
+                                "entity_id": target["entity_id"],
+                                "media_id": match["uri"],
+                                "media_type": match["_kind"],
+                            },
+                        )
+                    except httpx.HTTPStatusError as e:
+                        logger.info(
+                            f"🎵 play_media: {match.get('name')!r} ({match['uri']}) "
+                            f"would not play ({e.response.status_code}), trying the next"
+                        )
+                        continue
+                    logger.info(
+                        f"🎵 play_media: {match.get('name')!r} ({match['_kind']}, {match['uri']}) "
+                        f"on {target['name']}"
+                    )
+                    await params.result_callback(
+                        f"Playing {match.get('name')} on {target['name']}."
+                    )
+                    return
+
+                logger.info(f"🎵 play_media: every candidate for {query!r} refused to play")
                 await params.result_callback(
-                    f"Playing {match.get('name')} on {target['name']}."
+                    f"I found {looked} called '{query}' but it would not play."
                 )
         except Exception as e:
             logger.error(f"❌ play_media failed: {e}", exc_info=True)
