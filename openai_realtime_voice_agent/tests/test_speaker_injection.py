@@ -1,13 +1,25 @@
 """Telling the model who is speaking must work on both engines.
 
-The house has a name configured for one voice. Before this, the name reached
-the model through an OpenAI-only client event, which the Gemini service does
-not have -- the call fell into its except branch and the model simply never
-learned who was talking. Silently: the log line said "no-op"."""
+FIX ROUND 1. The first version of this test replaced the context aggregator
+with a stub whose push_frame just appended to a list -- green whether the
+name reached either engine or vanished into nothing. Traced directly against
+the installed pipecat 0.0.97 source (not assumed): FrameProcessor.push_frame
+forwards a frame to `self._next` -- it does NOT invoke the target
+processor's own process_frame. Calling it on `context_aggregator.user()`
+sends the frame straight past that aggregator to whatever is next in the
+pipeline (the LLM service), and neither OpenAIRealtimeLLMService nor
+GeminiLiveLLMService does anything with LLMMessagesUpdateFrame -- both just
+forward it on unchanged. Nothing was ever sent on either websocket.
+
+These tests instead build REAL service instances the same way production
+code does (app.providers.build_service), fake only the websocket/session (no
+network), and assert a genuine outbound send happened -- for both engines.
+"""
 
 import pytest
 
-from app.providers import supports_client_events
+from app.providers import GEMINI, OPENAI, ProviderOptions, build_service, supports_client_events
+from app.device_registry import DeviceConnection
 
 
 def test_only_openai_takes_raw_client_events():
@@ -20,47 +32,160 @@ def test_an_unknown_engine_is_refused_loudly():
         supports_client_events("claude")
 
 
+def _openai_options(**over):
+    base = dict(
+        api_key="sk-test",
+        model="gpt-realtime-2",
+        voice="cedar",
+        instructions="Du är Björn.",
+        max_output_tokens=1024,
+        speed=1.0,
+        noise_reduction="",
+        turn_detection_type="semantic_vad",
+        vad_eagerness="medium",
+        vad_threshold=0.5,
+        vad_prefix_padding_ms=300,
+        vad_silence_duration_ms=500,
+        semantic_vad_create_response=True,
+        interrupt_response=True,
+        transcription_model="gpt-4o-transcribe",
+        transcription_language="sv",
+    )
+    base.update(over)
+    return ProviderOptions(**base)
+
+
+def _gemini_options(**over):
+    base = dict(
+        api_key="AIza-test",
+        model="models/gemini-3.1-flash-live-preview",
+        voice="Charon",
+        instructions="Du är Björn.",
+        max_output_tokens=1024,
+        language="sv-SE",
+    )
+    base.update(over)
+    return ProviderOptions(**base)
+
+
+class _FakeOpenAIWebSocket:
+    """Stands in for the OpenAI Realtime websocket connection.
+
+    Records what would have gone out; nothing touches the network. The real
+    OpenAIRealtimeLLMService only calls `.send()` on this when `_websocket`
+    is truthy (see `_ws_send` in the installed pipecat source) -- an
+    unconnected service (the default; we never call `_connect()`) silently
+    does nothing without this stand-in, which is exactly the trap the
+    previous round's stub test fell into with the aggregator.
+    """
+
+    def __init__(self):
+        self.sent = []
+
+    async def send(self, payload):
+        self.sent.append(payload)
+
+
+class _FakeGeminiSession:
+    """Stands in for the Gemini Live `AsyncSession`.
+
+    Records what would have gone out; nothing touches the network. The real
+    GeminiLiveLLMService only calls this when `_session` is truthy (see
+    `_create_single_response` in the installed pipecat source) -- an
+    unconnected service (the default; we never call `_connect()`) silently
+    returns without this stand-in.
+    """
+
+    def __init__(self):
+        self.calls = []
+
+    async def send_client_content(self, **kwargs):
+        self.calls.append(kwargs)
+
+
 @pytest.mark.asyncio
-async def test_the_speaker_name_reaches_the_model_on_both_engines():
-    """The injected note must be pushed as a pipecat frame, which both
-    services understand, not as an engine-specific event."""
+async def test_the_speaker_name_reaches_a_real_openai_service():
+    """Drives make_speaker_note's OpenAI branch against a real, unconnected
+    OpenAIRealtimeLLMService (built via app.providers.build_service, exactly
+    as production does) with a faked websocket. This is send_client_event --
+    a direct method call, unchanged from what this code did before this task
+    existed -- not a frame, so there is no queue/process_frame indirection to
+    drive here; the assertion is on the real outbound payload."""
     from app.websocket_handler import make_speaker_note
 
-    pushed = []
+    service = build_service(OPENAI, _openai_options(), [])
+    fake_ws = _FakeOpenAIWebSocket()
+    service._websocket = fake_ws
 
-    class FakeAggregator:
-        async def push_frame(self, frame):
-            pushed.append(frame)
+    connection = DeviceConnection(device_id="kitchen", websocket=object())
+    connection.provider = OPENAI
 
-    await make_speaker_note(FakeAggregator())("male", "Henrik", 132.0)
-    assert len(pushed) == 1
-    text = str(pushed[0])
-    assert "Henrik" in text
+    await make_speaker_note(connection, service)("male", "Henrik", 132.0)
+
+    assert len(fake_ws.sent) == 1
+    assert "Henrik" in fake_ws.sent[0]
+    assert '"role": "system"' in fake_ws.sent[0]
+    assert '"type": "conversation.item.create"' in fake_ws.sent[0]
 
 
 @pytest.mark.asyncio
-async def test_a_guest_voice_still_gets_a_context_note():
+async def test_the_speaker_name_reaches_a_real_gemini_service():
+    """Drives make_speaker_note's Gemini branch against a real, unconnected
+    GeminiLiveLLMService (built via app.providers.build_service) with a
+    faked session, calling the service's own `process_frame` -- the actual
+    entry point make_speaker_note calls, and the one GeminiLiveLLMService
+    explicitly special-cases LLMMessagesAppendFrame in (its docstring says
+    this exists for callers with no user context aggregator, which is
+    exactly this caller)."""
+    from app.websocket_handler import make_speaker_note
+
+    service = build_service(GEMINI, _gemini_options(), [])
+    fake_session = _FakeGeminiSession()
+    service._session = fake_session
+
+    connection = DeviceConnection(device_id="kitchen", websocket=object())
+    connection.provider = GEMINI
+
+    await make_speaker_note(connection, service)("male", "Henrik", 132.0)
+
+    assert len(fake_session.calls) == 1
+    call = fake_session.calls[0]
+    # turn_complete=True is real, current behaviour of this path (flagged as
+    # a concern in the task report, not something this test should paper
+    # over by not checking it).
+    assert call["turn_complete"] is True
+    turns = call["turns"]
+    assert any(
+        "Henrik" in (part.text or "")
+        for content in turns
+        for part in content.parts
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_guest_voice_still_gets_a_context_note_on_openai():
     """The old callback never guarded on `name` being truthy -- the "this
     voice matches nobody enrolled" case fires with name=None, and the model
     still needs to be told to stay neutral (no names, no sir/ma'am). A naive
-    `if not name: return` guard (as a simpler-looking rewrite might add)
-    would silently drop this branch exactly the way the OpenAI-only event
-    silently dropped everything on Gemini."""
+    `if not name: return` guard would silently drop this branch exactly the
+    way the OpenAI-only event silently dropped everything on Gemini."""
     from app.websocket_handler import make_speaker_note
 
-    pushed = []
+    service = build_service(OPENAI, _openai_options(), [])
+    fake_ws = _FakeOpenAIWebSocket()
+    service._websocket = fake_ws
 
-    class FakeAggregator:
-        async def push_frame(self, frame):
-            pushed.append(frame)
+    connection = DeviceConnection(device_id="kitchen", websocket=object())
+    connection.provider = OPENAI
 
-    await make_speaker_note(FakeAggregator())("unknown", None, 0.0)
-    assert len(pushed) == 1
-    assert "guest" in str(pushed[0]).lower()
+    await make_speaker_note(connection, service)("unknown", None, 0.0)
+
+    assert len(fake_ws.sent) == 1
+    assert "guest" in fake_ws.sent[0].lower()
 
 
 @pytest.mark.asyncio
-async def test_an_ambiguous_match_still_gets_a_context_note():
+async def test_an_ambiguous_match_still_gets_a_context_note_on_openai():
     """The "not confidently matched" fallback also fires with name=None and
     must still reach the model, naming the household candidates from the
     probe -- another name=None case an early `if not name: return` would
@@ -68,14 +193,44 @@ async def test_an_ambiguous_match_still_gets_a_context_note():
     from types import SimpleNamespace
     from app.websocket_handler import make_speaker_note
 
-    pushed = []
+    service = build_service(OPENAI, _openai_options(), [])
+    fake_ws = _FakeOpenAIWebSocket()
+    service._websocket = fake_ws
 
-    class FakeAggregator:
-        async def push_frame(self, frame):
-            pushed.append(frame)
+    connection = DeviceConnection(device_id="kitchen", websocket=object())
+    connection.provider = OPENAI
 
     probe = SimpleNamespace(male_name="Henrik", female_name="Anna")
-    await make_speaker_note(FakeAggregator(), probe)("uncertain", None, 90.0)
-    assert len(pushed) == 1
-    text = str(pushed[0])
-    assert "Henrik" in text and "Anna" in text
+    await make_speaker_note(connection, service, probe)("uncertain", None, 90.0)
+
+    assert len(fake_ws.sent) == 1
+    assert "Henrik" in fake_ws.sent[0] and "Anna" in fake_ws.sent[0]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_send_is_logged_not_raised():
+    """The outer try/except in note() must keep swallowing delivery
+    failures (carried over from the original callback) -- a dead connection
+    must not blow up the wake-handling path that fires this callback.
+
+    Raising from `send_client_event` itself (rather than from the fake
+    websocket's `.send()`) is deliberate: `_ws_send` in the installed
+    pipecat source already has its own internal try/except around the
+    socket write, so an exception raised there never reaches our code at
+    all -- that would make this test pass whether or not note()'s own
+    try/except exists. Patching `send_client_event` directly exercises the
+    try/except this code actually owns."""
+    from app.websocket_handler import make_speaker_note
+
+    service = build_service(OPENAI, _openai_options(), [])
+
+    async def _boom(_event):
+        raise ConnectionError("socket is gone")
+
+    service.send_client_event = _boom
+
+    connection = DeviceConnection(device_id="kitchen", websocket=object())
+    connection.provider = OPENAI
+
+    # Must not raise.
+    await make_speaker_note(connection, service)("male", "Henrik", 132.0)

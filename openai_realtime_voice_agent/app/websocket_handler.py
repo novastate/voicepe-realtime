@@ -15,7 +15,7 @@ from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
 from pipecat.frames.frames import (
     Frame, InputAudioRawFrame, OutputAudioRawFrame, StartFrame, EndFrame, ErrorFrame,
-    LLMMessagesUpdateFrame,
+    LLMMessagesAppendFrame,
 )
 from pipecat.audio.utils import create_stream_resampler
 from pipecat.services.openai.realtime import events as openai_rt_events
@@ -369,32 +369,62 @@ class ConnectionRecovery(FrameProcessor):
             logger.warning(f"⚠️ could not emit idle after turn-ending error: {e!r}")
 
 
-class SpeakerNoteFrame(LLMMessagesUpdateFrame):
-    """An LLMMessagesUpdateFrame that shows what it said in its own str().
-
-    Frame.__str__ defaults to just the auto-generated "ClassName#N" -- fine
-    for most frames, but it would make this one's frequent appearance in
-    pipeline debug logs indistinguishable from any other context update, at
-    the exact moment ("who did we just tell the model about?") that log line
-    matters most.
-    """
-
-    def __str__(self):
-        content = self.messages[0]["content"] if self.messages else ""
-        return f"{self.name}({content})"
-
-
-def make_speaker_note(aggregator, probe=None):
+def make_speaker_note(connection, openai_service, probe=None):
     """Build the callback that tells the model who is speaking.
 
-    Pushed as a pipecat LLMMessagesUpdateFrame (run_llm=False) through the
-    user context aggregator -- the same frame + aggregator path
-    session_manager.ContextInitializer already uses to restore cached context
-    without triggering a response -- rather than an engine-specific client
-    event. The OpenAI-only ConversationItemCreateEvent this replaces reached
-    OpenAI and vanished on Gemini (no send_client_event there at all), and the
-    vanishing was logged as a harmless no-op: the model simply never learned
-    who was talking.
+    FIX ROUND 1: the previous version of this function pushed an
+    LLMMessagesUpdateFrame through `context_aggregator.user()`. That never
+    reached either engine -- verified directly against the installed pipecat
+    0.0.97 source, not assumed:
+
+    - FrameProcessor.push_frame() forwards a frame to `self._next`
+      (downstream out of the aggregator); it does NOT invoke the aggregator's
+      own process_frame/_handle_llm_messages_update. A processor only acts on
+      a frame that arrives via queue_frame (its own input queue + task), not
+      one pushed OUT of a neighbouring processor.
+    - So the frame landed on the LLM service instead. Neither
+      OpenAIRealtimeLLMService.process_frame nor
+      GeminiLiveLLMService.process_frame has a branch for
+      LLMMessagesUpdateFrame -- both just forward it on, unchanged, via the
+      final `await self.push_frame(frame, direction)`. Nothing was ever sent
+      on either websocket.
+    - Separately, even if delivery had reached the aggregator,
+      LLMMessagesUpdateFrame -> set_messages() REPLACES the whole context
+      (llm_context.py: `self._messages[:] = messages`), which would have
+      wiped the conversation down to one line about who's speaking.
+
+    session_manager.ContextInitializer uses the identical
+    `aggregator.push_frame(LLMMessagesUpdateFrame(...))` pattern for a
+    different purpose (restoring cached context after a reconnect) -- see the
+    task report; that appears to share this exact defect, but that file is
+    intentionally not touched here.
+
+    What actually works, verified by driving real `OpenAIRealtimeLLMService`/
+    `GeminiLiveLLMService` instances with a faked websocket/session (no
+    network) and confirming a real send call:
+
+    - OpenAI: `send_client_event(ConversationItemCreateEvent(...))` straight
+      on the service -- unchanged from what this code did before this task
+      existed. This is a direct method call, not a frame; OpenAI Realtime's
+      live conversation state lives server-side, so nothing pipecat's local
+      LLMContext does can add to it -- the raw client event is the only real
+      channel.
+    - Gemini: `LLMMessagesAppendFrame` handed to the SERVICE's own
+      `process_frame` directly (bypassing the aggregator entirely) --
+      the same kind of direct, out-of-band call into the service instance
+      that the OpenAI branch above already makes (send_client_event isn't
+      routed through the frame queue either); calling process_frame directly
+      keeps both branches the same shape instead of one queued and one not.
+      GeminiLiveLLMService.process_frame special-cases exactly this frame
+      type, with a docstring explaining it exists for callers with no user
+      context aggregator in the loop: it converts the message and calls
+      `_create_single_response`, which sends a real `send_client_content`.
+      CAVEAT (flagged, not hidden): `_create_single_response` always sends
+      with `turn_complete=True`, which asks Gemini to respond immediately --
+      there is no silent, non-response-triggering channel for arbitrary text
+      exposed by this pipecat version's Gemini Live service. So unlike
+      OpenAI's silent conversation-item add, the Gemini path causes an
+      audible/text turn right after the note lands. See the task report.
 
     `probe` is the connection's SpeakerProbe; it is only read by verdict_text
     for the "not confidently matched" fallback message (to name the household
@@ -413,14 +443,26 @@ def make_speaker_note(aggregator, probe=None):
         # those branches exist to give the model.
         from .speaker_context import verdict_text
 
+        text = verdict_text(probe, label, name, f0)
         try:
-            text = verdict_text(probe, label, name, f0)
-            await aggregator.push_frame(
-                SpeakerNoteFrame(
-                    messages=[{"role": "system", "content": text}],
-                    run_llm=False,
+            if supports_client_events(connection.provider):
+                await openai_service.send_client_event(
+                    openai_rt_events.ConversationItemCreateEvent(
+                        item=openai_rt_events.ConversationItem(
+                            type="message",
+                            role="system",
+                            content=[openai_rt_events.ItemContent(
+                                type="input_text",
+                                text=text,
+                            )],
+                        )
+                    )
                 )
-            )
+            else:
+                await openai_service.process_frame(
+                    LLMMessagesAppendFrame(messages=[{"role": "system", "content": text}]),
+                    FrameDirection.DOWNSTREAM,
+                )
         except Exception as e:
             logger.warning(f"⚠️ speaker verdict injection failed: {e!r}")
 
@@ -887,28 +929,19 @@ class WebSocketHandler:
             serializer.set_wake_handler(_on_device_wake)
 
             # Speaker context v1 (fork): per-wake voice-type verdict → injected
-            # into the LLM context via a pipecat frame (make_speaker_note),
-            # pushed through the user context aggregator -- the same path
-            # ContextInitializer uses to restore cached context -- so both
-            # OpenAI and Gemini see it. Out-of-band w.r.t. the audio path; it
-            # lands ~2.5 s after the wake, so the FIRST reply of a turn may
-            # not have it yet — follow-ups and later turns do. Gating of
-            # speaker-restricted tools does NOT depend on this injection (see
+            # straight into the LLM service (make_speaker_note), NOT through
+            # the context aggregator -- pushing a frame through the
+            # aggregator (via push_frame) never reaches either engine; see
+            # make_speaker_note's docstring and the task report for the full
+            # trace. Out-of-band w.r.t. the audio path; it lands ~2.5 s after
+            # the wake, so the FIRST reply of a turn may not have it yet —
+            # follow-ups and later turns do. Gating of speaker-restricted
+            # tools does NOT depend on this injection (see
             # SafeRealtimeLLMService.register_function in main.py).
             if connection.speaker_probe is not None and connection.speaker_probe.enabled:
-                if context_aggregator is not None:
-                    connection.speaker_probe.on_verdict = make_speaker_note(
-                        context_aggregator.user(), connection.speaker_probe
-                    )
-                else:
-                    # No aggregator to push the note through (no session
-                    # manager wired for this handler) — say so loudly rather
-                    # than let the verdict vanish the way the old OpenAI-only
-                    # event used to on Gemini.
-                    logger.warning(
-                        "⚠️ speaker probe enabled but no context aggregator for "
-                        f"client {client_id} — speaker verdicts will not reach the model"
-                    )
+                connection.speaker_probe.on_verdict = make_speaker_note(
+                    connection, openai_service, connection.speaker_probe
+                )
                 serializer.set_speaker_probe(connection.speaker_probe)
 
             if self.enrollment_recorder is not None:
