@@ -13,13 +13,16 @@ from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
 
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
-from pipecat.frames.frames import Frame, InputAudioRawFrame, OutputAudioRawFrame, StartFrame, EndFrame, ErrorFrame
+from pipecat.frames.frames import (
+    Frame, InputAudioRawFrame, OutputAudioRawFrame, StartFrame, EndFrame, ErrorFrame,
+    LLMMessagesUpdateFrame,
+)
 from pipecat.audio.utils import create_stream_resampler
 from pipecat.services.openai.realtime import events as openai_rt_events
 
 from app.device_registry import DeviceConnection, DeviceRegistry, device_id_from_websocket
 from app.multi_client_transport import MixedFastAPIWebsocketTransport
-from app.providers import OPENAI, input_sample_rate
+from app.providers import OPENAI, input_sample_rate, supports_client_events
 from app.raw_audio_serializer import RawAudioSerializer
 from app.session_manager import SessionManager
 from app.audio_recording_service import AudioRecordingService
@@ -366,6 +369,64 @@ class ConnectionRecovery(FrameProcessor):
             logger.warning(f"⚠️ could not emit idle after turn-ending error: {e!r}")
 
 
+class SpeakerNoteFrame(LLMMessagesUpdateFrame):
+    """An LLMMessagesUpdateFrame that shows what it said in its own str().
+
+    Frame.__str__ defaults to just the auto-generated "ClassName#N" -- fine
+    for most frames, but it would make this one's frequent appearance in
+    pipeline debug logs indistinguishable from any other context update, at
+    the exact moment ("who did we just tell the model about?") that log line
+    matters most.
+    """
+
+    def __str__(self):
+        content = self.messages[0]["content"] if self.messages else ""
+        return f"{self.name}({content})"
+
+
+def make_speaker_note(aggregator, probe=None):
+    """Build the callback that tells the model who is speaking.
+
+    Pushed as a pipecat LLMMessagesUpdateFrame (run_llm=False) through the
+    user context aggregator -- the same frame + aggregator path
+    session_manager.ContextInitializer already uses to restore cached context
+    without triggering a response -- rather than an engine-specific client
+    event. The OpenAI-only ConversationItemCreateEvent this replaces reached
+    OpenAI and vanished on Gemini (no send_client_event there at all), and the
+    vanishing was logged as a harmless no-op: the model simply never learned
+    who was talking.
+
+    `probe` is the connection's SpeakerProbe; it is only read by verdict_text
+    for the "not confidently matched" fallback message (to name the household
+    members it might be), so tests exercising just the confident-match branch
+    can omit it.
+    """
+
+    async def note(label, name, f0):
+        # verdict_text carries every case this feature has been tuned for:
+        # an unmatched voice ("likely a guest" -> stay neutral, no names), a
+        # confident match (address the person by name), and an ambiguous
+        # match (stay neutral but name the household candidates). None of
+        # those cases are conditioned on `name` being truthy here -- the
+        # guest and ambiguous branches deliberately fire with name=None, and
+        # skipping the injection then would silently drop the very guidance
+        # those branches exist to give the model.
+        from .speaker_context import verdict_text
+
+        try:
+            text = verdict_text(probe, label, name, f0)
+            await aggregator.push_frame(
+                SpeakerNoteFrame(
+                    messages=[{"role": "system", "content": text}],
+                    run_llm=False,
+                )
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ speaker verdict injection failed: {e!r}")
+
+    return note
+
+
 class WebSocketHandler:
     """Handles WebSocket transport initialization, pipeline building, and event management."""
 
@@ -698,19 +759,25 @@ class WebSocketHandler:
             # the 1.5 s time-window alone misses responses that land later —
             # OpenAI replying to the spoken "stop", or a slow tool's answer.
             _kill_next_response["v"] = True
-            try:
-                await openai_service.send_client_event(openai_rt_events.InputAudioBufferClearEvent())
-                logger.info("🛑 device interrupt → input_audio_buffer.clear sent (drop in-flight user audio)")
-            except Exception as e:
-                logger.info(f"🛑 device interrupt → input_audio_buffer.clear no-op ({e!r})")
-            try:
-                if getattr(openai_service, "_current_assistant_response", None) is not None:
-                    await openai_service.send_client_event(openai_rt_events.ResponseCancelEvent())
-                    logger.info("🛑 device interrupt → response.cancel sent (response was still active)")
-                else:
-                    logger.info("🛑 device interrupt → no active response to cancel (device already silenced)")
-            except Exception as e:
-                logger.info(f"🛑 device interrupt → response.cancel no-op ({e!r})")
+            if supports_client_events(connection.provider):
+                try:
+                    await openai_service.send_client_event(openai_rt_events.InputAudioBufferClearEvent())
+                    logger.info("🛑 device interrupt → input_audio_buffer.clear sent (drop in-flight user audio)")
+                except Exception as e:
+                    logger.info(f"🛑 device interrupt → input_audio_buffer.clear no-op ({e!r})")
+                try:
+                    if getattr(openai_service, "_current_assistant_response", None) is not None:
+                        await openai_service.send_client_event(openai_rt_events.ResponseCancelEvent())
+                        logger.info("🛑 device interrupt → response.cancel sent (response was still active)")
+                    else:
+                        logger.info("🛑 device interrupt → no active response to cancel (device already silenced)")
+                except Exception as e:
+                    logger.info(f"🛑 device interrupt → response.cancel no-op ({e!r})")
+            else:
+                logger.debug(
+                    f"{connection.provider} takes no raw client events — "
+                    f"leaving the interrupt to pipecat's own handling"
+                )
 
         @openai_service.event_handler("on_conversation_item_created")
         async def _kill_racing_response(service, item_id, item):
@@ -727,14 +794,20 @@ class WebSocketHandler:
             # user's stop pre-empted — a stop-acknowledgement ("Okay, I'll stop"),
             # a stopped tool's answer, or the cancelled reply's tail.
             _kill_next_response["v"] = False
-            try:
-                await openai_service.send_client_event(openai_rt_events.ResponseCancelEvent())
-                logger.info(
-                    "🛑 response raced in right after a device interrupt → "
-                    "response.cancel (post-stop)"
+            if supports_client_events(connection.provider):
+                try:
+                    await openai_service.send_client_event(openai_rt_events.ResponseCancelEvent())
+                    logger.info(
+                        "🛑 response raced in right after a device interrupt → "
+                        "response.cancel (post-stop)"
+                    )
+                except Exception as e:
+                    logger.info(f"🛑 post-interrupt racing-response cancel no-op ({e!r})")
+            else:
+                logger.debug(
+                    f"{connection.provider} takes no raw client events — "
+                    f"leaving the interrupt to pipecat's own handling"
                 )
-            except Exception as e:
-                logger.info(f"🛑 post-interrupt racing-response cancel no-op ({e!r})")
 
         async def _on_device_session_start():
             # va_client sends {"type":"start"} once per WebSocket CONNECTION
@@ -743,11 +816,17 @@ class WebSocketHandler:
             # utterance in OpenAI's input buffer; start every (re)connection
             # with a clean one. The per-WAKE/follow-up stale-buffer case is
             # covered by the device's {"type":"flush"} on follow-up timeout.
-            try:
-                await openai_service.send_client_event(openai_rt_events.InputAudioBufferClearEvent())
-                logger.info("🎬 device (re)connected → input_audio_buffer.clear (clean start)")
-            except Exception as e:
-                logger.debug(f"🎬 connect-time input clear no-op ({e!r})")
+            if supports_client_events(connection.provider):
+                try:
+                    await openai_service.send_client_event(openai_rt_events.InputAudioBufferClearEvent())
+                    logger.info("🎬 device (re)connected → input_audio_buffer.clear (clean start)")
+                except Exception as e:
+                    logger.debug(f"🎬 connect-time input clear no-op ({e!r})")
+            else:
+                logger.debug(
+                    f"{connection.provider} takes no raw client events — "
+                    f"leaving the interrupt to pipecat's own handling"
+                )
 
         async def _on_device_mic_flush():
             # The device sends {"type":"flush"} when a follow-up window times out
@@ -758,11 +837,17 @@ class WebSocketHandler:
             # Also a turn boundary for the dangling-VAD guard: the follow-up
             # closed without speech, so any later server-VAD stop is dangling.
             phase_emitter.note_wake()
-            try:
-                await openai_service.send_client_event(openai_rt_events.InputAudioBufferClearEvent())
-                logger.info("🧽 follow-up cut-off → input_audio_buffer.clear (drop partial utterance)")
-            except Exception as e:
-                logger.debug(f"🧽 mic-flush input clear no-op ({e!r})")
+            if supports_client_events(connection.provider):
+                try:
+                    await openai_service.send_client_event(openai_rt_events.InputAudioBufferClearEvent())
+                    logger.info("🧽 follow-up cut-off → input_audio_buffer.clear (drop partial utterance)")
+                except Exception as e:
+                    logger.debug(f"🧽 mic-flush input clear no-op ({e!r})")
+            else:
+                logger.debug(
+                    f"{connection.provider} takes no raw client events — "
+                    f"leaving the interrupt to pipecat's own handling"
+                )
 
         async def _on_device_wake():
             asyncio.create_task(
@@ -802,32 +887,28 @@ class WebSocketHandler:
             serializer.set_wake_handler(_on_device_wake)
 
             # Speaker context v1 (fork): per-wake voice-type verdict → injected
-            # as a system conversation item. Out-of-band w.r.t. the audio path;
-            # it lands ~2.5 s after the wake, so the FIRST reply of a turn may
+            # into the LLM context via a pipecat frame (make_speaker_note),
+            # pushed through the user context aggregator -- the same path
+            # ContextInitializer uses to restore cached context -- so both
+            # OpenAI and Gemini see it. Out-of-band w.r.t. the audio path; it
+            # lands ~2.5 s after the wake, so the FIRST reply of a turn may
             # not have it yet — follow-ups and later turns do. Gating of
             # speaker-restricted tools does NOT depend on this injection (see
             # SafeRealtimeLLMService.register_function in main.py).
             if connection.speaker_probe is not None and connection.speaker_probe.enabled:
-                from .speaker_context import verdict_text
-
-                async def _on_speaker_verdict(label, name, f0):
-                    try:
-                        await openai_service.send_client_event(
-                            openai_rt_events.ConversationItemCreateEvent(
-                                item=openai_rt_events.ConversationItem(
-                                    type="message",
-                                    role="system",
-                                    content=[openai_rt_events.ItemContent(
-                                        type="input_text",
-                                        text=verdict_text(connection.speaker_probe, label, name, f0),
-                                    )],
-                                )
-                            )
-                        )
-                    except Exception as e:
-                        logger.warning(f"⚠️ speaker verdict injection failed: {e!r}")
-
-                connection.speaker_probe.on_verdict = _on_speaker_verdict
+                if context_aggregator is not None:
+                    connection.speaker_probe.on_verdict = make_speaker_note(
+                        context_aggregator.user(), connection.speaker_probe
+                    )
+                else:
+                    # No aggregator to push the note through (no session
+                    # manager wired for this handler) — say so loudly rather
+                    # than let the verdict vanish the way the old OpenAI-only
+                    # event used to on Gemini.
+                    logger.warning(
+                        "⚠️ speaker probe enabled but no context aggregator for "
+                        f"client {client_id} — speaker verdicts will not reach the model"
+                    )
                 serializer.set_speaker_probe(connection.speaker_probe)
 
             if self.enrollment_recorder is not None:

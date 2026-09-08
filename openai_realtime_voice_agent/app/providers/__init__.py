@@ -23,6 +23,11 @@ _INPUT_RATE = {OPENAI: 24000, GEMINI: 16000}
 # ConnectionRecovery must keep its hands off.
 _SELF_HEALS = {OPENAI: False, GEMINI: True}
 
+# Raw client events are OpenAI Realtime's own protocol. Gemini Live has no
+# equivalent, so anything sent that way reaches one engine and vanishes on the
+# other -- which is how the speaker's name silently stopped reaching the model.
+_CLIENT_EVENTS = {OPENAI: True, GEMINI: False}
+
 
 @dataclass
 class ProviderOptions:
@@ -68,6 +73,11 @@ def input_sample_rate(provider: str) -> int:
 def self_heals(provider: str) -> bool:
     """Whether this engine reconnects its own dead socket."""
     return _SELF_HEALS[_known(provider)]
+
+
+def supports_client_events(provider: str) -> bool:
+    """Whether this engine accepts raw OpenAI Realtime client events."""
+    return _CLIENT_EVENTS[_known(provider)]
 
 
 def build_service(provider: str, options: ProviderOptions, tools: List[Dict[str, Any]]):
