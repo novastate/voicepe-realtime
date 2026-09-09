@@ -2,6 +2,20 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.19.1 (fork)
+
+- **Fixes a regression 0.18.3 shipped straight into the house.** Waiting for
+  the engine's end-of-turn assumed `LLMFullResponseEndFrame` reaches
+  PhaseEmitter. It does not: `LLMAssistantAggregator` sits between the engine
+  and the phase machine and consumes it. So the wait was spent in full on
+  EVERY Gemini turn — the log said `no end-of-turn from the engine after 8.1s`
+  each time, the device stayed shut for eight seconds after each answer, and
+  the user had to repeat himself. Two changes: the Gemini service now calls
+  the phase machine directly when Google reports `turn_complete` (the path
+  that actually works), and the wait is only ever entered on a connection that
+  has genuinely seen an end-of-turn — so an engine that never signals behaves
+  exactly as it did before 0.18.3, rather than paying the cap every turn.
+
 ## 0.19.0 (fork)
 
 - **The microphone stays open because the model asked, not because a timer

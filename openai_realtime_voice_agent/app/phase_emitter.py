@@ -154,6 +154,14 @@ class PhaseEmitter(FrameProcessor):
         # it safely (see follow_up_tool.py).
         self._follow_up_wanted = False
         self._send_follow_up = None
+        # Only wait on the mid-turn grace once this connection has actually
+        # SEEN an end-of-turn. LLMFullResponseEndFrame does not always survive
+        # the trip: LLMAssistantAggregator sits between the engine and this
+        # processor and consumes it, which cost every Gemini turn an extra 8 s
+        # in "replying" — the device stayed shut and the user had to repeat
+        # himself (live 2026-09-09 19:04, every single turn). An engine that
+        # never signals must behave exactly as it did before the grace existed.
+        self._seen_engine_end = False
         self._idle_task = None
         self._watchdog_task = None
         self._current = None  # last phase actually sent, to dedupe redundant emits
@@ -185,6 +193,29 @@ class PhaseEmitter(FrameProcessor):
         # pipeline and never flows back to it on its own, so this callback is
         # what actually gets "the assistant finished answering" there.
         self._on_turn_success = None
+
+    async def note_engine_turn_complete(self) -> None:
+        """The engine says this reply is finished.
+
+        Reached two ways, because one of them is not reliable.
+        LLMFullResponseEndFrame travels down the pipeline, but
+        LLMAssistantAggregator sits between the engine and this processor and
+        consumes it, so on Gemini it never arrived — every turn then spent the
+        full mid-turn grace before going idle, the device stayed shut for 8 s
+        after each answer, and the user had to repeat himself. The engine's
+        service calls this directly as well (see the Gemini provider), which
+        is the path that actually works.
+
+        Idempotent: whichever arrives first does the work, the other is a
+        no-op, and the follow-up request goes out exactly once.
+        """
+        self._seen_engine_end = True
+        self._model_turn_open = False
+        # The only safe moment to ask for the follow-up window: the answer's
+        # audio is queued, so the device waits it out before opening the mic.
+        # Sending at tool-call time would open it before the question was even
+        # spoken.
+        await self._flush_follow_up()
 
     def set_follow_up_sender(self, sender) -> None:
         """Wire the async callable that tells the device to hold the mic open.
@@ -314,7 +345,11 @@ class PhaseEmitter(FrameProcessor):
             # but only up to a cap, so an engine that never sends one (or a
             # turn that dies) still reaches idle instead of hanging.
             waited = 0.0
-            while self._model_turn_open and waited < self._mid_turn_grace_s:
+            while (
+                self._seen_engine_end
+                and self._model_turn_open
+                and waited < self._mid_turn_grace_s
+            ):
                 await asyncio.sleep(0.1)
                 waited += 0.1
             if self._model_turn_open:
@@ -431,15 +466,7 @@ class PhaseEmitter(FrameProcessor):
             self._cancel_watchdog()
             await self._emit("replying")
         elif isinstance(frame, LLMFullResponseEndFrame):
-            # The engine's own end-of-turn. Arrives BEFORE the last
-            # BotStoppedSpeaking (which waits for the audio to drain), so by
-            # the time the debounce runs this is already the right answer.
-            self._model_turn_open = False
-            # And the only safe moment to ask for the follow-up window: the
-            # answer's audio is queued, so the device waits it out before
-            # opening the mic. Sending at tool-call time instead would open it
-            # before the question was even spoken.
-            await self._flush_follow_up()
+            await self.note_engine_turn_complete()
         elif isinstance(frame, BotStoppedSpeakingFrame):
             # Don't go idle immediately — TTS comes in segments. Only emit idle
             # if the bot stays silent for the debounce window.

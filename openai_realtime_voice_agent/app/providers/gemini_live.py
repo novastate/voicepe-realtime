@@ -219,6 +219,31 @@ class ResilientGeminiLiveService(GeminiLiveLLMService):
     fatal, which is the case the counter exists for.
     """
 
+    def set_turn_complete_handler(self, handler) -> None:
+        """Wire an async callable() told when Gemini finishes a reply.
+
+        The pipeline already carries this news as LLMFullResponseEndFrame --
+        but LLMAssistantAggregator sits between this service and PhaseEmitter
+        and consumes it, so downstream it never arrives. Measured live
+        2026-09-09 19:04: every single turn logged "no end-of-turn from the
+        engine". Calling out directly is the only path that reaches the phase
+        machine.
+        """
+        self._on_turn_complete = handler
+
+    async def _handle_msg_turn_complete(self, message) -> None:
+        """Pass the engine's own end-of-turn on, then behave as before."""
+        await super()._handle_msg_turn_complete(message)
+        handler = getattr(self, "_on_turn_complete", None)
+        if handler is None:
+            return
+        try:
+            await handler()
+        except Exception as e:
+            # A phase-machine failure must never break the turn that just
+            # succeeded.
+            logger.warning(f"⚠️ turn-complete handler failed: {e!r}")
+
     def drop_language_code(self) -> None:
         """Open the session without pinning a language.
 

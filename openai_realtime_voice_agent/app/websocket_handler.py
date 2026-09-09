@@ -1072,6 +1072,14 @@ class WebSocketHandler:
             await connection.send_json({"type": "request_follow_up"})
 
         phase_emitter.set_follow_up_sender(_request_follow_up)
+
+        # Direct end-of-turn wire, for the engine whose frame does not survive
+        # the aggregator between it and PhaseEmitter. Optional by design: an
+        # engine without this method keeps the frame-only path.
+        set_turn_complete = getattr(openai_service, "set_turn_complete_handler", None)
+        if set_turn_complete is not None:
+            set_turn_complete(phase_emitter.note_engine_turn_complete)
+
         connection.phase_emitter = phase_emitter
 
         connection.recovery = ConnectionRecovery(

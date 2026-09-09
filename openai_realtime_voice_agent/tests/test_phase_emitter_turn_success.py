@@ -75,6 +75,7 @@ async def test_a_gap_inside_one_reply_does_not_reach_idle():
 
     pe = PhaseEmitter(send_phase, idle_debounce_s=0.05)
     pe._mid_turn_grace_s = 5.0
+    pe._seen_engine_end = True  # this engine does signal; a past turn proved it
     pe._model_turn_open = True  # the model started speaking, has not finished
 
     task = asyncio.create_task(pe._emit_idle_after_debounce())
@@ -100,6 +101,7 @@ async def test_a_missing_end_of_turn_still_reaches_idle_on_the_cap():
 
     pe = PhaseEmitter(send_phase, idle_debounce_s=0.05)
     pe._mid_turn_grace_s = 0.3
+    pe._seen_engine_end = True
     pe._model_turn_open = True  # and it never closes
 
     await asyncio.wait_for(pe._emit_idle_after_debounce(), timeout=3.0)
@@ -127,4 +129,47 @@ async def test_a_finished_turn_still_idles_on_the_plain_debounce():
     await pe._emit_idle_after_debounce()
     assert phases == ["idle"]
     assert time.monotonic() - t0 < 1.0  # not waiting on the grace
+    await pe.close()
+
+
+@pytest.mark.asyncio
+async def test_an_engine_that_never_signals_is_never_waited_for():
+    """The regression this guard exists for. LLMFullResponseEndFrame is
+    consumed by LLMAssistantAggregator before it can reach PhaseEmitter, so on
+    Gemini the grace was spent in full on EVERY turn: the device sat shut for
+    eight seconds after each answer and the user had to repeat himself (live
+    2026-09-09 19:04). An engine that has never signalled must behave exactly
+    as it did before the grace existed."""
+    import asyncio
+    import time
+
+    phases = []
+
+    async def send_phase(value):
+        phases.append(value)
+
+    pe = PhaseEmitter(send_phase, idle_debounce_s=0.05)
+    pe._mid_turn_grace_s = 5.0
+    pe._model_turn_open = True   # a reply is open...
+    pe._seen_engine_end = False  # ...but nothing has ever told us they end
+
+    t0 = time.monotonic()
+    await asyncio.wait_for(pe._emit_idle_after_debounce(), timeout=2.0)
+
+    assert phases == ["idle"]
+    assert time.monotonic() - t0 < 1.0
+    await pe.close()
+
+
+@pytest.mark.asyncio
+async def test_the_direct_call_arms_the_grace_for_later_turns():
+    """The engine's service calls note_engine_turn_complete directly. That is
+    both this turn's end AND the proof that future turns may be waited for."""
+    pe = PhaseEmitter(_noop, idle_debounce_s=0)
+    assert pe._seen_engine_end is False
+
+    await pe.note_engine_turn_complete()
+
+    assert pe._seen_engine_end is True
+    assert pe._model_turn_open is False
     await pe.close()
