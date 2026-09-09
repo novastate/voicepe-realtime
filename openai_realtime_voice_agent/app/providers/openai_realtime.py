@@ -53,6 +53,14 @@ class SafeRealtimeLLMService(OpenAIRealtimeLLMService):
     cosmetic for context.)
     """
 
+    def __init__(self, **kwargs):  # type: ignore[override]
+        super().__init__(**kwargs)
+        # Declared here (FIX ROUND 3, review) rather than left as an
+        # implicit, getattr-only attribute: it's real instance state a
+        # reconnect cycle can set, read, and clear, not incidental scratch
+        # space. See _reseed_context_after_reset / _handle_evt_session_updated.
+        self._pending_reseed_messages = None
+
     async def _truncate_current_audio_response(self):  # type: ignore[override]
         return
 
@@ -227,12 +235,21 @@ class SafeRealtimeLLMService(OpenAIRealtimeLLMService):
         try:
             context = getattr(self, "_context", None)
             if context is None:
+                # FIX ROUND 3 (review, Minor): clear any stash left over from
+                # an earlier, still-pending reseed. Without this, a stale
+                # `_pending_reseed_messages` from a PREVIOUS reset attempt
+                # (one that had a context) would survive this call and still
+                # get delivered by a later `_handle_evt_session_updated`,
+                # even though THIS reset determined there is nothing to
+                # re-seed now.
+                self._pending_reseed_messages = None
                 return
             from app.context_restore import _cap_restored_messages, _strip_tool_plumbing
 
             messages = _strip_tool_plumbing(context.get_messages())
             messages = _cap_restored_messages(messages, _max_context_messages())
             if not messages:
+                self._pending_reseed_messages = None  # see comment above
                 return
             if not getattr(self, "_api_session_ready", False):
                 self._pending_reseed_messages = messages
@@ -275,12 +292,45 @@ class SafeRealtimeLLMService(OpenAIRealtimeLLMService):
     async def _handle_evt_session_updated(self, evt):  # type: ignore[override]
         """After `_api_session_ready` is confirmed (see
         `_reseed_context_after_reset`'s docstring), deliver any re-seed that
-        was deferred waiting for exactly this signal."""
-        await super()._handle_evt_session_updated(evt)
+        was deferred waiting for exactly this signal.
+
+        FIX ROUND 3 (review): this used to `await super()` FIRST. Read
+        super's body (pipecat 0.0.97,
+        `pipecat/services/openai/realtime/llm.py`) before reordering it:
+
+            self._api_session_ready = True
+            if self._run_llm_when_api_session_ready:
+                self._run_llm_when_api_session_ready = False
+                await self._create_response()
+
+        `_run_llm_when_api_session_ready` can already be True by the time
+        `session.updated` arrives — anything that tried to create a
+        response while we were still waiting (e.g. a completed tool result
+        arriving in that window) hits `_create_response()`'s own "not ready
+        yet" branch and sets exactly this flag. Calling `super()` first
+        meant THAT deferred `_create_response()` could fire, send a bare
+        `response.create` over a conversation `reset_conversation` had
+        already stripped of `_llm_needs_conversation_setup` (so no initial
+        messages get sent either), and only THEN would our own re-seed's
+        `conversation.item.create`s land — arriving mid-response instead of
+        before it. Net effect: a turn answered with no memory, plus
+        conversation items landing while a response is already streaming.
+
+        Fixed by taking over `_api_session_ready`'s assignment ourselves and
+        delivering the pending re-seed BEFORE calling `super()` at all. By
+        the time `super()` runs (and possibly fires `_create_response()` via
+        `_run_llm_when_api_session_ready`), the restored conversation is
+        already in place. `super()` still owns
+        `_run_llm_when_api_session_ready`'s own check-and-clear and the
+        `_create_response()` call itself — this only reorders WHEN that call
+        can see our re-seed, not what it does.
+        """
+        self._api_session_ready = True
         pending = getattr(self, "_pending_reseed_messages", None)
         if pending:
             self._pending_reseed_messages = None
             await self._send_pending_reseed(pending)
+        await super()._handle_evt_session_updated(evt)
 
     # Error codes that must NOT kill the realtime session. pipecat 0.0.97's
     # _receive_task_handler does `_handle_evt_error(evt); return` on EVERY

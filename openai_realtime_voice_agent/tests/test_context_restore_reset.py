@@ -94,6 +94,23 @@ def _prepped_service(messages=None):
     return service, fake_ws
 
 
+def test_pending_reseed_attribute_is_declared_not_implicit():
+    """FIX 4 (Minor, review): `_pending_reseed_messages` is real instance
+    state a reconnect cycle sets, reads, and clears -- not incidental
+    scratch space that happens to work through `getattr`'s default.
+    Checking `vars(service)` (the instance's own `__dict__`), not
+    `getattr(..., None)`, is what actually tells "declared and None" apart
+    from "never set at all" -- `getattr` returns the same default either
+    way."""
+    service = build_service(OPENAI, _openai_options(), [])
+
+    assert "_pending_reseed_messages" in vars(service), (
+        "_pending_reseed_messages was never actually assigned in __init__ -- "
+        "it only appears to exist via getattr's default"
+    )
+    assert service._pending_reseed_messages is None
+
+
 @pytest.mark.asyncio
 async def test_reseed_sends_immediately_when_session_already_ready():
     """If the session happens to already be confirmed ready (the ordinary,
@@ -230,17 +247,81 @@ async def test_reseed_after_reset_caps_at_max_context_messages(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_reseed_after_reset_is_a_quiet_noop_with_no_context():
+async def test_reseed_after_reset_is_a_quiet_noop_with_no_context(caplog):
     """A service that was reset before any conversation ever happened (or
     whose context was never pre-seeded) has nothing to re-seed -- this must
-    not raise and must not send anything."""
+    not raise, must not send anything, and (FIX ROUND 3, review) must not
+    even LOG a warning: the whole method's body sits in one broad
+    try/except (deliberately, per round 2's Minor fix, so a real surprise
+    can't escape into `reset_conversation` and cost the router a false
+    strike), which means asserting only `fake_ws.sent == []` proves nothing
+    -- deleting the `if context is None: return` guard would make
+    `context.get_messages()` raise `AttributeError`, get swallowed by that
+    same blanket handler into a warning, and `sent` would still be `[]`.
+    Asserting no warning was logged is what actually distinguishes "quiet
+    no-op" from "quietly caught a bug"."""
+    import logging
+
     service, fake_ws = _prepped_service()
     service._api_session_ready = True
     service._context = None
 
-    await service._reseed_context_after_reset()  # must not raise
+    with caplog.at_level(logging.WARNING, logger="app.providers.openai_realtime"):
+        await service._reseed_context_after_reset()  # must not raise
 
     assert fake_ws.sent == []
+    assert not any(r.levelno >= logging.WARNING for r in caplog.records), (
+        "a genuine no-op logged a warning -- this path is catching an "
+        "actual error, not doing nothing gracefully"
+    )
+
+
+@pytest.mark.asyncio
+async def test_stale_pending_reseed_is_cleared_when_a_later_reset_has_no_context():
+    """FIX 3 (Minor, review): if a LATER `_reseed_context_after_reset` call
+    (e.g. a second dead-socket repair before the first reset's
+    session.updated ever arrived) finds no context at all, any PREVIOUSLY
+    stashed pending re-seed must be cleared too -- otherwise a later
+    session.updated would still deliver messages from a reset attempt this
+    later one explicitly superseded."""
+    service, fake_ws = _prepped_service()
+    await service._reseed_context_after_reset()  # stashes (not ready yet)
+    assert service._pending_reseed_messages == RECONNECT_MESSAGES
+
+    service._context = None  # the second reset found nothing to re-seed
+    await service._reseed_context_after_reset()
+
+    assert service._pending_reseed_messages is None, (
+        "a stale pending re-seed from an earlier reset survived a later "
+        "reset that found no context"
+    )
+
+    await service._handle_evt_session_updated(object())
+    assert fake_ws.sent == [], "the stale re-seed was delivered anyway"
+
+
+@pytest.mark.asyncio
+async def test_stale_pending_reseed_is_cleared_when_a_later_reset_has_nothing_after_stripping():
+    """Same guard, the other early-return: a later reset whose context
+    survives `_strip_tool_plumbing`/`_cap_restored_messages` down to nothing
+    (e.g. only a bare tool result) must also clear a previous stash."""
+    service, fake_ws = _prepped_service()
+    await service._reseed_context_after_reset()  # stashes (not ready yet)
+    assert service._pending_reseed_messages == RECONNECT_MESSAGES
+
+    # A bare tool result strips to nothing at all.
+    service._context = LLMContext(
+        messages=[{"role": "tool", "tool_call_id": "call_x", "content": "done"}]
+    )
+    await service._reseed_context_after_reset()
+
+    assert service._pending_reseed_messages is None, (
+        "a stale pending re-seed from an earlier reset survived a later "
+        "reset whose context stripped down to nothing"
+    )
+
+    await service._handle_evt_session_updated(object())
+    assert fake_ws.sent == [], "the stale re-seed was delivered anyway"
 
 
 @pytest.mark.asyncio
@@ -310,3 +391,44 @@ async def test_reset_conversation_actually_calls_the_reseed():
     assert not any('"type": "response.create"' in payload for payload in fake_ws.sent)
     assert service._llm_needs_conversation_setup is False
     assert service._run_llm_when_api_session_ready is False
+
+
+@pytest.mark.asyncio
+async def test_pending_response_at_session_updated_finds_memory_already_there():
+    """FIX ROUND 3 (review): if `_run_llm_when_api_session_ready` is already
+    True by the time `session.updated` arrives (something tried to create a
+    response while we were still waiting -- e.g. a completed tool result),
+    the OLD ordering (`await super()` first) let that `_create_response()`
+    fire over a conversation `reset_conversation` had already stripped of
+    `_llm_needs_conversation_setup`, landing our own re-seed's items only
+    AFTER that bare response.create -- a turn answered with no memory, plus
+    items arriving mid-response. The re-seed must land BEFORE any such
+    response."""
+    service, fake_ws = _prepped_service()
+    service._run_llm_when_api_session_ready = True
+    service._llm_needs_conversation_setup = False  # reset_conversation already did this
+
+    await service._reseed_context_after_reset()
+    assert fake_ws.sent == []  # stashed, not sent yet (_api_session_ready is False)
+
+    await service._handle_evt_session_updated(object())
+
+    assert service._api_session_ready is True
+    assert service._run_llm_when_api_session_ready is False, (
+        "super() never ran (or never saw the flag), so the pending response "
+        "request was dropped entirely instead of being served"
+    )
+    reseed_index = next(
+        (i for i, p in enumerate(fake_ws.sent) if '"type": "conversation.item.create"' in p),
+        None,
+    )
+    response_index = next(
+        (i for i, p in enumerate(fake_ws.sent) if '"type": "response.create"' in p),
+        None,
+    )
+    assert reseed_index is not None, "the restored conversation was never sent at all"
+    assert response_index is not None, "the pending response was never created"
+    assert reseed_index < response_index, (
+        "the response.create landed before (or without) the restored "
+        "context -- exactly the no-memory-turn this fix closes"
+    )
