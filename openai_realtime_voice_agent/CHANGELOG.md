@@ -2,6 +2,17 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.18.1 (fork)
+
+- **Proactive audio actually reaches the session now.** 0.18.0 followed
+  Google's guide, which says these features need API version `v1beta`. They do
+  not, and the mistake is invisible: google-genai already defaults to v1beta,
+  so setting it changes nothing, and the session is refused with
+  `1007 ... Unknown name "proactivity" at 'setup': Cannot find field`. Probed
+  all six combinations against the live account: v1beta takes affective dialog
+  but not proactivity; **v1alpha takes both**. pipecat's own docstring said
+  v1alpha all along.
+
 ## 0.18.0 (fork)
 
 Towards a Gemini session you can hold an ordinary conversation with.

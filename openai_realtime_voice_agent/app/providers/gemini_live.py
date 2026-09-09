@@ -59,7 +59,19 @@ _END_SENSITIVITY = {
 # NOT support it: Google's own guide says so, and the session is refused
 # rather than degraded. Turning it on without moving the model just breaks
 # the engine, so a mismatch is refused here, loudly, instead of at 1008.
-NATIVE_AUDIO_API_VERSION = "v1beta"
+# MEASURED against the live account 2026-09-09, not taken from the guide.
+# Google's own Live API page says these features need "v1beta"; they do not.
+# On models/gemini-2.5-flash-native-audio-latest, opening a session with
+# `proactivity` on v1beta is refused outright:
+#
+#   1007 Invalid JSON payload received. Unknown name "proactivity" at
+#   'setup': Cannot find field.
+#
+# and google-genai already defaults to v1beta, so "set it to v1beta" is a
+# no-op that looks like a fix. v1alpha accepts proactivity, affective dialog
+# and both together. pipecat's own docstring says v1alpha too. Probed all six
+# combinations before changing this line.
+NATIVE_AUDIO_API_VERSION = "v1alpha"
 NATIVE_AUDIO_MODEL_MARKER = "native-audio"
 
 
@@ -241,7 +253,8 @@ def _native_audio_features(options, model: str):
 
     Proactive audio lets the model decide it was not spoken to and say
     nothing; affective dialog lets it match the tone it hears. Both need API
-    version v1beta AND a native-audio model. Google's guide is explicit that
+    version v1alpha (see the constant -- the published guide's "v1beta" is
+    wrong, and measurably so) AND a native-audio model. Google's guide is explicit that
     Gemini 3.1 Flash Live supports neither, and asking anyway gets the whole
     session refused — so a mismatch loses the feature, never the assistant.
 

@@ -359,3 +359,26 @@ async def test_the_first_failure_is_never_fatal_whatever_the_age():
 
     assert await service._handle_connection_error(RuntimeError("1008")) is True
     assert recorder.fatal == []
+
+
+def test_the_native_audio_features_ask_for_the_api_version_that_accepts_them():
+    """Probed live 2026-09-09, all six combinations. Google's guide says these
+    need v1beta; on v1beta the session is refused with
+
+        1007 Unknown name "proactivity" at 'setup': Cannot find field.
+
+    and google-genai already defaults to v1beta, so believing the guide leaves
+    a "fix" that changes nothing. v1alpha accepts both features."""
+    from app.providers.gemini_live import NATIVE_AUDIO_API_VERSION
+
+    assert NATIVE_AUDIO_API_VERSION == "v1alpha"
+
+    service = build_service(
+        "gemini",
+        _options(
+            model="models/gemini-2.5-flash-native-audio-latest",
+            gemini_proactive_audio=True,
+        ),
+        OPENAI_SHAPE,
+    )
+    assert service._http_options.api_version == "v1alpha"
