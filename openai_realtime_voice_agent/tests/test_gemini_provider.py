@@ -89,3 +89,50 @@ def test_an_unresolvable_language_falls_back_instead_of_crashing():
         "gemini", _options(language="not-a-real-language"), OPENAI_SHAPE
     )
     assert isinstance(service._language, Language)
+
+
+# --- the shape google-genai actually accepts --------------------------------
+
+def test_the_service_gets_tools_wrapped_the_way_the_api_wants_them():
+    """One wrapper deeper than the declarations themselves.
+
+    Handing pipecat the bare declarations made google-genai reject every field
+    of every tool as "extra inputs are not permitted", and the session never
+    opened. Found in the house, not by the suite — the old tests only checked
+    what `to_gemini_tools` returned, never what was done with it.
+    """
+    service = build_service("gemini", _options(), OPENAI_SHAPE)
+    tools = service._tools_from_init
+    assert isinstance(tools, list) and len(tools) == 1
+    declarations = tools[0]["function_declarations"]
+    assert [d["name"] for d in declarations] == ["search_home", "list_timers"]
+
+
+def test_gemini_never_sees_additional_properties():
+    """Gemini rejects the keyword outright, and Home Assistant generates
+    schemas that carry it — one such tool would take the whole session down."""
+    noisy = [{
+        "type": "function",
+        "name": "noisy",
+        "description": "Has the keyword at three depths.",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "nested": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {"deep": {"type": "string"}},
+                },
+                "listed": {
+                    "type": "array",
+                    "items": {"type": "object", "additionalProperties": True},
+                },
+            },
+        },
+    }]
+    params = to_gemini_tools(noisy)[0]["parameters"]
+    assert "additionalProperties" not in params
+    assert "additionalProperties" not in params["properties"]["nested"]
+    assert "additionalProperties" not in params["properties"]["listed"]["items"]
+    assert params["properties"]["nested"]["properties"]["deep"]["type"] == "string"

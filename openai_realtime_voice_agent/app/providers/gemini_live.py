@@ -45,10 +45,31 @@ def to_gemini_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         {
             "name": tool["name"],
             "description": tool.get("description", ""),
-            "parameters": tool.get("parameters") or {"type": "object", "properties": {}},
+            "parameters": _strip_additional_properties(
+                tool.get("parameters") or {"type": "object", "properties": {}}
+            ),
         }
         for tool in tools
     ]
+
+
+def _strip_additional_properties(schema: Any) -> Any:
+    """Remove every "additionalProperties" key, at any depth.
+
+    Gemini rejects the keyword outright. Home Assistant generates its tool
+    schemas, and some of them carry it, so one such tool would take the whole
+    session down with it. pipecat's own adapter strips it for exactly this
+    reason -- see GeminiLLMAdapter.to_provider_tools_format.
+    """
+    if isinstance(schema, dict):
+        return {
+            key: _strip_additional_properties(value)
+            for key, value in schema.items()
+            if key != "additionalProperties"
+        }
+    if isinstance(schema, list):
+        return [_strip_additional_properties(item) for item in schema]
+    return schema
 
 
 def _resolve_language(language: str) -> Language:
@@ -103,7 +124,12 @@ def build(options, tools: List[Dict[str, Any]]) -> GeminiLiveLLMService:
         model=model,
         voice_id=voice,
         system_instruction=options.instructions,
-        tools=to_gemini_tools(tools),
+        # One wrapper deeper than it looks: the Live API takes a LIST OF TOOLS,
+        # each of which carries its function declarations. Handing it the bare
+        # declarations makes google-genai reject every one of them as an extra
+        # field, and the session never opens. pipecat's own adapter wraps them
+        # the same way -- see GeminiLLMAdapter.to_provider_tools_format.
+        tools=[{"function_declarations": to_gemini_tools(tools)}] if tools else None,
         start_audio_paused=False,
         params=params,
     )
