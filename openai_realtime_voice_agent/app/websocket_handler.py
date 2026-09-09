@@ -1566,6 +1566,18 @@ class WebSocketHandler:
         # transport's declared rate from the engine actually built.
         provider = self.router.current() if self.router is not None else OPENAI
         connection.provider = provider
+        # Report which engine is live, right here and not in create_service:
+        # status() calls current() again internally, and the comment above
+        # exists precisely because a second router read taken after the
+        # pipeline lock / MCP tool-schema fetch can disagree with this one.
+        # Calling it back-to-back with the read above, with no await between
+        # them, cannot land in that gap -- nothing else can run first.
+        if self.router is not None:
+            try:
+                from .ha_sensors import PUBLISHER
+                await PUBLISHER.provider(self.router.status())
+            except Exception as e:
+                logger.debug(f"provider sensor failed: {e!r}")
         connection.transport = self.create_transport(websocket, serializer, provider)
 
         # Keepalive. The device sends {"type":"ping"} and waits for a pong;

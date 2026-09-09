@@ -5,6 +5,7 @@ Per-instance sensors (INSTANCE_NAME option, e.g. 'kitchen'):
   sensor.voicepe_<inst>_active_timers  count (+next-expiry attrs)
   binary_sensor.voicepe_<inst>_enrollment_active
   sensor.voicepe_<inst>_wakes_today / _false_wakes_today
+  sensor.voicepe_<inst>_motor            which engine is answering + why
 
 States are POSTed via the supervisor core API — ad-hoc entities, ideal for
 dashboards and automations (e.g. per-person scenes on speaker change).
@@ -42,6 +43,7 @@ class SensorPublisher:
         self._day = date.today().isoformat()
         self._wakes = 0
         self._false = 0
+        self._last_provider_key = None
 
     def _roll(self):
         d = date.today().isoformat()
@@ -53,6 +55,41 @@ class SensorPublisher:
         await _post(f"sensor.voicepe_{_INST}_speaker", state, {
             "friendly_name": f"Voice PE {_INST} speaker",
             "label": label, "score": round(float(score), 3), "method": method,
+            "at": time.strftime("%H:%M:%S"),
+        })
+
+    async def provider(self, status: dict):
+        """Publish which voice engine is answering, and why.
+
+        A switch is invisible otherwise: it shows up only in the add-on log,
+        and an engine change that quietly bills the other account for three
+        days is precisely the fault nobody catches.
+
+        This is called once per device (re)connect, which can be often --
+        Voice PE devices drop and reconnect on their own. `retry_primary_in_s`
+        ticks down every second while the backup is in cooldown, so comparing
+        on that field would defeat any de-dup; instead we key on the fields
+        that only change when the engine actually switches (or switches
+        back), and skip the HA write when nothing meaningful moved.
+        """
+        key = (
+            status.get("provider"),
+            status.get("reason"),
+            status.get("primary"),
+            status.get("backup"),
+            status.get("switched_at"),
+        )
+        if key == self._last_provider_key:
+            return
+        self._last_provider_key = key
+        await _post(f"sensor.voicepe_{_INST}_motor", status.get("provider", ""), {
+            "friendly_name": f"Voice PE {_INST} motor",
+            "icon": "mdi:swap-horizontal",
+            "primary": status.get("primary", ""),
+            "backup": status.get("backup") or "",
+            "reason": status.get("reason", ""),
+            "switched_at": status.get("switched_at", 0.0),
+            "retry_primary_in_s": status.get("retry_primary_in_s", 0.0),
             "at": time.strftime("%H:%M:%S"),
         })
 
