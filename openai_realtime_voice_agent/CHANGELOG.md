@@ -2,6 +2,21 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.18.3 (fork)
+
+- **No more start chime in the middle of an answer.** The phase machine ended
+  a reply on a timer: 1.5 s of silence after the last audio and the device was
+  told the turn was over. That holds for OpenAI, whose reply arrives in
+  sentence-sized pieces. It does not hold for Gemini — measured live
+  2026-09-09, one answer came in three bursts with 6.7 s and 4.7 s of silence
+  between them, so the phase went replying → idle → replying twice inside a
+  single answer and the device chimed on every way back in. The engine says
+  when it is finished (`LLMFullResponseEndFrame`, from Gemini's own
+  `turn_complete`), which a timer can only guess at, so the debounce now waits
+  for that before releasing the device. Capped by `PHASE_MID_TURN_GRACE_MS`
+  (8 s) so an engine that never sends one — or a reply that dies half-way —
+  costs a slow idle rather than a device stuck in "replying".
+
 ## 0.18.2 (fork)
 
 - **The native-audio model can actually be used in a Swedish house.** It

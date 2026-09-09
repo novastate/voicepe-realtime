@@ -56,3 +56,75 @@ async def test_a_forced_idle_does_not_signal_turn_success():
     pe.set_turn_success_handler(lambda: calls.append(True))
     await pe.force_idle("turn declared dead")
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_gap_inside_one_reply_does_not_reach_idle():
+    """Measured live 2026-09-09: one Gemini answer arrived in three bursts,
+    with 6.7 s and 4.7 s of silence between them. Each gap outlasted the 1.5 s
+    debounce, so the phase went replying -> idle -> replying twice inside one
+    answer, and the device played its START CHIME on every way back in. The
+    engine's own end-of-turn says when the answer is really finished; a timer
+    can only guess."""
+    import asyncio
+
+    phases = []
+
+    async def send_phase(value):
+        phases.append(value)
+
+    pe = PhaseEmitter(send_phase, idle_debounce_s=0.05)
+    pe._mid_turn_grace_s = 5.0
+    pe._model_turn_open = True  # the model started speaking, has not finished
+
+    task = asyncio.create_task(pe._emit_idle_after_debounce())
+    await asyncio.sleep(0.3)  # well past the debounce
+    assert phases == []       # still mid-answer: no idle, so no chime
+
+    pe._model_turn_open = False  # LLMFullResponseEndFrame arrives
+    await asyncio.wait_for(task, timeout=2.0)
+    assert phases == ["idle"]
+    await pe.close()
+
+
+@pytest.mark.asyncio
+async def test_a_missing_end_of_turn_still_reaches_idle_on_the_cap():
+    """The grace must never become a hang: an engine that sends no end-of-turn,
+    or a reply that dies half-way, still has to release the device."""
+    import asyncio
+
+    phases = []
+
+    async def send_phase(value):
+        phases.append(value)
+
+    pe = PhaseEmitter(send_phase, idle_debounce_s=0.05)
+    pe._mid_turn_grace_s = 0.3
+    pe._model_turn_open = True  # and it never closes
+
+    await asyncio.wait_for(pe._emit_idle_after_debounce(), timeout=3.0)
+    assert phases == ["idle"]
+    await pe.close()
+
+
+@pytest.mark.asyncio
+async def test_a_finished_turn_still_idles_on_the_plain_debounce():
+    """The common case must not get slower: once the engine has said the turn
+    is over, the debounce alone decides, exactly as before."""
+    import asyncio
+    import time
+
+    phases = []
+
+    async def send_phase(value):
+        phases.append(value)
+
+    pe = PhaseEmitter(send_phase, idle_debounce_s=0.05)
+    pe._mid_turn_grace_s = 5.0
+    pe._model_turn_open = False
+
+    t0 = time.monotonic()
+    await pe._emit_idle_after_debounce()
+    assert phases == ["idle"]
+    assert time.monotonic() - t0 < 1.0  # not waiting on the grace
+    await pe.close()

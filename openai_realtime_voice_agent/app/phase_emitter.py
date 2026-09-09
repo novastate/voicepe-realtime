@@ -72,6 +72,7 @@ from pipecat.frames.frames import (
     UserStoppedSpeakingFrame,
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
+    LLMFullResponseEndFrame,
 )
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
 
@@ -135,6 +136,19 @@ class PhaseEmitter(FrameProcessor):
             except (TypeError, ValueError):
                 idle_debounce_s = 1.5
         self._idle_debounce_s = max(0.0, idle_debounce_s)
+        # How long past the debounce we will keep waiting for an engine that
+        # has started a reply but not yet said the turn is over. See
+        # _emit_idle_after_debounce. Capped so a missing end-of-turn signal
+        # costs a slow idle, never a device stuck in "replying" forever.
+        try:
+            self._mid_turn_grace_s = float(
+                os.environ.get("PHASE_MID_TURN_GRACE_MS", "8000")
+            ) / 1000.0
+        except ValueError:
+            self._mid_turn_grace_s = 8.0
+        # True from the first BotStartedSpeaking of a reply until the engine
+        # pushes LLMFullResponseEndFrame (its own "that was the whole answer").
+        self._model_turn_open = False
         self._idle_task = None
         self._watchdog_task = None
         self._current = None  # last phase actually sent, to dedupe redundant emits
@@ -255,6 +269,25 @@ class PhaseEmitter(FrameProcessor):
     async def _emit_idle_after_debounce(self) -> None:
         try:
             await asyncio.sleep(self._idle_debounce_s)
+            # The debounce alone assumes the gaps inside one reply are shorter
+            # than it. On Gemini they are not: measured live 2026-09-09, one
+            # answer arrived in three bursts with 6.7 s and 4.7 s of silence
+            # between them. Each gap outlasted the 1.5 s debounce, so the phase
+            # went replying -> idle -> replying twice mid-answer, and the
+            # device played its START CHIME on every way back in. The engine
+            # knows better than any timer can: LLMFullResponseEndFrame is
+            # pushed when the model says the turn is complete. Wait for it —
+            # but only up to a cap, so an engine that never sends one (or a
+            # turn that dies) still reaches idle instead of hanging.
+            waited = 0.0
+            while self._model_turn_open and waited < self._mid_turn_grace_s:
+                await asyncio.sleep(0.1)
+                waited += 0.1
+            if self._model_turn_open:
+                logger.warning(
+                    f"📞 no end-of-turn from the engine after {waited:.1f}s — "
+                    f"going idle on the cap"
+                )
         except asyncio.CancelledError:
             return
         # A tool (web search, MCP call) can still be running when the filler
@@ -318,6 +351,11 @@ class PhaseEmitter(FrameProcessor):
             # Liveness stamp for the wedge watchdog: the server VAD is alive.
             self.last_vad_mono = time.monotonic()
             self._suppress_thinking = False
+            # A new user turn ends any reply that was still open, whether the
+            # engine got round to saying so or not. Without this a reply that
+            # died without its end-of-turn would keep the mid-turn grace armed
+            # for every idle after it.
+            self._model_turn_open = False
             # A: a genuine utterance has begun this turn → not a dangling VAD,
             # and the kill-window must NOT cancel THIS turn's response.
             self._speech_since_wake = True
@@ -353,9 +391,15 @@ class PhaseEmitter(FrameProcessor):
                 self._arm_watchdog()
         elif isinstance(frame, BotStartedSpeakingFrame):
             self._suppress_thinking = False
+            self._model_turn_open = True
             self._cancel_pending_idle()
             self._cancel_watchdog()
             await self._emit("replying")
+        elif isinstance(frame, LLMFullResponseEndFrame):
+            # The engine's own end-of-turn. Arrives BEFORE the last
+            # BotStoppedSpeaking (which waits for the audio to drain), so by
+            # the time the debounce runs this is already the right answer.
+            self._model_turn_open = False
         elif isinstance(frame, BotStoppedSpeakingFrame):
             # Don't go idle immediately — TTS comes in segments. Only emit idle
             # if the bot stays silent for the debounce window.
