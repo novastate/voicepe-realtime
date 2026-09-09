@@ -277,9 +277,13 @@ configuration:
       The wake phrase practiced during guided voice enrollment. Set it to
       your actual wake word (default: hey leonard).
   enrollment_tts_voice:
-    name: "🧩 Fork · Enrollment coach voice"
+    name: "🧩 Fork · Spoken-lane voice"
     description: >-
-      OpenAI TTS voice used by the enrollment audio coach (default fable).
+      OpenAI TTS voice for the sentences the assistant does not write itself:
+      the enrollment coach and the timer expiry announcement. It is heard in
+      the same room as the assistant, so pick one close to his own voice —
+      "onyx" (default) is the deep one. Fully separate from the assistant's
+      own voice, which is set per engine.
   openclaw_url:
     name: "🧩 Fork · Agent bridge URL"
     description: >-

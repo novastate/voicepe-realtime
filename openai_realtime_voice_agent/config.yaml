@@ -1,5 +1,5 @@
 name: OpenAI Realtime 2 Voice Agent (Raawr)
-version: "0.19.3"
+version: "0.19.4"
 slug: openai_realtime_voice_agent
 description: Talk to your home with OpenAI gpt-realtime-2 — a voice agent for the Home Assistant Voice PE, with live device control and web search.
 url: https://github.com/TristanBrotherton/voicepe-realtime
@@ -147,7 +147,7 @@ options:
   # Enrollment (fork): the wake phrase the audio coach asks for, and the TTS
   # voice used for the coach prompts (any /v1/audio/speech voice).
   enrollment_phrase: "hey leonard"
-  enrollment_tts_voice: "fable"
+  enrollment_tts_voice: "onyx"
   speaker_female_name: ""
   male_only_tools: ""
 

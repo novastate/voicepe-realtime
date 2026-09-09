@@ -2,6 +2,17 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.19.4 (fork)
+
+- **En främling i huset läste upp timern.** Utropet vid utgången går genom
+  TTS-banan, inte genom modellens röst — och den banan var skriven för
+  engelska inspelningsuppmaningar: rösten `fable` med instruktionen "Calm,
+  composed British butler." Hört live 2026-09-09 23:19, mellan två repliker
+  från en djup svensk björn. Nu `onyx` som förval, och instruktionen beskriver
+  björnen i stället för en betjänt. Detta gör inte banan till hans röst —
+  det är en annan motor — men den låter inte längre som en annan person.
+  Riktig lagning, senare: låt modellen själv säga meningen.
+
 ## 0.19.3 (fork)
 
 - **Timern talade engelska i ett svenskt hus.** Hört live 2026-09-09 22:58:

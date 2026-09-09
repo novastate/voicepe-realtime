@@ -343,7 +343,18 @@ class EnrollmentConductor:
                 headers={"Authorization": f"Bearer {self.api_key}"},
                 json={"model": "gpt-4o-mini-tts", "voice": self.tts_voice,
                       "input": text, "response_format": "pcm",
-                      "instructions": "Calm, composed British butler. Brisk but unhurried."},
+                      # This lane speaks in the same room as the assistant, so
+                      # it has to sound like him. It used to be a "calm,
+                      # composed British butler" — written when the lane only
+                      # read English enrollment prompts. It now also reads the
+                      # Swedish timer announcement, and a butler landing
+                      # between two turns of a deep Swedish bear is heard as a
+                      # stranger in the house (reported live 2026-09-09).
+                      "instructions": (
+                          "Deep, warm male voice speaking Swedish. Relaxed and "
+                          "direct, a little gruff, never formal. No politeness "
+                          "formulas."
+                      )},
             )
             r.raise_for_status()
             pcm = r.content
