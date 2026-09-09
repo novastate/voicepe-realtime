@@ -1526,6 +1526,25 @@ class WebSocketHandler:
             "playback_prebuffer_ms": self.playback_prebuffer_ms,
         }
 
+    async def _publish_provider_status(self, status: dict) -> None:
+        """Send the provider-sensor HTTP publish to Home Assistant.
+
+        Runs as a background task (see serve_connection), never awaited by
+        the connection setup path: the file's own rule is that a sensor
+        which cannot be written must never stop a conversation, and an
+        awaited publish sitting in front of create_transport would make a
+        slow or unreachable supervisor delay every new connection by up to
+        the httpx timeout. Wrapping the call in its own try/except -- rather
+        than relying on asyncio's default "Task exception was never
+        retrieved" handling -- means a failure here is still logged, just
+        never blocking.
+        """
+        try:
+            from .ha_sensors import PUBLISHER
+            await PUBLISHER.provider(status)
+        except Exception as e:
+            logger.debug(f"provider sensor failed: {e!r}")
+
     async def serve_connection(
         self,
         websocket,
@@ -1571,12 +1590,19 @@ class WebSocketHandler:
         # exists precisely because a second router read taken after the
         # pipeline lock / MCP tool-schema fetch can disagree with this one.
         # Calling it back-to-back with the read above, with no await between
-        # them, cannot land in that gap -- nothing else can run first.
+        # them, cannot land in that gap -- nothing else can run first. The
+        # status dict is computed synchronously right here for that reason;
+        # only the HTTP publish itself (the part that can be slow) is
+        # deferred to a background task, so a slow/unreachable HA supervisor
+        # can never delay create_transport below or the session it builds.
         if self.router is not None:
             try:
-                from .ha_sensors import PUBLISHER
-                await PUBLISHER.provider(self.router.status())
+                asyncio.create_task(self._publish_provider_status(self.router.status()))
             except Exception as e:
+                # Computing status() itself is synchronous and could in
+                # principle raise (e.g. a router double in a test that
+                # doesn't implement it) -- same rule as the publish itself:
+                # never let this stop the connection being built.
                 logger.debug(f"provider sensor failed: {e!r}")
         connection.transport = self.create_transport(websocket, serializer, provider)
 

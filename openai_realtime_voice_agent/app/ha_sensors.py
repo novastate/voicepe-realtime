@@ -71,6 +71,12 @@ class SensorPublisher:
         on that field would defeat any de-dup; instead we key on the fields
         that only change when the engine actually switches (or switches
         back), and skip the HA write when nothing meaningful moved.
+
+        Caveat: because of that de-dup, `retry_primary_in_s` is only ever as
+        fresh as the last publish. A device that stays connected through an
+        entire cooldown window sees this number freeze at whatever it was on
+        connect -- which engine is live and why it switched stay correct,
+        only the countdown can go stale. Don't go bug-hunting over that.
         """
         key = (
             status.get("provider"),

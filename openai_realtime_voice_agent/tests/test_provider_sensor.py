@@ -8,10 +8,14 @@ retry countdown are wrong, so the exact expected values are asserted
 instead of just their shape.
 """
 
+import asyncio
+import logging
+
 import pytest
 
 from app import ha_sensors
 from app.provider_router import ProviderRouter
+from app.websocket_handler import WebSocketHandler
 
 
 class FakeClock:
@@ -114,3 +118,109 @@ async def test_a_real_switch_is_never_swallowed_by_the_dedup(monkeypatch):
     assert posts[0]["state"] == "gemini"
     assert posts[1]["state"] == "openai"
     assert posts[1]["attrs"]["reason"] != ""
+
+
+# --- Fix 1: the publish must never delay the connection it's reporting on ---
+#
+# serve_connection dispatches the provider-sensor publish as a background
+# task rather than awaiting it, precisely so a slow or unreachable HA
+# supervisor cannot hold up building the session. These run the REAL
+# WebSocketHandler.serve_connection, with only the transport/pipeline/service
+# stubbed out, so a regression back to `await self._publish_provider_status(...)`
+# on the connection setup path would make these hang and fail on the
+# wait_for timeout below instead of passing by coincidence.
+
+
+class _FakeURL:
+    query = "device_id=kitchen"
+
+
+class _FakeWebSocket:
+    url = _FakeURL()
+    client = None
+
+    async def accept(self):
+        return None
+
+    async def send_text(self, _payload):
+        return None
+
+
+class _NullTransport:
+    def event_handler(self, _name):
+        def register(fn):
+            return fn
+        return register
+
+
+def _fake_build_pipeline(_connection, activity_callback=None):
+    class _Runner:
+        async def run(self, _task):
+            return None
+
+    class _Task:
+        async def cancel(self):
+            return None
+
+    return object(), _Runner(), _Task()
+
+
+def _make_handler(router):
+    handler = WebSocketHandler()
+    handler.router = router
+    handler.create_transport = lambda _ws, _ser, _provider: _NullTransport()
+    handler.build_pipeline = _fake_build_pipeline
+
+    async def factory(_connection):
+        return object()
+
+    handler.openai_service_factory = factory
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_a_slow_publish_does_not_delay_the_connection(monkeypatch):
+    """The brief prescribed awaiting the publish; that was wrong. If
+    serve_connection awaited it, a supervisor that never answers would hang
+    the whole connection for up to httpx's 8s timeout before the session is
+    even built -- exactly what the module's own comment forbids."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_provider(_status):
+        started.set()
+        await release.wait()  # never set during this test
+
+    monkeypatch.setattr(ha_sensors.PUBLISHER, "provider", slow_provider)
+
+    handler = _make_handler(ProviderRouter("openai", "gemini"))
+
+    # If the publish were awaited on the setup path, this would still be
+    # blocked on release.wait() and the wait_for below would time out.
+    await asyncio.wait_for(handler.serve_connection(_FakeWebSocket()), timeout=1.0)
+
+    # And the publish really was dispatched, not silently skipped.
+    assert started.is_set()
+    release.set()  # let the background task finish so nothing lingers
+
+
+@pytest.mark.asyncio
+async def test_a_failing_publish_is_logged_not_lost(caplog, monkeypatch):
+    """Dispatching the publish as a background task must not make a real
+    failure vanish into asyncio's own "Task exception was never retrieved"
+    warning -- _publish_provider_status catches it and logs it itself, so the
+    conversation proceeds AND the failure is still visible."""
+    async def boom(_status):
+        raise RuntimeError("HA supervisor unreachable")
+
+    monkeypatch.setattr(ha_sensors.PUBLISHER, "provider", boom)
+
+    handler = _make_handler(ProviderRouter("openai", "gemini"))
+
+    with caplog.at_level(logging.DEBUG, logger="app.websocket_handler"):
+        await handler.serve_connection(_FakeWebSocket())
+        # Let the background task actually run to completion.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    assert any("provider sensor failed" in r.message for r in caplog.records)
