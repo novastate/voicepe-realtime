@@ -31,12 +31,19 @@ class FakeClock:
         self.t += seconds
 
 
-def _capture(monkeypatch):
-    """Patch ha_sensors._post and return the list of posts it records."""
+def _capture(monkeypatch, succeeds=True):
+    """Patch ha_sensors._post and return the list of posts it records.
+
+    The fake returns what the real `_post` returns: whether the write landed
+    in Home Assistant. That matters -- the de-dup key is only recorded after
+    a successful write -- so `succeeds=False` stands in for a supervisor that
+    is briefly unreachable (an HA restart, say).
+    """
     posts = []
 
     async def fake_post(entity, state, attrs):
         posts.append({"entity": entity, "state": state, "attrs": attrs})
+        return succeeds
 
     monkeypatch.setattr(ha_sensors, "_post", fake_post)
     return posts
@@ -118,6 +125,44 @@ async def test_a_real_switch_is_never_swallowed_by_the_dedup(monkeypatch):
     assert posts[0]["state"] == "gemini"
     assert posts[1]["state"] == "openai"
     assert posts[1]["attrs"]["reason"] != ""
+
+
+@pytest.mark.asyncio
+async def test_a_switch_lost_to_an_unreachable_supervisor_is_published_next_time(monkeypatch):
+    """Final review, Fix 4: the de-dup key must only be recorded once the
+    write actually landed.
+
+    `_post` swallows every failure at debug level, so a switch published
+    while the supervisor is briefly unreachable -- an HA restart, which is a
+    common reason the device reconnected at all -- vanishes. If the key were
+    stored before the await, that lost write would be deduped away on every
+    later connect and the sensor would show the OLD engine for the whole
+    cooldown. Mutation check: record the key before the POST and the second
+    publish here never happens (len(posts) == 1) and the engine stays wrong.
+    """
+    posts = _capture(monkeypatch, succeeds=False)
+
+    clock = FakeClock()
+    router = ProviderRouter("gemini", "openai", cooldown_s=1800.0, clock=clock)
+    router.report_failure("gemini", "insufficient_quota")
+    publisher = ha_sensors.SensorPublisher()
+
+    await publisher.provider(router.status())  # HA is down: attempted, lost
+    assert len(posts) == 1
+
+    # The device reconnects a moment later; HA is back.
+    posts_ok = _capture(monkeypatch, succeeds=True)
+    await publisher.provider(router.status())
+
+    assert len(posts_ok) == 1, (
+        "the switch that was lost to the failed write was deduped away -- "
+        "the sensor keeps reporting the old engine"
+    )
+    assert posts_ok[0]["state"] == "openai"
+
+    # And once it HAS landed, the de-dup takes over again as before.
+    await publisher.provider(router.status())
+    assert len(posts_ok) == 1
 
 
 # --- Fix 1: the publish must never delay the connection it's reporting on ---

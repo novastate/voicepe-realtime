@@ -329,6 +329,48 @@ async def test_a_duplicate_dead_socket_message_does_not_nudge_a_fresh_turns_phas
 
 
 @pytest.mark.asyncio
+async def test_two_different_death_messages_in_a_row_repair_only_once():
+    """Final review, Fix 2: the repair COOLDOWN, which is a different guard
+    from the message-dedup and cannot be replaced by it.
+
+    One socket death arrives twice, under two different strings: the reader
+    dies first ("realtime receive loop died: …") and is repaired; when that
+    repair finishes, the sends queued against the dead socket surface the
+    same event as "Error sending client event: sent 1011 …". The dedup is
+    keyed by message text, so it cannot see those as duplicates -- without
+    the cooldown the second one repairs again immediately, and every repair
+    now also re-seeds the conversation onto a session that just got one.
+
+    Run on the SHIPPED default (no backup engine), which is where this
+    actually bites: with a backup configured the second failure fails over
+    instead. The strike assertion is what proves the two guards are doing
+    different jobs -- the second message WAS reported to the router (so it
+    was not deduped away), and was still not repaired a second time."""
+    switched = []
+    router = ProviderRouter("openai", None)  # default config: no failover
+    rec = _recovery("openai", router, switched)
+    try:
+        await rec.handle_error("realtime receive loop died: ConnectionClosed")
+        assert rec._service.resets == 1  # the real repair
+
+        await rec.handle_error(
+            "Error sending client event: sent 1011 (keepalive ping timeout)"
+        )
+
+        assert rec._service.resets == 1, (
+            "a second, differently-worded report of the SAME socket death "
+            "repaired again inside the cooldown"
+        )
+        assert router._strikes.get("openai") == 2, (
+            "the second message never reached the router at all -- it was "
+            "deduped, so this test is not exercising the cooldown"
+        )
+        assert switched == []
+    finally:
+        await rec.close()
+
+
+@pytest.mark.asyncio
 async def test_a_different_message_right_after_is_not_deduped():
     """The flood-collapse window is keyed by message text, not merely by
     time, so a genuinely different failure right after a first one must still
@@ -389,7 +431,12 @@ async def test_note_turn_success_resets_the_strike_budget_under_the_shipped_conf
     router = ProviderRouter("openai", "gemini")
     rec = _recovery("openai", router, switched)
     await rec.handle_error(_DEAD_SOCKET_MSG)
-    rec._last_reported_at = 0.0  # step past the flood-collapse cooldown
+    # Step past BOTH windows, which guard different things (see handle_error):
+    # the flood-collapse dedup on the repeated message, and the repair
+    # cooldown on repairing again. These two hiccups are meant to be far
+    # apart in time -- a good turn happens between them.
+    rec._last_reported_at = 0.0
+    rec._last_attempt = 0.0
 
     # A turn finishes cleanly on this engine in between the two hiccups --
     # never a TranscriptionFrame, exactly like OpenAI with transcription off.

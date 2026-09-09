@@ -162,6 +162,11 @@ async def test_restored_context_reaches_a_real_openai_service_without_starting_a
     service = build_service(OPENAI, _openai_options(), [])
     fake_ws = _FakeOpenAIWebSocket()
     service._websocket = fake_ws
+    # A ready session, not merely an open socket: the seed is deferred until
+    # `session.updated` confirms readiness (see the test below), so a test
+    # that only set `_websocket` would be asserting against the deferral
+    # rather than against delivery.
+    service._api_session_ready = True
     assert service._llm_needs_conversation_setup is True  # sanity: real default
 
     aggregator_pair, context = _build_restore_aggregator()
@@ -348,10 +353,11 @@ async def test_openai_seed_skips_and_logs_error_if_manual_tracking_vanishes(capl
 
 
 @pytest.mark.asyncio
-async def test_openai_seed_skips_quietly_when_not_connected_yet(caplog):
-    """No websocket yet is a normal, expected transient state (the restore
+async def test_openai_seed_defers_quietly_when_not_connected_yet(caplog):
+    """Not connected yet is a normal, expected transient state (the restore
     fires right after StartFrame, which can race ahead of the actual
-    connect) -- must be skipped without logging an error."""
+    connect) -- nothing may be sent, and it must not log an error. It is
+    stashed for delivery once the session is ready, not thrown away."""
     import logging
 
     service = build_service(OPENAI, _openai_options(), [])
@@ -361,10 +367,114 @@ async def test_openai_seed_skips_quietly_when_not_connected_yet(caplog):
         sent = await _seed_openai_context_silently(service, RESTORED_MESSAGES)
 
     assert sent is False
+    assert service._pending_reseed_messages == RESTORED_MESSAGES, (
+        "the conversation was dropped instead of being stashed for delivery"
+    )
     assert not any(r.levelno >= logging.WARNING for r in caplog.records), (
-        "a normal, expected 'not connected yet' skip logged a warning/error "
+        "a normal, expected 'not ready yet' deferral logged a warning/error "
         "-- this must be silent, not alarming"
     )
+
+
+@pytest.mark.asyncio
+async def test_openai_restore_waits_for_session_updated_before_sending():
+    """FIX (final review): an OPEN SOCKET IS NOT A READY SESSION.
+
+    `ContextInitializer` is the last stage in the pipeline, so it runs right
+    after `start()` -> `_connect()`: `_websocket` exists, but `session.created`
+    has not been read and the add-on's own `session.update` has not
+    round-tripped, so `_api_session_ready` is still False. Sending
+    `conversation.item.create` there races ahead of `session.update`; one
+    error event in reply kills pipecat's receive loop
+    (`_handle_evt_error(evt); return`) and the device goes deaf.
+
+    So: with a live socket but an unconfirmed session, NOTHING may go out --
+    and the conversation must still arrive, from the same
+    `_handle_evt_session_updated` drain the post-reset re-seed uses. Remove
+    the deferral (send on `_websocket` alone, as before) and the first
+    assertion fails: the items are on the wire before `session.updated`."""
+    service = build_service(OPENAI, _openai_options(), [])
+    fake_ws = _FakeOpenAIWebSocket()
+    service._websocket = fake_ws
+    assert service._api_session_ready is False  # sanity: real default
+
+    sent = await _seed_openai_context_silently(service, RESTORED_MESSAGES)
+
+    assert sent is False
+    assert fake_ws.sent == [], (
+        "the restore hit the socket before session.updated -- exactly the "
+        "race that can kill the receive loop and leave the device deaf"
+    )
+    assert service._pending_reseed_messages == RESTORED_MESSAGES, (
+        "the restore was deferred but never stashed, so it can never arrive"
+    )
+
+    # The real signal, on the real (inherited) handler.
+    await service._handle_evt_session_updated(object())
+
+    joined = " ".join(fake_ws.sent)
+    assert "kitchen" in joined and "two o'clock" in joined, (
+        "session.updated fired but the deferred restore was never delivered"
+    )
+    assert not any('"type": "response.create"' in p for p in fake_ws.sent), (
+        "the deferred restore started a turn -- the assistant would speak "
+        "unprompted on a restored connection"
+    )
+    assert service._pending_reseed_messages is None, (
+        "the stash was not cleared after delivery"
+    )
+
+
+@pytest.mark.asyncio
+async def test_openai_seed_skips_and_logs_error_if_the_deferral_stash_vanishes(caplog):
+    """The deferral hands the conversation to
+    `SafeRealtimeLLMService._pending_reseed_messages`, drained by that
+    class's `_handle_evt_session_updated`. On a service without that stash
+    nothing would ever drain it, so a "deferred" restore would be lost
+    forever -- worse than not restoring. Deletes ONLY that attribute and
+    asserts the message names it specifically."""
+    import logging
+
+    service = build_service(OPENAI, _openai_options(), [])
+    fake_ws = _FakeOpenAIWebSocket()
+    service._websocket = fake_ws
+    del service._pending_reseed_messages
+
+    with caplog.at_level(logging.ERROR, logger="app.context_restore"):
+        sent = await _seed_openai_context_silently(service, RESTORED_MESSAGES)
+
+    assert sent is False
+    assert fake_ws.sent == []  # skipped, not sent
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1
+    assert "_pending_reseed_messages" in errors[0].message
+    assert "_api_session_ready" not in errors[0].message, (
+        "the message names an attribute that is NOT missing -- it can't be "
+        "distinguishing a real gap from a hardcoded list of candidates"
+    )
+
+
+@pytest.mark.asyncio
+async def test_openai_seed_skips_and_logs_error_if_the_readiness_signal_vanishes(caplog):
+    """The other half of the same guard: without `_api_session_ready` there
+    is no way to know when sending is safe, so skip loudly rather than send
+    into an unconfirmed session."""
+    import logging
+
+    service = build_service(OPENAI, _openai_options(), [])
+    fake_ws = _FakeOpenAIWebSocket()
+    service._websocket = fake_ws
+    del service._api_session_ready
+
+    with caplog.at_level(logging.ERROR, logger="app.context_restore"):
+        sent = await _seed_openai_context_silently(service, RESTORED_MESSAGES)
+
+    assert sent is False
+    assert fake_ws.sent == []
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1
+    assert "_api_session_ready" in errors[0].message
+    assert "_pending_reseed_messages" not in errors[0].message
 
 
 @pytest.mark.asyncio

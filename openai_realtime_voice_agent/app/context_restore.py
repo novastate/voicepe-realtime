@@ -137,16 +137,49 @@ async def _seed_openai_context_silently(service, messages) -> bool:
     honor a *different* instruction string coming back from a restored
     conversation specifically.
 
-    Returns True if something was actually sent, False if skipped (no
-    connection yet, or nothing to send). If the pipecat internals this
-    depends on have changed shape, that is logged loudly and the restore is
-    skipped rather than guessed at -- the same structural-guard pattern
-    `_send_gemini_note_silently` uses for its own bridge.
+    FIX (final review): this used to send as soon as `_websocket` existed.
+    An open socket is NOT a ready session. `ContextInitializer` is the LAST
+    stage in the pipeline, so its StartFrame arrives immediately after
+    `OpenAIRealtimeLLMService.start()` -> `_connect()`: the socket is open,
+    `session.created` has not been read yet, and `_api_session_ready` is
+    still False -- so on every reconnect that has history, these
+    `conversation.item.create` events raced ahead of the add-on's own
+    `session.update`. If OpenAI answers one of them with an error event,
+    pipecat's `_receive_task_handler` treats it as fatal
+    (`_handle_evt_error(evt); return`), the reader task dies, and the device
+    is deaf until something else reconnects it.
+
+    Deferring instead of sending reuses -- deliberately, rather than
+    duplicating -- the machinery `SafeRealtimeLLMService._reseed_context_after_reset`
+    already uses for the identical question: stash the prepared messages on
+    `service._pending_reseed_messages`, and let that class's
+    `_handle_evt_session_updated` override deliver them the moment
+    `_api_session_ready` is confirmed True. One stash, one drain, one
+    ordering guarantee for both paths; a second, subtly different deferral
+    would be two mechanisms doing one job.
+
+    Returns True if something was actually sent, False if it was deferred
+    (session not ready yet) or skipped (nothing to send, no socket). If the
+    pipecat internals this depends on have changed shape, that is logged
+    loudly and the restore is skipped rather than guessed at -- the same
+    structural-guard pattern `_send_gemini_note_silently` uses for its own
+    bridge.
     """
     if not messages:
         return False
 
-    missing = _missing_attrs(service, "_llm_needs_conversation_setup", "_messages_added_manually")
+    missing = _missing_attrs(
+        service,
+        "_llm_needs_conversation_setup",
+        "_messages_added_manually",
+        # The deferral above depends on both of these: the readiness signal
+        # itself, and the stash `_handle_evt_session_updated` drains. Without
+        # the stash (a service that is not a SafeRealtimeLLMService) a
+        # deferred restore would be silently dropped forever, which is worse
+        # than not restoring at all -- so name it and skip.
+        "_api_session_ready",
+        "_pending_reseed_messages",
+    )
     if missing:
         logger.error(
             f"⚠️ {type(service).__name__} is missing "
@@ -157,8 +190,21 @@ async def _seed_openai_context_silently(service, messages) -> bool:
         )
         return False
 
+    if not service._api_session_ready:
+        # Defer, do not drop: hand the messages to the SAME stash the
+        # post-reset re-seed uses (see the docstring above). They go out from
+        # `_handle_evt_session_updated`, after our `session.update` has
+        # round-tripped, never before it. A normal, expected state right
+        # after connect -- so no warning, just a False return the caller
+        # logs honestly.
+        service._pending_reseed_messages = list(messages)
+        return False
+
     if getattr(service, "_websocket", None) is None:
-        return False  # Not connected yet -- nothing to seed. Not an error.
+        # Session claims ready but there is no socket to send on. Not the
+        # startup race above (that is caught by the readiness check) --
+        # nothing to seed. Not an error.
+        return False
 
     context = LLMContext(messages=list(messages))
     adapter = service.get_llm_adapter()

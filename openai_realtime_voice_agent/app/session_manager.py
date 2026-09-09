@@ -373,8 +373,9 @@ class ContextInitializer(FrameProcessor):
                     else:
                         logger.info(
                             f"Cached context for client {self.client_id} was "
-                            f"not restored (engine not connected yet, or "
-                            f"nothing to send)"
+                            f"not restored yet (deferred until the engine "
+                            f"session confirms it is ready, or nothing to "
+                            f"send) -- see restore_context_silently"
                         )
             return
 

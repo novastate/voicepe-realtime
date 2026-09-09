@@ -334,8 +334,10 @@ class ConnectionRecovery(FrameProcessor):
 
         Returns:
             True if a repair or a failover was attempted, OR if this is a
-            duplicate of a connection-death message already being handled
-            (the caller need do nothing more either way). False if this
+            connection-death message arriving while a repair already made
+            within RECONNECT_COOLDOWN_S covers it -- a duplicate of one, or
+            the same socket death worded differently (the caller need do
+            nothing more in any of those cases). False if this
             error needed no action from us — our own tool, a terminal
             failure with nowhere to go, an engine that heals its own
             connection, a reported-but-not-dead-socket failure (a rate
@@ -412,6 +414,33 @@ class ConnectionRecovery(FrameProcessor):
             # happened); not a connection-death signature, so there is
             # nothing here worth reconnecting over.
             return False
+
+        # RESTORED (final review): the repair cooldown this path had before
+        # the provider work, and which the class docstring above never
+        # stopped promising. It is NOT the same guard as the message-dedup
+        # further up, and both are needed:
+        #   - the dedup collapses the SAME string repeating ~15x/s (one
+        #     router report per window),
+        #   - this collapses DIFFERENT death messages arriving back to back
+        #     into ONE repair.
+        # One socket death produces both: the reader dies ("realtime receive
+        # loop died: …") -> repair #1, and when that finishes the queued
+        # sends surface the same event as a different string ("Error sending
+        # client event: sent 1011 …"). The dedup cannot see those two as
+        # duplicates, so without this cooldown the second one repairs again
+        # immediately -- and every repair now also re-seeds the conversation.
+        if now - self._last_attempt < self.RECONNECT_COOLDOWN_S:
+            # Report "handled" (True), not "nothing to do": a repair just
+            # happened, so the caller must NOT also nudge idle -- that
+            # straggler would clobber the phase of a turn the user has since
+            # started (the race documented at app/phase_emitter.py:35-48,
+            # and the same reason the duplicate branch above returns True
+            # for a dead socket).
+            logger.debug(
+                f"repair already attempted <{self.RECONNECT_COOLDOWN_S:.0f}s ago — "
+                f"not repairing again for: {message[:90]}"
+            )
+            return True
 
         self._reconnecting = True
         self._last_attempt = now  # only stamped here, where a repair is actually attempted
@@ -1318,7 +1347,8 @@ class WebSocketHandler:
             # never lands before the current/next turn completes, by
             # construction. Gating of speaker-restricted tools does NOT
             # depend on this injection (see
-            # SafeRealtimeLLMService.register_function in main.py) and is
+            # SafeRealtimeLLMService.register_function in
+            # app/providers/openai_realtime.py) and is
             # unaffected on both engines.
             if connection.speaker_probe is not None and connection.speaker_probe.enabled:
                 connection.speaker_probe.on_verdict = make_speaker_note(

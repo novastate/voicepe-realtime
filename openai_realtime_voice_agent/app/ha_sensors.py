@@ -23,9 +23,18 @@ _INST = os.environ.get("INSTANCE_NAME", "").strip().lower() or "device"
 _TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 
 
-async def _post(entity: str, state, attrs: dict) -> None:
+async def _post(entity: str, state, attrs: dict) -> bool:
+    """Write one entity state to the supervisor. Returns whether it landed.
+
+    A sensor write is never worth interrupting a conversation over, so a
+    failure is still swallowed at debug level exactly as before -- but it is
+    now also REPORTED, because `SensorPublisher.provider` de-duplicates its
+    writes and must not remember a state it never actually managed to
+    publish. No token means there is no supervisor to write to (running
+    outside Home Assistant): nothing was written, so that is False too.
+    """
     if not _TOKEN:
-        return
+        return False
     try:
         async with httpx.AsyncClient(timeout=8) as c:
             r = await c.post(
@@ -36,6 +45,8 @@ async def _post(entity: str, state, attrs: dict) -> None:
             r.raise_for_status()
     except Exception as e:
         logger.debug(f"sensor post failed ({entity}): {e!r}")
+        return False
+    return True
 
 
 class SensorPublisher:
@@ -77,6 +88,17 @@ class SensorPublisher:
         entire cooldown window sees this number freeze at whatever it was on
         connect -- which engine is live and why it switched stay correct,
         only the countdown can go stale. Don't go bug-hunting over that.
+
+        FIX (final review): the key is recorded only AFTER the write actually
+        succeeds. It used to be stored first, and `_post` swallows every
+        failure -- so an engine switch that happened while the supervisor was
+        briefly unreachable (an HA restart, which is a common reason the
+        device reconnected in the first place) was lost for good: the write
+        failed silently, the key was already stored, and every later connect
+        deduped the retry away. The sensor then showed the OLD engine for the
+        whole cooldown -- the exact invisibility this entity exists to end.
+        Retrying on the next connect costs one HTTP call that would not
+        otherwise have happened, and only while the supervisor is down.
         """
         key = (
             status.get("provider"),
@@ -87,8 +109,7 @@ class SensorPublisher:
         )
         if key == self._last_provider_key:
             return
-        self._last_provider_key = key
-        await _post(f"sensor.voicepe_{_INST}_motor", status.get("provider", ""), {
+        published = await _post(f"sensor.voicepe_{_INST}_motor", status.get("provider", ""), {
             "friendly_name": f"Voice PE {_INST} motor",
             "icon": "mdi:swap-horizontal",
             "primary": status.get("primary", ""),
@@ -98,6 +119,8 @@ class SensorPublisher:
             "retry_primary_in_s": status.get("retry_primary_in_s", 0.0),
             "at": time.strftime("%H:%M:%S"),
         })
+        if published:
+            self._last_provider_key = key
 
     async def usage(self, cost: float, detail: dict):
         """Accumulate estimated OpenAI spend and publish it as a sensor."""

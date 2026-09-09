@@ -5,13 +5,22 @@ All notable changes to this add-on. Newest first.
 ## 0.17.0 (fork)
 
 - **Second voice engine: Google Gemini Live**, as an alternative to OpenAI
-  Realtime. `voice_provider` picks the primary engine (`openai` default —
-  unchanged behaviour for existing installs); `voice_provider_backup` names a
-  second engine that takes over automatically when the primary runs out of
-  money, has its key rejected, or its socket dies and a retry doesn't help.
-  New options: `gemini_api_key`, `gemini_model`, `gemini_voice`,
-  `provider_cooldown_minutes` (default 30 — how long the backup runs before
-  the primary is tried again).
+  Realtime. `voice_provider` picks the primary engine (`openai` default);
+  `voice_provider_backup` names the *other* engine, which takes over
+  automatically when the primary runs out of money, has its key rejected, or
+  its socket dies and a retry doesn't help. A backup equal to the primary
+  means no failover, the same as `none`. New options: `gemini_api_key`,
+  `gemini_model`, `gemini_voice`, `provider_cooldown_minutes` (default 30 —
+  how long the backup runs before the primary is tried again).
+- **What changes if you only update, without touching any setting**: the
+  engine and the audio path are the same (OpenAI, no failover, same voice and
+  latency), but the assistant now remembers across reconnects where it
+  previously forgot. The cached conversation is finally delivered to the
+  engine on reconnect — it provably never was before, on either engine — and
+  the session is re-seeded every hour instead of starting blank, so each turn
+  is billed with that history as its prefix (bounded by
+  `max_context_messages`, default 12). A new entity,
+  `sensor.voicepe_<instance>_motor`, also appears.
 - Failure is classified before any switch is made: quota/billing and
   auth/model errors switch immediately; a transient error (timeout, dead
   socket, 5xx) gets one retry on the same engine first; a tool error never
@@ -25,7 +34,7 @@ All notable changes to this add-on. Newest first.
   observability only implemented for OpenAI so far) is documented in
   `Docs/superpowers/specs/2026-09-08-gemini-live-provider-design.md` in the
   main Raawr repo, not hidden behind a claim of parity.
-- 153 unit tests cover the router, failure classification, and both provider
+- 158 unit tests cover the router, failure classification, and both provider
   modules (no API keys required to run them). **Not yet exercised against a
   live house** — that verification is a separate, manual step.
 

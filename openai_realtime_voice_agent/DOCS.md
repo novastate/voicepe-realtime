@@ -120,12 +120,22 @@ its key, or goes down.
 **Automatic failover** is off by default (`voice_provider_backup: "none"`). When
 enabled, if the primary runs out of money or its key becomes invalid, the backup
 takes over automatically on the next turn; after `provider_cooldown_minutes` the
-add-on tries the primary again. Set the backup to the same engine if you want
-load-balancing across two API keys (e.g., two OpenAI accounts).
+add-on tries the primary again. The backup must be the *other* engine: setting
+it to the same engine as `voice_provider` means no failover at all, exactly like
+`none`. (There is one API key per engine, so two accounts on the same engine
+cannot be configured either.)
 
-**These defaults reproduce today's behaviour exactly**: OpenAI primary, no
-failover. If you just update the add-on, you will notice nothing — the new
-options only take effect if you change them.
+**With the default settings the engine and the audio path are unchanged**:
+OpenAI primary, no failover, same voice, same latency. Two things do change if
+you just update:
+
+- **The assistant now remembers across reconnects.** The cached conversation is
+  finally delivered to the engine on reconnect (it never was before, on either
+  engine), and the session is re-seeded every hour instead of starting blank. So
+  it can follow up on what was said before a drop — and each turn is billed with
+  that history as its prefix, up to `max_context_messages` (default 12).
+- **A new entity appears**, `sensor.voicepe_<instance>_motor`, showing which
+  engine is answering and why.
 
 ## 6. Web search
 
@@ -142,7 +152,7 @@ answer back.
 - If the model name is rejected, the assistant just says it couldn't search — it
   won't crash the session, so you can change `web_search_model` and retry.
 
-## 6. Voice timers
+## 7. Voice timers
 
 Set, cancel and list timers by voice. On expiry: one personal spoken announcement
 (addressed to whoever set the timer), a 20-second grace window (any wake counts as
@@ -155,7 +165,7 @@ Setup: set **`timer_ring_entity`** to your device's exposed
 Without either setting, the assistant will say timers are unavailable. Timers survive
 the hourly session refresh but not add-on restarts.
 
-## 7. Speaker awareness & voice enrollment
+## 8. Speaker awareness & voice enrollment
 
 Set `speaker_male_name` / `speaker_female_name` and each wake is tagged with the
 likely speaker (pitch heuristic for a one-male-one-female household); enroll voice
@@ -178,7 +188,7 @@ Options: `enrollment_phrase`, `enrollment_tts_voice`, `wake_sound_entity`
 Full guide:
 [Speaker recognition & voice enrollment](https://github.com/TristanBrotherton/voicepe-realtime/blob/main/docs/features.md#speaker-recognition--voice-enrollment).
 
-## 8. Voice-instructed memory
+## 9. Voice-instructed memory
 
 Say "remember that..." / "from now on..." and the note becomes a standing
 instruction in every future conversation (it takes effect at the next session —
@@ -188,7 +198,7 @@ remember" reads them back. Notes are stored locally in
 at 60 notes, each attributed to the household member whose voice gave it. Guests
 and unidentified voices cannot change memory.
 
-## 9. Agent integration (optional)
+## 10. Agent integration (optional)
 
 **`openclaw_url`**: direct endpoint for an external agent
 (`POST {"question", "room"}` → `{"answer"}`). When set, the add-on registers the
@@ -210,7 +220,7 @@ The integration is agent-agnostic — any agent behind a small bridge works. Ful
 contracts and examples:
 [Agent Integration](https://github.com/TristanBrotherton/voicepe-realtime/blob/main/docs/agent-integration.md).
 
-## 10. False-wake flagging & HA sensors
+## 11. False-wake flagging & HA sensors
 
 Every wake's opening audio is archived locally (auto-pruned, newest 500). Flag a
 false trigger by saying *"that was a false alarm"*, **double-pressing the center
@@ -223,7 +233,7 @@ Set **`instance_name`** (e.g. `kitchen`) to publish
 `_false_wakes_today` and `binary_sensor.voicepe_kitchen_enrollment_active` for
 dashboards and automations.
 
-## 11. Reading the logs
+## 12. Reading the logs
 
 The add-on log shows each turn: `🗣️ user:` (when transcription language is set),
 `🤖 assistant:` (the reply text), `📞 phase ->` (device state), tool calls, and

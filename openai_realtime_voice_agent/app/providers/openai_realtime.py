@@ -259,9 +259,11 @@ class SafeRealtimeLLMService(OpenAIRealtimeLLMService):
             logger.warning(f"⚠️ Failed to prepare context re-seed after reset: {e!r}")
 
     async def _send_pending_reseed(self, messages):
-        """Actually deliver a re-seed prepared by `_reseed_context_after_reset`
-        (immediately, if the session was already ready, or later from
-        `_handle_evt_session_updated` once it becomes ready)."""
+        """Actually deliver a seed prepared by `_reseed_context_after_reset`
+        (the hourly/reconnect re-seed) or by `_seed_openai_context_silently`
+        (a client reconnect's cached conversation) -- immediately, if the
+        session was already ready, or later from
+        `_handle_evt_session_updated` once it becomes ready."""
         from app.context_restore import restore_context_silently
         from app.providers import OPENAI
 
@@ -272,8 +274,8 @@ class SafeRealtimeLLMService(OpenAIRealtimeLLMService):
             return
         if restored:
             logger.info(
-                f"📤 Re-seeded {len(messages)} message(s) onto the reconnected "
-                f"session after reset_conversation (waiting for user)"
+                f"📤 Seeded {len(messages)} message(s) onto the ready session "
+                f"(waiting for user)"
             )
         else:
             # FIX ROUND 2 (review): the old code only ever logged success,
@@ -284,9 +286,9 @@ class SafeRealtimeLLMService(OpenAIRealtimeLLMService):
             # be ready, so a False return here means something is actually
             # wrong, not a normal transient state.
             logger.warning(
-                f"⚠️ Context re-seed after reset was NOT sent ({len(messages)} "
-                f"message(s) prepared) -- the model will not remember this "
-                f"conversation until the next successful reconnect"
+                f"⚠️ Context re-seed was NOT sent ({len(messages)} message(s) "
+                f"prepared) -- the model will not remember this conversation "
+                f"until the next successful reconnect"
             )
 
     async def _handle_evt_session_updated(self, evt):  # type: ignore[override]
