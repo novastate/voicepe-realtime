@@ -296,10 +296,13 @@ async def test_gemini_context_guard_stops_a_real_first_turn_from_resending():
 
 
 @pytest.mark.asyncio
-async def test_openai_seed_skips_and_logs_error_if_bookkeeping_vanishes(caplog):
-    """If a future pipecat renames/removes `_llm_needs_conversation_setup`
-    or `_messages_added_manually`, the restore must be skipped -- not raise,
-    not silently do nothing -- and must say exactly what vanished, loudly."""
+async def test_openai_seed_skips_and_logs_error_if_setup_flag_vanishes(caplog):
+    """If a future pipecat renames/removes `_llm_needs_conversation_setup`,
+    the restore must be skipped -- not raise, not silently do nothing -- and
+    must name exactly that attribute, loudly. Deletes ONLY this one
+    attribute (leaving `_messages_added_manually` intact) so the assertion
+    can tell a message naming the RIGHT attribute from one that just lists
+    every candidate unconditionally."""
     import logging
 
     service = build_service(OPENAI, _openai_options(), [])
@@ -315,25 +318,63 @@ async def test_openai_seed_skips_and_logs_error_if_bookkeeping_vanishes(caplog):
     errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
     assert len(errors) == 1
     assert "_llm_needs_conversation_setup" in errors[0].message
+    assert "_messages_added_manually" not in errors[0].message, (
+        "the message names an attribute that is NOT missing -- it can't be "
+        "distinguishing a real gap from a hardcoded list of both candidates"
+    )
 
 
 @pytest.mark.asyncio
-async def test_openai_seed_skips_quietly_when_not_connected_yet():
+async def test_openai_seed_skips_and_logs_error_if_manual_tracking_vanishes(caplog):
+    """Same guard, the other attribute: deletes ONLY `_messages_added_manually`
+    (leaving `_llm_needs_conversation_setup` intact) and asserts the message
+    names that one specifically, not the other."""
+    import logging
+
+    service = build_service(OPENAI, _openai_options(), [])
+    fake_ws = _FakeOpenAIWebSocket()
+    service._websocket = fake_ws
+    del service._messages_added_manually
+
+    with caplog.at_level(logging.ERROR, logger="app.context_restore"):
+        sent = await _seed_openai_context_silently(service, RESTORED_MESSAGES)
+
+    assert sent is False
+    assert fake_ws.sent == []
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1
+    assert "_messages_added_manually" in errors[0].message
+    assert "_llm_needs_conversation_setup" not in errors[0].message
+
+
+@pytest.mark.asyncio
+async def test_openai_seed_skips_quietly_when_not_connected_yet(caplog):
     """No websocket yet is a normal, expected transient state (the restore
     fires right after StartFrame, which can race ahead of the actual
     connect) -- must be skipped without logging an error."""
+    import logging
+
     service = build_service(OPENAI, _openai_options(), [])
     assert service._websocket is None  # sanity: real default, never connected
 
-    sent = await _seed_openai_context_silently(service, RESTORED_MESSAGES)
+    with caplog.at_level(logging.WARNING, logger="app.context_restore"):
+        sent = await _seed_openai_context_silently(service, RESTORED_MESSAGES)
 
     assert sent is False
+    assert not any(r.levelno >= logging.WARNING for r in caplog.records), (
+        "a normal, expected 'not connected yet' skip logged a warning/error "
+        "-- this must be silent, not alarming"
+    )
 
 
 @pytest.mark.asyncio
-async def test_gemini_seed_skips_and_logs_error_if_bookkeeping_vanishes(caplog):
-    """Same guard, Gemini side: if `_needs_turn_complete_message` or
-    `_context` vanish from a future pipecat, skip loudly rather than guess."""
+async def test_gemini_seed_skips_and_logs_error_if_turn_close_flag_vanishes(caplog):
+    """Same guard, Gemini side: deletes ONLY `_needs_turn_complete_message`
+    (leaving `_context` intact) and asserts the message names that one
+    specifically, not the other -- the old assertion
+    (`"_needs_turn_complete_message" in msg or "_context" in msg`) could not
+    tell a right message from a wrong one, since the message named both
+    unconditionally regardless of which was actually missing."""
     import logging
 
     service = build_service(GEMINI, _gemini_options(), [])
@@ -348,19 +389,53 @@ async def test_gemini_seed_skips_and_logs_error_if_bookkeeping_vanishes(caplog):
     assert fake_session.calls == []  # skipped, not sent
     errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
     assert len(errors) == 1
-    assert "_needs_turn_complete_message" in errors[0].message or "_context" in errors[0].message
+    assert "_needs_turn_complete_message" in errors[0].message
+    assert "_context" not in errors[0].message
 
 
 @pytest.mark.asyncio
-async def test_gemini_seed_skips_quietly_when_not_connected_yet():
+async def test_gemini_seed_skips_and_logs_error_if_context_attr_vanishes(caplog):
+    """The `_context` half of the guard specifically: without this test,
+    deleting the `or not hasattr(service, "_context")` clause from
+    `_seed_gemini_context_silently` would leave the whole suite green (the
+    review's finding). Deletes ONLY `_context` (leaving
+    `_needs_turn_complete_message` intact) and asserts the message names
+    that one specifically."""
+    import logging
+
+    service = build_service(GEMINI, _gemini_options(), [])
+    fake_session = _FakeGeminiSession()
+    service._session = fake_session
+    del service._context
+
+    with caplog.at_level(logging.ERROR, logger="app.context_restore"):
+        sent = await _seed_gemini_context_silently(service, RESTORED_MESSAGES)
+
+    assert sent is False
+    assert fake_session.calls == []  # skipped, not sent
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1
+    assert "_context" in errors[0].message
+    assert "_needs_turn_complete_message" not in errors[0].message
+
+
+@pytest.mark.asyncio
+async def test_gemini_seed_skips_quietly_when_not_connected_yet(caplog):
     """No session yet is a normal, expected transient state -- must be
     skipped without logging an error."""
+    import logging
+
     service = build_service(GEMINI, _gemini_options(), [])
     assert service._session is None  # sanity: real default, never connected
 
-    sent = await _seed_gemini_context_silently(service, RESTORED_MESSAGES)
+    with caplog.at_level(logging.WARNING, logger="app.context_restore"):
+        sent = await _seed_gemini_context_silently(service, RESTORED_MESSAGES)
 
     assert sent is False
+    assert not any(r.levelno >= logging.WARNING for r in caplog.records), (
+        "a normal, expected 'not connected yet' skip logged a warning/error "
+        "-- this must be silent, not alarming"
+    )
 
 
 @pytest.mark.asyncio

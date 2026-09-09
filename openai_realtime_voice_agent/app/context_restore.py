@@ -50,6 +50,45 @@ def _strip_tool_plumbing(messages):
     return cleaned
 
 
+def _cap_restored_messages(messages, max_messages):
+    """Cap a restored/reseeded conversation to the most-recent N messages,
+    keeping a leading system message if present.
+
+    Deliberately shared by `SessionManager.create_context_for_new_session`
+    (client-reconnect restore) and `SafeRealtimeLLMService`'s
+    `_reseed_context_after_reset` (60-minute-cap / keepalive-death reseed) --
+    both exist for the identical reason: OpenAI's Realtime adapter packs a
+    multi-message conversation into ONE synthetic item that gets re-billed
+    in full on every turn, and pipecat 0.0.97 has no server-side truncation,
+    so an unbounded restored/reseeded history means unbounded per-turn cost
+    and rate-limit risk. Both call sites resolve `max_messages` from the
+    SAME `MAX_CONTEXT_MESSAGES` setting (default 12) so the bound holds no
+    matter which path last touched the conversation.
+
+    `max_messages <= 0` means unlimited (matches SessionManager's own
+    convention). Returns `messages` unchanged if there's nothing to trim.
+    """
+    if not messages or max_messages <= 0 or len(messages) <= max_messages:
+        return messages
+    head = []
+    body = messages
+    if isinstance(messages[0], dict) and messages[0].get("role") == "system":
+        head = [messages[0]]
+        body = messages[1:]
+    return head + body[-max_messages:]
+
+
+def _missing_attrs(service, *names):
+    """Return the subset of `names` this service instance does NOT have.
+
+    Used to name exactly which structural-guard attribute vanished, rather
+    than unconditionally naming all of them regardless of which is actually
+    missing -- a message that always lists every candidate can't be told
+    apart from one that's actually diagnosing the real gap.
+    """
+    return [name for name in names if not hasattr(service, name)]
+
+
 async def _seed_openai_context_silently(service, messages) -> bool:
     """Seed a real OpenAI Realtime session with a restored conversation.
 
@@ -107,15 +146,14 @@ async def _seed_openai_context_silently(service, messages) -> bool:
     if not messages:
         return False
 
-    if not hasattr(service, "_llm_needs_conversation_setup") or not hasattr(
-        service, "_messages_added_manually"
-    ):
+    missing = _missing_attrs(service, "_llm_needs_conversation_setup", "_messages_added_manually")
+    if missing:
         logger.error(
-            f"⚠️ {type(service).__name__} is missing the conversation-setup "
-            f"bookkeeping (`_llm_needs_conversation_setup` / "
-            f"`_messages_added_manually`) this context restore depends on -- "
-            f"renamed or removed upstream. Skipping context restore rather "
-            f"than guessing at a replacement."
+            f"⚠️ {type(service).__name__} is missing "
+            f"{', '.join(f'`{m}`' for m in missing)} -- the conversation-setup "
+            f"bookkeeping this context restore depends on is gone (renamed or "
+            f"removed upstream). Skipping context restore rather than "
+            f"guessing at a replacement."
         )
         return False
 
@@ -189,15 +227,14 @@ async def _seed_gemini_context_silently(service, messages) -> bool:
     if not messages:
         return False
 
-    if not hasattr(service, "_needs_turn_complete_message") or not hasattr(
-        service, "_context"
-    ):
+    missing = _missing_attrs(service, "_needs_turn_complete_message", "_context")
+    if missing:
         logger.error(
-            f"⚠️ {type(service).__name__} is missing `_needs_turn_complete_message` "
-            f"or `_context` -- the silent turn-close bridge and/or the "
-            f"first-context guard this context restore depends on are gone "
-            f"(renamed or removed upstream). Skipping context restore rather "
-            f"than guessing at a replacement."
+            f"⚠️ {type(service).__name__} is missing "
+            f"{', '.join(f'`{m}`' for m in missing)} -- the silent turn-close "
+            f"bridge and/or the first-context guard this context restore "
+            f"depends on are gone (renamed or removed upstream). Skipping "
+            f"context restore rather than guessing at a replacement."
         )
         return False
 

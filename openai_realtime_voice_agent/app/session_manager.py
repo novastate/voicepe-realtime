@@ -4,7 +4,7 @@ import time
 from typing import Optional, Dict
 from pipecat.processors.aggregators.llm_context import LLMContext
 
-from app.context_restore import _strip_tool_plumbing, restore_context_silently
+from app.context_restore import _cap_restored_messages, _strip_tool_plumbing, restore_context_silently
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
@@ -154,21 +154,19 @@ class SessionManager:
                     f"context for client {client_id} (stale tool call ids)"
                 )
             # Cap the restored history to the most-recent N messages so the
-            # per-turn token cost stays bounded (see __init__ docstring). Keep a
-            # leading system message if there is one, then the last N of the rest.
-            if restore_messages and self.max_restored_messages > 0 and \
-                    len(restore_messages) > self.max_restored_messages:
-                head = []
-                body = restore_messages
-                if isinstance(restore_messages[0], dict) and restore_messages[0].get("role") == "system":
-                    head = [restore_messages[0]]
-                    body = restore_messages[1:]
-                trimmed = head + body[-self.max_restored_messages:]
+            # per-turn token cost stays bounded (see __init__ docstring).
+            # _cap_restored_messages is shared, deliberately, with
+            # SafeRealtimeLLMService._reseed_context_after_reset -- see its
+            # docstring in context_restore.py for why the same bound applies
+            # to both paths.
+            before_cap = len(restore_messages) if restore_messages else 0
+            restore_messages = _cap_restored_messages(restore_messages, self.max_restored_messages)
+            after_cap = len(restore_messages) if restore_messages else 0
+            if before_cap != after_cap:
                 logger.info(
                     f"✂️ Trimmed restored context for client {client_id}: "
-                    f"{len(restore_messages)} → {len(trimmed)} messages (cap {self.max_restored_messages})"
+                    f"{before_cap} → {after_cap} messages (cap {self.max_restored_messages})"
                 )
-                restore_messages = trimmed
             new_context = LLMContext(
                 messages=restore_messages,
                 tools=cached_context.tools if hasattr(cached_context, 'tools') else None,

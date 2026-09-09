@@ -15,6 +15,23 @@ from app.realtime_payload import transform_gpt_transcription_language
 logger = logging.getLogger(__name__)
 
 
+def _max_context_messages() -> int:
+    """Read MAX_CONTEXT_MESSAGES the same way main.py does (default 12).
+
+    `main.py` reads this once at startup and passes it into `SessionManager`
+    for the client-reconnect restore path; `_reseed_context_after_reset`
+    reads it directly here rather than threading a SessionManager reference
+    through the service, since the value is the SAME env var, set once for
+    the process lifetime — reading it again is not a second source of
+    truth, just a second read of the one that exists.
+    """
+    try:
+        value = int(os.environ.get("MAX_CONTEXT_MESSAGES", "12"))
+    except (TypeError, ValueError):
+        value = 12
+    return max(0, value)
+
+
 class SafeRealtimeLLMService(OpenAIRealtimeLLMService):
     """OpenAIRealtimeLLMService with audio-truncation-on-interruption disabled.
 
@@ -130,6 +147,8 @@ class SafeRealtimeLLMService(OpenAIRealtimeLLMService):
         the same way `ContextInitializer` seeds a brand-new one — using this
         service's own live context (more current than SessionManager's cache,
         which only snapshots on disconnect), not the SessionManager's cache.
+        The actual send is deferred until the session confirms it's ready —
+        see `_reseed_context_after_reset` and `_handle_evt_session_updated`.
         """
         self._resetting_conversation = True
         try:
@@ -155,28 +174,80 @@ class SafeRealtimeLLMService(OpenAIRealtimeLLMService):
         same service, which the SessionManager never even sees). Tool calls
         are stripped first for the same reason `_strip_tool_plumbing` exists
         for the client-reconnect path: their ids belong to the conversation
-        that just ended, and the fresh session rejects a replayed id.
+        that just ended, and the fresh session rejects a replayed id. The
+        result is capped by `_cap_restored_messages` at the same
+        `MAX_CONTEXT_MESSAGES` setting SessionManager's client-reconnect
+        restore uses (see that function's docstring) — this path fires on
+        every 60-minute cap and every proactive refresh, so an uncapped
+        conversation would otherwise grow without bound over a long day.
 
-        Known timing caveat, not verifiable without a live API key: this
-        sends immediately after `_connect()` returns, i.e. as soon as the
-        websocket handshake completes, which may be before OpenAI's
-        `session.created` event has arrived. `_create_response()`'s own
-        lazy conversation-setup loop (the path this replaces) only ever ran
-        once pipecat's aggregator finished a real turn — comfortably after
-        `session.created` in practice — so this is untested territory this
-        fix introduces. If OpenAI rejects conversation.item.create sent this
-        early, the fix would need to defer until `_api_session_ready` (the
-        same flag `_run_llm_when_api_session_ready` already waits on).
+        FIX ROUND 2 (review): this used to send immediately once this method
+        ran, i.e. as soon as `_connect()` (called by `super().reset_conversation()`)
+        returned — which only means the websocket handshake finished, not
+        that OpenAI's session is ready to accept `conversation.item.create`.
+        If the server rejects something sent that early, it replies with an
+        `error` event, and pipecat's `_receive_task_handler` treats EVERY
+        unrecognised error as fatal (`_handle_evt_error(evt); return` — see
+        that method's override below): the reader task dies, and the device
+        is deaf until the NEXT reconnect. Not a lost memory — a dead
+        session, every hour, to save one round trip.
+
+        Fixed by mirroring the exact deferral pattern `_create_response()`
+        already uses for the identical question ("is the session ready
+        yet?"): `_api_session_ready` is the signal (set True by
+        `_handle_evt_session_updated`, which fires once our OWN
+        `session.update` — sent from `_handle_evt_session_created` in
+        response to `session.created` — has round-tripped). If not ready
+        yet, the prepared messages are stashed in
+        `self._pending_reseed_messages` and sent later, from the
+        `_handle_evt_session_updated` override below, once
+        `_api_session_ready` is confirmed True — so the re-seed's
+        `conversation.item.create`s always follow `session.update` being
+        acknowledged on the same socket, never race ahead of it.
+
+        Considered and rejected: hooking `_handle_evt_session_created`
+        directly instead. `session.created` only proves the server accepted
+        the TCP/TLS handshake and is about to read our settings — it says
+        nothing about whether the settings we're about to send (and the
+        conversation.item.create calls after them) will be accepted.
+        `_api_session_ready` is the strictly later, already-proven-safe
+        point `_create_response()` itself insists on for the same class of
+        send, so this reuses that guarantee rather than a weaker one.
+
+        Failure mode considered: if the socket dies AGAIN before
+        `session.updated` ever arrives (e.g. the settings themselves are
+        rejected), `_pending_reseed_messages` is simply left set and never
+        sent for THIS attempt — but `_receive_task_handler`'s override
+        below already turns that death into a fresh `ConnectionRecovery`
+        reconnect trigger, and the NEXT `reset_conversation()` call
+        recomputes `_pending_reseed_messages` from `self._context` (still
+        intact) and overwrites the stale one before it could ever be acted
+        on. No permanently-lost re-seed; at worst one retried cycle.
         """
-        context = getattr(self, "_context", None)
-        if context is None:
-            return
-        from app.context_restore import _strip_tool_plumbing, restore_context_silently
+        try:
+            context = getattr(self, "_context", None)
+            if context is None:
+                return
+            from app.context_restore import _cap_restored_messages, _strip_tool_plumbing
+
+            messages = _strip_tool_plumbing(context.get_messages())
+            messages = _cap_restored_messages(messages, _max_context_messages())
+            if not messages:
+                return
+            if not getattr(self, "_api_session_ready", False):
+                self._pending_reseed_messages = messages
+                return
+            await self._send_pending_reseed(messages)
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to prepare context re-seed after reset: {e!r}")
+
+    async def _send_pending_reseed(self, messages):
+        """Actually deliver a re-seed prepared by `_reseed_context_after_reset`
+        (immediately, if the session was already ready, or later from
+        `_handle_evt_session_updated` once it becomes ready)."""
+        from app.context_restore import restore_context_silently
         from app.providers import OPENAI
 
-        messages = _strip_tool_plumbing(context.get_messages())
-        if not messages:
-            return
         try:
             restored = await restore_context_silently(OPENAI, self, messages)
         except Exception as e:
@@ -187,6 +258,29 @@ class SafeRealtimeLLMService(OpenAIRealtimeLLMService):
                 f"📤 Re-seeded {len(messages)} message(s) onto the reconnected "
                 f"session after reset_conversation (waiting for user)"
             )
+        else:
+            # FIX ROUND 2 (review): the old code only ever logged success,
+            # so a failed re-seed (no websocket, or restore_context_silently
+            # itself declining) reopened the hourly hole with NOTHING in the
+            # log to notice — the exact invisibility this whole task is
+            # about. warning, not info: by this point the session claimed to
+            # be ready, so a False return here means something is actually
+            # wrong, not a normal transient state.
+            logger.warning(
+                f"⚠️ Context re-seed after reset was NOT sent ({len(messages)} "
+                f"message(s) prepared) -- the model will not remember this "
+                f"conversation until the next successful reconnect"
+            )
+
+    async def _handle_evt_session_updated(self, evt):  # type: ignore[override]
+        """After `_api_session_ready` is confirmed (see
+        `_reseed_context_after_reset`'s docstring), deliver any re-seed that
+        was deferred waiting for exactly this signal."""
+        await super()._handle_evt_session_updated(evt)
+        pending = getattr(self, "_pending_reseed_messages", None)
+        if pending:
+            self._pending_reseed_messages = None
+            await self._send_pending_reseed(pending)
 
     # Error codes that must NOT kill the realtime session. pipecat 0.0.97's
     # _receive_task_handler does `_handle_evt_error(evt); return` on EVERY
