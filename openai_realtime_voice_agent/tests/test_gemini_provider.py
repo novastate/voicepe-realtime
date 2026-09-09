@@ -216,6 +216,79 @@ def test_proactive_audio_needs_a_native_audio_model():
     assert not service._settings.get("proactivity")
 
 
+def test_affective_dialog_shares_the_native_audio_gate():
+    service = build_service(
+        "gemini", _options(gemini_affective_dialog=True), OPENAI_SHAPE
+    )
+    assert not service._settings.get("enable_affective_dialog")
+
+    service = build_service(
+        "gemini",
+        _options(
+            model="models/gemini-2.5-flash-native-audio-latest",
+            gemini_affective_dialog=True,
+        ),
+        OPENAI_SHAPE,
+    )
+    assert service._settings["enable_affective_dialog"] is True
+
+
+@pytest.mark.asyncio
+async def test_ending_the_audio_stream_tells_google_the_mic_stopped():
+    """Gemini Live's answer to input_audio_buffer.clear. Never sent before, so
+    a sentence cut off by a closing follow-up window stayed cached on Google's
+    side and could be completed into a stale answer on the next wake."""
+    sent = []
+
+    class FakeSession:
+        async def send_realtime_input(self, **kw):
+            sent.append(kw)
+
+    service = build_service("gemini", _options(), OPENAI_SHAPE)
+    service._session = FakeSession()
+    service._disconnecting = False
+
+    await service.end_audio_stream()
+
+    assert sent == [{"audio_stream_end": True}]
+
+
+@pytest.mark.asyncio
+async def test_ending_the_audio_stream_between_sessions_is_silent():
+    """The callers are device events. One arriving while no session is up must
+    not raise -- the device does not know or care what the engine is doing."""
+    service = build_service("gemini", _options(), OPENAI_SHAPE)
+    service._session = None
+
+    await service.end_audio_stream()  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_each_engine_drops_pending_input_in_its_own_dialect():
+    from app.providers import drop_pending_input_audio
+
+    gemini_calls = []
+
+    class FakeGemini:
+        async def end_audio_stream(self):
+            gemini_calls.append(True)
+
+    assert await drop_pending_input_audio("gemini", FakeGemini()) == "audioStreamEnd"
+    assert gemini_calls == [True]
+
+    openai_events = []
+
+    class FakeOpenAI:
+        async def send_client_event(self, event):
+            openai_events.append(type(event).__name__)
+
+    assert (
+        await drop_pending_input_audio("openai", FakeOpenAI())
+        == "input_audio_buffer.clear"
+    )
+    assert openai_events == ["InputAudioBufferClearEvent"]
+
+
 def test_proactive_audio_reaches_a_native_audio_session():
     service = build_service(
         "gemini",

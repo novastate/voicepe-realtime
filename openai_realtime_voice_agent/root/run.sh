@@ -14,6 +14,7 @@ GEMINI_VAD_END_SENSITIVITY=$(bashio::config 'gemini_vad_end_sensitivity')
 GEMINI_VAD_PREFIX_PADDING_MS=$(bashio::config 'gemini_vad_prefix_padding_ms')
 GEMINI_VAD_SILENCE_DURATION_MS=$(bashio::config 'gemini_vad_silence_duration_ms')
 GEMINI_PROACTIVE_AUDIO=$(bashio::config 'gemini_proactive_audio')
+GEMINI_AFFECTIVE_DIALOG=$(bashio::config 'gemini_affective_dialog')
 PROVIDER_COOLDOWN_MINUTES=$(bashio::config 'provider_cooldown_minutes')
 SPEAKER_MALE_NAME=$(bashio::config 'speaker_male_name')
 WAKE_SOUND_ENTITY=$(bashio::config 'wake_sound_entity')
@@ -84,6 +85,7 @@ export GEMINI_VAD_END_SENSITIVITY
 export GEMINI_VAD_PREFIX_PADDING_MS
 export GEMINI_VAD_SILENCE_DURATION_MS
 export GEMINI_PROACTIVE_AUDIO
+export GEMINI_AFFECTIVE_DIALOG
 export PROVIDER_COOLDOWN_MINUTES
 export SPEAKER_MALE_NAME
 export WAKE_SOUND_ENTITY

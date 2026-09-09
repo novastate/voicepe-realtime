@@ -2,6 +2,33 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.18.0 (fork)
+
+Towards a Gemini session you can hold an ordinary conversation with.
+
+- **The engine is finally told when the microphone stops.** Gemini Live has
+  `audioStreamEnd` — Google's guide calls it the way to "flush any cached
+  audio" when an audio stream pauses, after which the client "can resume
+  sending audio data at any time without reconnecting". This add-on never sent
+  it. Two consequences: half an utterance, left behind when the follow-up
+  window closed mid-sentence, stayed cached on Google's side and could be
+  completed into a stale answer on the next wake (the OpenAI path has cleared
+  exactly this since 2026-06-12); and a pause was indistinguishable from a
+  dead client, which is what the ~152 s idle hang-ups were. It is now sent on
+  the device's stop button and on the follow-up cut-off, through one shared
+  `drop_pending_input_audio()` that speaks each engine's own dialect —
+  `input_audio_buffer.clear` for OpenAI, `audioStreamEnd` for Gemini.
+- **`gemini_affective_dialog`**: the model matches the expression and tone it
+  hears instead of reading every answer flat. Shares proactive audio's gate —
+  a native-audio model on `v1beta` — and the same refusal to be switched on
+  with a model that cannot carry it.
+- 6 new tests (181 total).
+
+**Not changed, and deliberately**: handsfree barge-in stays off. It was tried
+on this hardware and measured: the ~10x speaker→mic leak defeated the XMOS
+AEC, the VAD flapped listening↔thinking, and it once built into an acoustic
+feedback squeal. See `barge_in: false` in the firmware for the full note.
+
 ## 0.17.5 (fork)
 
 - **A quiet house no longer kills the Gemini engine.** The Voice PE is

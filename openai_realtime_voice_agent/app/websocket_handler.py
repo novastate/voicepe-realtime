@@ -21,7 +21,12 @@ from pipecat.services.openai.realtime import events as openai_rt_events
 
 from app.device_registry import DeviceConnection, DeviceRegistry, device_id_from_websocket
 from app.multi_client_transport import MixedFastAPIWebsocketTransport
-from app.providers import OPENAI, input_sample_rate, supports_client_events
+from app.providers import (
+    OPENAI,
+    drop_pending_input_audio,
+    input_sample_rate,
+    supports_client_events,
+)
 from app.raw_audio_serializer import RawAudioSerializer
 from app.session_manager import SessionManager
 from app.audio_recording_service import AudioRecordingService
@@ -1252,12 +1257,12 @@ class WebSocketHandler:
             # the 1.5 s time-window alone misses responses that land later —
             # OpenAI replying to the spoken "stop", or a slow tool's answer.
             _kill_next_response["v"] = True
+            try:
+                sent = await drop_pending_input_audio(connection.provider, openai_service)
+                logger.info(f"🛑 device interrupt → {sent} sent (drop in-flight user audio)")
+            except Exception as e:
+                logger.info(f"🛑 device interrupt → dropping input audio no-op ({e!r})")
             if supports_client_events(connection.provider):
-                try:
-                    await openai_service.send_client_event(openai_rt_events.InputAudioBufferClearEvent())
-                    logger.info("🛑 device interrupt → input_audio_buffer.clear sent (drop in-flight user audio)")
-                except Exception as e:
-                    logger.info(f"🛑 device interrupt → input_audio_buffer.clear no-op ({e!r})")
                 try:
                     if getattr(openai_service, "_current_assistant_response", None) is not None:
                         await openai_service.send_client_event(openai_rt_events.ResponseCancelEvent())
@@ -1330,17 +1335,11 @@ class WebSocketHandler:
             # Also a turn boundary for the dangling-VAD guard: the follow-up
             # closed without speech, so any later server-VAD stop is dangling.
             phase_emitter.note_wake()
-            if supports_client_events(connection.provider):
-                try:
-                    await openai_service.send_client_event(openai_rt_events.InputAudioBufferClearEvent())
-                    logger.info("🧽 follow-up cut-off → input_audio_buffer.clear (drop partial utterance)")
-                except Exception as e:
-                    logger.debug(f"🧽 mic-flush input clear no-op ({e!r})")
-            else:
-                logger.debug(
-                    f"{connection.provider} takes no raw client events — "
-                    f"leaving the interrupt to pipecat's own handling"
-                )
+            try:
+                sent = await drop_pending_input_audio(connection.provider, openai_service)
+                logger.info(f"🧽 follow-up cut-off → {sent} (drop partial utterance)")
+            except Exception as e:
+                logger.debug(f"🧽 mic-flush input drop no-op ({e!r})")
 
         async def _on_device_wake():
             asyncio.create_task(

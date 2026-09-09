@@ -508,6 +508,9 @@ class Application:
         self.gemini_proactive_audio = (
             os.environ.get("GEMINI_PROACTIVE_AUDIO", "").strip().lower() == "true"
         )
+        self.gemini_affective_dialog = (
+            os.environ.get("GEMINI_AFFECTIVE_DIALOG", "").strip().lower() == "true"
+        )
 
         # Store configuration for session creation
         self.openai_api_key = openai_api_key
@@ -569,6 +572,7 @@ class Application:
                 gemini_vad_prefix_padding_ms=self.gemini_vad_prefix_padding_ms,
                 gemini_vad_silence_duration_ms=self.gemini_vad_silence_duration_ms,
                 gemini_proactive_audio=self.gemini_proactive_audio,
+                gemini_affective_dialog=self.gemini_affective_dialog,
             )
         return ProviderOptions(
             api_key=self.openai_api_key,

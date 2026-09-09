@@ -59,8 +59,8 @@ _END_SENSITIVITY = {
 # NOT support it: Google's own guide says so, and the session is refused
 # rather than degraded. Turning it on without moving the model just breaks
 # the engine, so a mismatch is refused here, loudly, instead of at 1008.
-PROACTIVE_AUDIO_API_VERSION = "v1beta"
-PROACTIVE_AUDIO_MODEL_MARKER = "native-audio"
+NATIVE_AUDIO_API_VERSION = "v1beta"
+NATIVE_AUDIO_MODEL_MARKER = "native-audio"
 
 
 def to_gemini_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -193,6 +193,33 @@ class ResilientGeminiLiveService(GeminiLiveLLMService):
     fatal, which is the case the counter exists for.
     """
 
+    async def end_audio_stream(self) -> None:
+        """Tell Google the microphone just stopped, and drop what it holds.
+
+        This is Gemini Live's answer to OpenAI Realtime's
+        `input_audio_buffer.clear`, and this add-on has never sent it. Google's
+        own guide:
+
+            When audio streams pause, send an `audioStreamEnd` event to flush
+            any cached audio. The client can then resume sending audio data at
+            any time without reconnecting.
+
+        Two things follow from never sending it. Half an utterance -- the
+        follow-up window closing mid-sentence -- stays cached on Google's side
+        and can be completed into a stale answer on the next wake, which is
+        exactly the case the OpenAI path has cleared since 2026-06-12. And a
+        pause is indistinguishable from a dead client: this device is
+        push-to-talk, so between conversations it simply stops sending, and
+        Google hangs up (see this class's own docstring).
+
+        Silent when there is no live session: the caller is a device event,
+        and a device event arriving between sessions must never raise.
+        """
+        session = self._session
+        if session is None or self._disconnecting:
+            return
+        await session.send_realtime_input(audio_stream_end=True)
+
     async def _handle_connection_error(self, error: Exception) -> bool:
         """Forgive a connection that stood long enough before it dropped."""
         lifetime = None
@@ -209,33 +236,45 @@ class ResilientGeminiLiveService(GeminiLiveLLMService):
         return await super()._handle_connection_error(error)
 
 
-def _proactivity_for(options, model: str):
-    """Whether this session asks Google to judge if it was spoken to.
+def _native_audio_features(options, model: str):
+    """The two features that only the native-audio models carry.
+
+    Proactive audio lets the model decide it was not spoken to and say
+    nothing; affective dialog lets it match the tone it hears. Both need API
+    version v1beta AND a native-audio model. Google's guide is explicit that
+    Gemini 3.1 Flash Live supports neither, and asking anyway gets the whole
+    session refused — so a mismatch loses the feature, never the assistant.
 
     Args:
-        options: The ProviderOptions carrying gemini_proactive_audio.
-        model: The resolved model name, which decides whether the feature
+        options: The ProviderOptions carrying the two flags.
+        model: The resolved model name, which decides whether either feature
             can be asked for at all.
 
     Returns:
-        A (ProactivityConfig, HttpOptions) pair, or (None, None) when the
-        feature is off or the model cannot carry it.
+        A (ProactivityConfig|None, affective|None, HttpOptions|None) triple.
+        http_options is set whenever either feature is on, since they share
+        the same API-version requirement.
     """
-    if not options.gemini_proactive_audio:
-        return None, None
-    if PROACTIVE_AUDIO_MODEL_MARKER not in model:
+    wanted = options.gemini_proactive_audio or options.gemini_affective_dialog
+    if not wanted:
+        return None, None, None
+    if NATIVE_AUDIO_MODEL_MARKER not in model:
         logger.warning(
-            f"⚠️ gemini_proactive_audio is on but {model} does not support it "
-            f"(it needs a *-{PROACTIVE_AUDIO_MODEL_MARKER}-* model, e.g. "
-            f"models/gemini-2.5-flash-native-audio-latest) — starting WITHOUT it "
+            f"⚠️ proactive audio / affective dialog are on but {model} supports "
+            f"neither (they need a *-{NATIVE_AUDIO_MODEL_MARKER}-* model, e.g. "
+            f"models/gemini-2.5-flash-native-audio-latest) — starting WITHOUT them "
             f"rather than letting the session be refused"
         )
-        return None, None
-    logger.info("🤫 Proactive audio ON — the model may stay silent when not addressed")
-    return (
-        ProactivityConfig(proactive_audio=True),
-        HttpOptions(api_version=PROACTIVE_AUDIO_API_VERSION),
-    )
+        return None, None, None
+    proactivity = None
+    if options.gemini_proactive_audio:
+        logger.info("🤫 Proactive audio ON — the model may stay silent when not addressed")
+        proactivity = ProactivityConfig(proactive_audio=True)
+    affective = None
+    if options.gemini_affective_dialog:
+        logger.info("🎭 Affective dialog ON — the model matches the tone it hears")
+        affective = True
+    return proactivity, affective, HttpOptions(api_version=NATIVE_AUDIO_API_VERSION)
 
 
 def build(options, tools: List[Dict[str, Any]]) -> GeminiLiveLLMService:
@@ -256,12 +295,13 @@ def build(options, tools: List[Dict[str, Any]]) -> GeminiLiveLLMService:
     voice = options.voice or DEFAULT_VOICE
     language = _resolve_language(options.language or "sv-SE")
     vad = _build_vad_params(options)
-    proactivity, http_options = _proactivity_for(options, model)
+    proactivity, affective, http_options = _native_audio_features(options, model)
     params = InputParams(
         max_tokens=options.max_output_tokens or 4096,
         language=language,
         vad=vad,
         proactivity=proactivity,
+        enable_affective_dialog=affective,
     )
     logger.info(
         f"🔧 Gemini Live session: model={model} voice={voice} "

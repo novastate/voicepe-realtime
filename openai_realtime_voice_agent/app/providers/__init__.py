@@ -75,6 +75,10 @@ class ProviderOptions:
     # API version v1beta; Gemini 3.1 Flash Live does not support it and the
     # session is refused outright, so it is off unless asked for.
     gemini_proactive_audio: bool = False
+    # "Affective dialog": the model matches the expression and tone it hears
+    # instead of reading every answer in the same flat voice. Same gate as
+    # proactive audio -- native-audio model, v1beta.
+    gemini_affective_dialog: bool = False
 
 
 def _known(provider: str) -> str:
@@ -91,6 +95,38 @@ def input_sample_rate(provider: str) -> int:
 def self_heals(provider: str) -> bool:
     """Whether this engine reconnects its own dead socket."""
     return _SELF_HEALS[_known(provider)]
+
+
+async def drop_pending_input_audio(provider: str, service) -> str:
+    """Tell the engine the microphone stopped and to drop what it is holding.
+
+    Both engines have this; they spell it differently, which is why it lives
+    here rather than in three branches at the call sites. OpenAI Realtime has
+    the raw client event `input_audio_buffer.clear`. Gemini Live has
+    `audioStreamEnd` on its realtime-input channel -- documented as the way to
+    "flush any cached audio" when an audio stream pauses -- and this add-on
+    never sent it, so a sentence cut off by a closing follow-up window stayed
+    cached on Google's side and could be completed into a stale answer later.
+
+    Args:
+        provider: "openai" or "gemini".
+        service: That engine's live service object.
+
+    Returns:
+        The name of what was sent, for the caller's log line.
+
+    Raises:
+        Whatever the engine's send path raises -- every caller is a device
+        event that already logs and swallows, and a silent failure here would
+        hide the exact thing this function exists to guarantee.
+    """
+    if _known(provider) == OPENAI:
+        from pipecat.services.openai.realtime import events as openai_rt_events
+
+        await service.send_client_event(openai_rt_events.InputAudioBufferClearEvent())
+        return "input_audio_buffer.clear"
+    await service.end_audio_stream()
+    return "audioStreamEnd"
 
 
 def supports_client_events(provider: str) -> bool:

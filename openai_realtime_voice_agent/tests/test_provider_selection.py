@@ -90,6 +90,7 @@ def test_provider_options_gives_each_engine_its_own_key_model_and_voice(monkeypa
     app.gemini_vad_prefix_padding_ms = 111
     app.gemini_vad_silence_duration_ms = 222
     app.gemini_proactive_audio = True
+    app.gemini_affective_dialog = True
     app.transcription_language = "nl-NL"
     app.max_output_tokens = None
     app.openai_api_key = "sk-key"
@@ -121,6 +122,7 @@ def test_provider_options_gives_each_engine_its_own_key_model_and_voice(monkeypa
     assert gemini_options.gemini_vad_prefix_padding_ms == 111
     assert gemini_options.gemini_vad_silence_duration_ms == 222
     assert gemini_options.gemini_proactive_audio is True
+    assert gemini_options.gemini_affective_dialog is True
 
     assert openai_options.api_key == "sk-key"
     assert openai_options.model == "gpt-realtime-2"
@@ -174,6 +176,7 @@ def _bare_app(provider: str, backup=None):
     app.gemini_vad_prefix_padding_ms = 300
     app.gemini_vad_silence_duration_ms = 800
     app.gemini_proactive_audio = False
+    app.gemini_affective_dialog = False
     app.openai_api_key = "sk-test"
     app.model = "gpt-realtime-2"
     app.voice = "marin"

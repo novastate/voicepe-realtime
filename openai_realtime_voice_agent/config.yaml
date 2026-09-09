@@ -1,5 +1,5 @@
 name: OpenAI Realtime 2 Voice Agent (Raawr)
-version: "0.17.5"
+version: "0.18.0"
 slug: openai_realtime_voice_agent
 description: Talk to your home with OpenAI gpt-realtime-2 — a voice agent for the Home Assistant Voice PE, with live device control and web search.
 url: https://github.com/TristanBrotherton/voicepe-realtime
@@ -69,6 +69,8 @@ options:
   # does not support it, and the add-on refuses the combination rather than
   # letting the session be rejected.
   gemini_proactive_audio: false
+  # Matchar tonen den hör. Samma krav som ovan: native-audio-modell.
+  gemini_affective_dialog: false
   # How long the backup runs before the primary is tried again.
   provider_cooldown_minutes: 30
   instructions: >-
@@ -187,6 +189,7 @@ schema:
   gemini_vad_prefix_padding_ms: int(0,2000)
   gemini_vad_silence_duration_ms: int(0,5000)
   gemini_proactive_audio: bool
+  gemini_affective_dialog: bool
   provider_cooldown_minutes: int(1,1440)
   instructions: str
   transcription_language: str?

@@ -335,3 +335,11 @@ configuration:
       models/gemini-2.5-flash-native-audio-latest first. Gemini 3.1 Flash Live
       does not support it; with that model this setting is ignored and a
       warning is logged.
+  gemini_affective_dialog:
+    name: "🔀 Voice engine · Gemini: match the tone it hears"
+    description: >-
+      The model adapts how it speaks to the expression and tone of your voice,
+      instead of reading every answer in the same flat way. Same requirement
+      as proactive audio: set the Gemini model to
+      models/gemini-2.5-flash-native-audio-latest first. Ignored with a
+      warning on Gemini 3.1 Flash Live.
