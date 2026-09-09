@@ -160,34 +160,32 @@ async def test_the_speaker_name_reaches_a_real_openai_service():
 
 
 @pytest.mark.asyncio
-async def test_gemini_note_is_appended_silently_and_flags_the_turn_close():
-    """ROUND 3's core proof: the note reaches Gemini's real session via
-    send_client_content, with turn_complete=False (nothing audible at
-    injection time -- there is no second, turn_complete=True call made by
-    this code at all), and the service's own pending-turn-close flag ends up
-    True so that its ALREADY-WIRED _handle_user_stopped_speaking silently
-    closes the turn on the next real turn boundary. This is the exact
-    behaviour _create_initial_response itself relies on for the same
-    no-immediate-reply purpose."""
-    from app.websocket_handler import make_speaker_note
+async def test_gemini_is_never_told_who_is_speaking():
+    """Measured in the house 2026-09-09, and it cost an afternoon.
+
+    Sending the note made Gemini answer the next question in TEXT ONLY. The
+    reply was generated — the transcript showed it, using the person's name,
+    so the note plainly arrived — but no audio followed, the device sat in
+    `thinking`, and the watchdog forced it idle after 15 seconds. The
+    assistant was mute. Turning the speaker probe off brought the voice back
+    on the very next utterance.
+
+    Reasoning about the turn bookkeeping offline said this was safe. The room
+    said otherwise, and the room wins. Nothing goes to Gemini now.
+    """
+    from app.websocket_handler import _send_gemini_note_silently
 
     service = build_service(GEMINI, _gemini_options(), [])
     fake_session = _FakeGeminiSession()
     service._session = fake_session
-    assert service._needs_turn_complete_message is False  # sanity: real default
 
-    connection = DeviceConnection(device_id="kitchen", websocket=object())
-    connection.provider = GEMINI
+    sent = await _send_gemini_note_silently(service, "The person speaking now is Henrik.")
 
-    await make_speaker_note(connection, service)("male", "Henrik", 132.0)
-
-    assert len(fake_session.calls) == 1
-    call = fake_session.calls[0]
-    assert call["turn_complete"] is False
-    assert any("Henrik" in (part.text or "") for content in call["turns"] for part in content.parts)
-    assert service._needs_turn_complete_message is True
-
-
+    assert sent is False
+    assert fake_session.calls == []
+    # And the turn bookkeeping is left exactly as it was found, so nothing
+    # else in the service starts behaving as if a turn were open.
+    assert service._needs_turn_complete_message is False
 @pytest.mark.asyncio
 async def test_gemini_missing_turn_close_bridge_skips_and_logs_error(caplog):
     """The structural guard: if `_needs_turn_complete_message` is gone (a

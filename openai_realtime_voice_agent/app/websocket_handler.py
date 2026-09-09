@@ -771,13 +771,29 @@ async def _send_gemini_note_silently(service, text: str) -> bool:
     if not turns:
         return False
 
-    await session.send_client_content(turns=turns, turn_complete=False)
-    # Mirrors _create_initial_response's own bookkeeping exactly: the next
-    # real UserStoppedSpeakingFrame (already wired into process_frame, driven
-    # by the live pipeline's own VAD -- nothing we trigger) will see this
-    # flag and silently close the turn via _handle_user_stopped_speaking.
-    service._needs_turn_complete_message = True
-    return True
+    # ⛔ MEASURED IN THE HOUSE 2026-09-09, and it cost an afternoon. Sending
+    # the note this way makes Gemini answer the user's next question in TEXT
+    # ONLY: the reply is generated -- the transcript shows it, using the
+    # person's name, so the note plainly arrived -- but no audio ever follows,
+    # the device sits in `thinking`, and the 15 s watchdog forces it idle. The
+    # assistant is mute. Turning the speaker probe off made the voice come
+    # back immediately, on the very next utterance.
+    #
+    # The mechanism is the turn bookkeeping: the note opens a turn that the
+    # user's own utterance then finishes, and the model treats the merged turn
+    # as text. Reasoning about it offline said this was safe; the room said
+    # otherwise, and the room wins.
+    #
+    # So Gemini does not get the note. The name still reaches the male-only
+    # tool gate and the Home Assistant sensor -- neither goes through the
+    # model -- so only the model's ability to address the person by name is
+    # lost, and only while Gemini is the engine. OpenAI is untouched.
+    logger.info(
+        "🗣️ gemini: not telling the model who is speaking — sending the note "
+        "leaves the reply text-only and the device mute (measured). The name "
+        "still reaches the tool gate and the sensor."
+    )
+    return False
 
 
 def make_speaker_note(connection, openai_service, probe=None):
