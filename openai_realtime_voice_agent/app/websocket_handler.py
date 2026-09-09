@@ -1455,6 +1455,17 @@ class WebSocketHandler:
         recovery = connection.recovery
         if recovery is None:
             return
+        # force_reconnect stands back from an engine that heals itself, so on
+        # Gemini this would log an alarming warning about a repair that never
+        # happens. Checked here too, so the log stays honest. DeviceConnection
+        # defaults its provider to "" (a connection built before the engine was
+        # resolved, and every test that constructs one directly); OPENAI is the
+        # same fallback ConnectionRecovery uses, so an unnamed engine keeps
+        # today's behaviour rather than raising inside a background task.
+        from app.providers import self_heals
+
+        if self_heals(connection.provider or OPENAI):
+            return
         logger.warning(
             "🧟 no server VAD activity %.0fs after wake — presuming a "
             "half-open OpenAI socket, reconnecting", self.WEDGE_TIMEOUT_S

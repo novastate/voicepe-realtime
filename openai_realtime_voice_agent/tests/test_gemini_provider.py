@@ -382,3 +382,25 @@ def test_the_native_audio_features_ask_for_the_api_version_that_accepts_them():
         OPENAI_SHAPE,
     )
     assert service._http_options.api_version == "v1alpha"
+
+
+def test_a_native_audio_model_gets_no_language_code():
+    """Probed live 2026-09-09: models/gemini-2.5-flash-native-audio-latest
+    refuses 'sv' AND 'sv-SE' with 1007 Unsupported language code, but opens
+    happily with none at all. The system instruction is written in Swedish and
+    says so explicitly, so the prompt steers the language instead."""
+    service = build_service(
+        "gemini",
+        _options(model="models/gemini-2.5-flash-native-audio-latest"),
+        OPENAI_SHAPE,
+    )
+    assert service._settings.get("language") is None
+
+
+def test_the_half_cascade_model_keeps_its_language_code():
+    """The rule must be narrow: 3.1 Flash Live does take the code, and losing
+    it there would hand a Swedish house a model guessing at its language."""
+    from pipecat.transcriptions.language import Language
+
+    service = build_service("gemini", _options(), OPENAI_SHAPE)
+    assert service._settings.get("language") == Language.SV_SE

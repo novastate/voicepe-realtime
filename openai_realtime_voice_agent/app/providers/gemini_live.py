@@ -74,6 +74,20 @@ _END_SENSITIVITY = {
 NATIVE_AUDIO_API_VERSION = "v1alpha"
 NATIVE_AUDIO_MODEL_MARKER = "native-audio"
 
+# The native-audio models refuse an explicit language code this house needs.
+# Probed live 2026-09-09 against models/gemini-2.5-flash-native-audio-latest:
+#
+#   None   -> OK        sv     -> 1007 Unsupported language code 'sv'
+#   en-US  -> OK        sv-SE  -> 1007 Unsupported language code 'sv-SE'
+#   de-DE  -> OK
+#
+# With no code at all the session opens and the model takes its language from
+# what it hears and from the system instruction -- which is written entirely
+# in Swedish and says so explicitly. So on these models the language is
+# steered by the prompt rather than pinned by a setting. That is a real
+# difference worth knowing about, so it is logged, not hidden.
+NATIVE_AUDIO_PINS_LANGUAGE = False
+
 
 def to_gemini_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Convert OpenAI Realtime tool definitions to Gemini declarations.
@@ -205,6 +219,19 @@ class ResilientGeminiLiveService(GeminiLiveLLMService):
     fatal, which is the case the counter exists for.
     """
 
+    def drop_language_code(self) -> None:
+        """Open the session without pinning a language.
+
+        pipecat has no way to say "no language": `InputParams.language=None`
+        is turned into the string "en-US" (its own default) before it ever
+        reaches the wire, which would pin a Swedish house to English --
+        quietly, since en-US is a code the model DOES accept. The only honest
+        way to send nothing is to clear the resolved setting the connect path
+        reads. See NATIVE_AUDIO_PINS_LANGUAGE for why this is needed at all.
+        """
+        self._language_code = None
+        self._settings["language"] = None
+
     async def end_audio_stream(self) -> None:
         """Tell Google the microphone just stopped, and drop what it holds.
 
@@ -309,6 +336,7 @@ def build(options, tools: List[Dict[str, Any]]) -> GeminiLiveLLMService:
     language = _resolve_language(options.language or "sv-SE")
     vad = _build_vad_params(options)
     proactivity, affective, http_options = _native_audio_features(options, model)
+    drop_language = NATIVE_AUDIO_MODEL_MARKER in model and not NATIVE_AUDIO_PINS_LANGUAGE
     params = InputParams(
         max_tokens=options.max_output_tokens or 4096,
         language=language,
@@ -318,14 +346,14 @@ def build(options, tools: List[Dict[str, Any]]) -> GeminiLiveLLMService:
     )
     logger.info(
         f"🔧 Gemini Live session: model={model} voice={voice} "
-        f"lang={language} tools={len(tools)}"
+        f"lang={'(from prompt)' if drop_language else language} tools={len(tools)}"
     )
     logger.info(
         f"🎚️ Gemini turn detection: start={vad.start_sensitivity} "
         f"end={vad.end_sensitivity} prefix={vad.prefix_padding_ms}ms "
         f"silence={vad.silence_duration_ms}ms"
     )
-    return ResilientGeminiLiveService(
+    service = ResilientGeminiLiveService(
         api_key=options.api_key,
         model=model,
         voice_id=voice,
@@ -342,3 +370,10 @@ def build(options, tools: List[Dict[str, Any]]) -> GeminiLiveLLMService:
         # google-genai on its own default version.
         http_options=http_options,
     )
+    if drop_language:
+        logger.info(
+            f"🌍 {model} refuses an explicit '{language}' — sending no language code "
+            f"and letting the Swedish system prompt steer it"
+        )
+        service.drop_language_code()
+    return service

@@ -2,6 +2,22 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.18.2 (fork)
+
+- **The native-audio model can actually be used in a Swedish house.** It
+  refuses an explicit language code this house needs — probed live:
+  `sv` and `sv-SE` both come back `1007 Unsupported language code`, while
+  `en-US`, `de-DE` and *no code at all* open fine. So on these models the code
+  is dropped and the (entirely Swedish) system instruction steers the
+  language. There is no clean way to ask pipecat for that: `language=None`
+  becomes the string `"en-US"` before it reaches the wire, which would have
+  pinned the house to English *silently*, since en-US is a code the model
+  accepts. The setting is cleared on the built service instead, and logged.
+- **The wedge warning stopped crying wolf on Gemini.** `force_reconnect` has
+  stood back from a self-healing engine since 0.17.3, but the alarming
+  "presuming a half-open OpenAI socket" warning was logged before the guard
+  was reached, so the log kept reporting a repair that never happened.
+
 ## 0.18.1 (fork)
 
 - **Proactive audio actually reaches the session now.** 0.18.0 followed
