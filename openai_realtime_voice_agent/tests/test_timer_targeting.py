@@ -45,7 +45,7 @@ async def main():
 
     await registry._fire(1)
 
-    assert calls[0] == ("announce", "Your pasta timer is done.", "kitchen")
+    assert calls[0] == ("announce", "Din timer för pasta är klar.", "kitchen")
     assert calls[1] == ("wake", "kitchen")
     assert registry._timers == {}
 

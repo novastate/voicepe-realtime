@@ -2,6 +2,16 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.19.3 (fork)
+
+- **Timern talade engelska i ett svenskt hus.** Hört live 2026-09-09 22:58:
+  "Henrik, your timer is done." Utropet vid utgången är den enda mening
+  add-onet säger utan att modellen skrivit den, och den var kvar på engelska
+  sedan uppströms. Nu: "Henrik, din timer är klar." — och med etikett "Henrik,
+  din timer för pasta är klar." Utan namn får meningen den stora bokstaven
+  namnet annars bär. Ingen inställning: prompten, transkriberingsspråket och
+  huset är svenska, en språkknapp här vore bara ett andra ställe att glömma.
+
 ## 0.19.2 (fork)
 
 - **Tools died 81 ms after they started, and the assistant said they had

@@ -95,17 +95,28 @@ class TimerRegistry:
             return
         owner = t.get("owner") or ""
         label = t["label"]
-        # "timer 3" default labels make clumsy sentences ("your timer 3 timer")
-        nice = "" if re.fullmatch(r"timer \d+", label) else f"{label} "
+        # "timer 3" default labels make clumsy sentences ("din timer 3-timer")
+        nice = "" if re.fullmatch(r"timer \d+", label) else f" för {label}"
         logger.info(f"⏰ timer {tid} ('{label}', owner={owner or '-'}) expired")
         # 1. One personal spoken announcement (no nagging nudges).
+        #    Swedish: this is the only sentence in the add-on the house hears
+        #    without the model writing it, and it was the one English line left
+        #    in a Swedish room (heard live 2026-09-09: "Henrik, your timer is
+        #    done"). Not a setting — the prompt, the transcription language and
+        #    the whole house are Swedish; a language knob here would only be a
+        #    second place to forget.
         announced = False
         if self.announcer is not None:
             try:
-                who = f"{owner.capitalize()}, y" if owner else "Y"
-                announced = await self.announcer(
-                    f"{who}our {nice}timer is done.", t["device_id"]
+                body = f"din timer{nice} är klar."
+                # Without a name the sentence starts the reply, so it needs the
+                # capital the name would otherwise carry. Only the first letter
+                # — str.capitalize() would lower-case a label like "Pasta".
+                text = (
+                    f"{owner.capitalize()}, {body}" if owner
+                    else body[0].upper() + body[1:]
                 )
+                announced = await self.announcer(text, t["device_id"])
             except Exception as e:
                 logger.warning(f"⚠️ timer announcement failed: {e!r}")
         # 2. Grace: a wake from the originating device acknowledges it.
