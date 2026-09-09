@@ -2,6 +2,17 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.19.5 (fork)
+
+- **Timern ringer, och gör inget annat.** En 30-sekunderstimer var en röst vid
+  30 s och en klocka vid 50 s: ett talat utrop först, sedan 20 sekunders
+  respit, sedan bjällran om ingen väckt enheten. Rösten kom dessutom från en
+  annan motor än björnen. Efterfrågat och borttaget 2026-09-09: "det räcker
+  med chime på rätt tid". En timer är det enda i huset som måste vara exakt.
+  Utropet, respiten, ägaren och väck-kvittensen är borta — inte avstängda,
+  borta, med sin inkoppling i main.py. TTS-banan finns kvar för
+  inspelningscoachen och announce-endpointen.
+
 ## 0.19.4 (fork)
 
 - **En främling i huset läste upp timern.** Utropet vid utgången går genom

@@ -8,11 +8,12 @@ ring is triggered by flipping that switch via the HA API (TIMER_RING_ENTITY
 option). If no entity is configured the assistant simply announces expiry is
 unavailable rather than pretending.
 
+Expiry is the bell alone, on the second — no spoken announcement, no grace.
+
 Timers survive OpenAI session refreshes (they live here, not in the model) but
 NOT add-on restarts — acceptable for kitchen timers; documented in DOCS.
 """
 import asyncio
-import re
 import logging
 import os
 import time
@@ -28,7 +29,6 @@ logger = logging.getLogger(__name__)
 MAX_TIMERS = 10
 MAX_DURATION_S = 24 * 3600
 RING_AUTO_OFF_S = 120  # stop ringing after 2 min if nobody silences it
-ANNOUNCE_GRACE_S = 20  # spoken announcement first; ring only if unacknowledged
 
 
 def _ring_entity(device_id: str, allow_legacy: bool = True) -> str:
@@ -63,11 +63,8 @@ class TimerRegistry:
     def __init__(self):
         self._timers: Dict[int, dict] = {}
         self._next_id = 1
-        # Wired by main.py. Every callback accepts the timer's device ID so an
-        # expiry stays in the room where it was created.
-        self.announcer = None
-        self.get_owner = None
-        self.last_wake = None
+        # Wired by main.py. Takes the timer's device ID so an expiry rings in
+        # the room where it was created.
         self.allow_legacy_ring = None
 
     def _prune(self):
@@ -80,54 +77,16 @@ class TimerRegistry:
         if not t:
             return
         try:
-            # The speaker verdict often lands a few seconds AFTER set_timer's
-            # tool call (probe needs mic audio) — re-capture the owner once.
-            wait = t["ends"] - time.monotonic()
-            if not t.get("owner") and self.get_owner is not None and wait > 8:
-                await asyncio.sleep(6)
-                try:
-                    t["owner"] = (self.get_owner(t["device_id"]) or "").strip().lower()
-                except Exception:
-                    pass
-                wait = t["ends"] - time.monotonic()
-            await asyncio.sleep(max(0.0, wait))
+            await asyncio.sleep(max(0.0, t["ends"] - time.monotonic()))
         except asyncio.CancelledError:
             return
-        owner = t.get("owner") or ""
-        label = t["label"]
-        # "timer 3" default labels make clumsy sentences ("din timer 3-timer")
-        nice = "" if re.fullmatch(r"timer \d+", label) else f" för {label}"
-        logger.info(f"⏰ timer {tid} ('{label}', owner={owner or '-'}) expired")
-        # 1. One personal spoken announcement (no nagging nudges).
-        #    Swedish: this is the only sentence in the add-on the house hears
-        #    without the model writing it, and it was the one English line left
-        #    in a Swedish room (heard live 2026-09-09: "Henrik, your timer is
-        #    done"). Not a setting — the prompt, the transcription language and
-        #    the whole house are Swedish; a language knob here would only be a
-        #    second place to forget.
-        announced = False
-        if self.announcer is not None:
-            try:
-                body = f"din timer{nice} är klar."
-                # Without a name the sentence starts the reply, so it needs the
-                # capital the name would otherwise carry. Only the first letter
-                # — str.capitalize() would lower-case a label like "Pasta".
-                text = (
-                    f"{owner.capitalize()}, {body}" if owner
-                    else body[0].upper() + body[1:]
-                )
-                announced = await self.announcer(text, t["device_id"])
-            except Exception as e:
-                logger.warning(f"⚠️ timer announcement failed: {e!r}")
-        # 2. Grace: a wake from the originating device acknowledges it.
-        if announced:
-            t0 = time.monotonic()
-            await asyncio.sleep(ANNOUNCE_GRACE_S)
-            if self.last_wake is not None and self.last_wake(t["device_id"]) > t0:
-                logger.info(f"⏰ timer {tid} acknowledged by wake — no ring")
-                self._timers.pop(tid, None)
-                return
-        # 3. The gentle bell (auto-off backstop unchanged).
+        logger.info(f"⏰ timer {tid} ('{t['label']}') expired")
+        # The bell, on the second, and nothing else. There used to be a spoken
+        # announcement first and a 20 s grace before the bell — so a 30 s
+        # kitchen timer was a voice at 30 s and a chime at 50 s. Asked for and
+        # removed 2026-09-09: "det räcker med chime på rätt tid". A timer is
+        # the one thing in this house that must be exact, and a sentence read
+        # by a different engine in a different voice was never the point.
         logger.info(f"⏰ timer {tid} escalating to ring")
         allow_legacy = (
             self.allow_legacy_ring(t["device_id"])
@@ -138,7 +97,7 @@ class TimerRegistry:
             await _set_ring(False, t["device_id"], allow_legacy)
         self._timers.pop(tid, None)
 
-    def set_timer(self, seconds: int, label: str, owner: str = "", device_id: str = "") -> dict:
+    def set_timer(self, seconds: int, label: str, device_id: str = "") -> dict:
         self._prune()
         if sum(t["device_id"] == device_id for t in self._timers.values()) >= MAX_TIMERS:
             return {"error": "too many timers running"}
@@ -146,7 +105,6 @@ class TimerRegistry:
         tid = self._next_id
         self._next_id += 1
         self._timers[tid] = {
-            "owner": (owner or "").strip().lower(),
             "device_id": device_id,
             "label": label or f"timer {tid}",
             "ends": time.monotonic() + seconds,
@@ -220,14 +178,8 @@ def get_timer_tool_definitions() -> list:
 def register_timer_tools(llm, registry: "TimerRegistry", device_id: str) -> None:
     async def _set(params: "FunctionCallParams") -> None:
         a = params.arguments or {}
-        owner = ""
-        if registry.get_owner is not None:
-            try:
-                owner = registry.get_owner(device_id) or ""
-            except Exception:
-                pass
         await params.result_callback(registry.set_timer(
-            a.get("seconds", 0), (a.get("label") or "").strip(), owner, device_id
+            a.get("seconds", 0), (a.get("label") or "").strip(), device_id
         ))
 
     async def _cancel(params: "FunctionCallParams") -> None:

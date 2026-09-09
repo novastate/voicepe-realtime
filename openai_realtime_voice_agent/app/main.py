@@ -432,8 +432,9 @@ class Application:
                     "to the speaker settings in the add-on configuration, then restart it.")
             await PUBLISHER.voice_prints()
         self.enrollment_conductor.on_finished = _auto_build_voiceprint
-        # Timers: personalized spoken expiry via the conductor's TTS lane,
-        # owner from the live speaker verdict, wake-ack from the serializer.
+        # The conductor's TTS lane, guarded so the device cannot hear itself
+        # speak. Used by the announce endpoint below. NOT by timers: a timer
+        # expiry is the bell alone, on the second (see app/timers.py).
         async def _guarded_say(text, device_id=None):
             # Speak on ONE device. With several connected, "the device" is
             # whichever was named, else the one most recently spoken to.
@@ -448,21 +449,6 @@ class Application:
             finally:
                 if ser is not None:
                     ser.suppress_inbound_until = _t.monotonic() + 1.2
-        self.timer_registry.announcer = _guarded_say
-        self.timer_registry.get_owner = lambda device_id: self._speaker_name(
-            self.websocket_handler.resolve_device(device_id)
-        )
-        def _last_wake(device_id: str) -> float:
-            connection = self.websocket_handler.resolve_device(device_id)
-            ser = connection.serializer if connection else None
-            if ser is None:
-                return 0.0
-            return max(
-                getattr(ser, "_last_wake_mono", 0.0),
-                getattr(ser, "_last_button_mono", 0.0),
-            )
-
-        self.timer_registry.last_wake = _last_wake
         self.timer_registry.allow_legacy_ring = lambda device_id: (
             len(self.websocket_handler.devices) == 1
             and self.websocket_handler.resolve_device(device_id) is not None

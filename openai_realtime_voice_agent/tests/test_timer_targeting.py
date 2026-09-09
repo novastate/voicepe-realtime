@@ -20,22 +20,20 @@ async def main():
     assert timers._ring_entity("bedroom") == "switch.legacy_timer"
     assert timers._ring_entity("bedroom", allow_legacy=False) == ""
 
-    timers.ANNOUNCE_GRACE_S = 0
     registry = TimerRegistry()
+
+    # Expiry is the bell alone, on the second: no spoken announcement, no
+    # grace period. A 30 s kitchen timer used to be a voice at 30 s and a
+    # chime at 50 s; the operator asked for the chime and nothing else.
     calls = []
 
-    async def announce(text, device_id):
-        calls.append(("announce", text, device_id))
+    async def set_ring(on, device_id, allow_legacy=True):
+        calls.append((on, device_id))
         return True
 
-    def last_wake(device_id):
-        calls.append(("wake", device_id))
-        return time.monotonic()
-
-    registry.announcer = announce
-    registry.last_wake = last_wake
+    timers._set_ring = set_ring
+    timers.RING_AUTO_OFF_S = 0
     registry._timers[1] = {
-        "owner": "",
         "device_id": "kitchen",
         "label": "pasta",
         "ends": time.monotonic(),
@@ -45,8 +43,7 @@ async def main():
 
     await registry._fire(1)
 
-    assert calls[0] == ("announce", "Din timer för pasta är klar.", "kitchen")
-    assert calls[1] == ("wake", "kitchen")
+    assert calls == [(True, "kitchen"), (False, "kitchen")], calls
     assert registry._timers == {}
 
     # Voice tools must not expose or cancel timers from another room.
@@ -71,7 +68,7 @@ async def main():
     timers._set_ring = set_ring
     timers.RING_AUTO_OFF_S = 0
     registry._timers[3] = {
-        "owner": "", "device_id": "office", "label": "tea",
+        "device_id": "office", "label": "tea",
         "ends": time.monotonic(), "wall": time.time(), "task": asyncio.current_task(),
     }
     registry.announcer = None
@@ -81,7 +78,7 @@ async def main():
 
     registry.allow_legacy_ring = lambda _device_id: False
     registry._timers[4] = {
-        "owner": "", "device_id": "bedroom", "label": "bread",
+        "device_id": "bedroom", "label": "bread",
         "ends": time.monotonic(), "wall": time.time(), "task": asyncio.current_task(),
     }
     await registry._fire(4)
