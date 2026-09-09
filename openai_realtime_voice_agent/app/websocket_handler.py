@@ -964,7 +964,9 @@ class WebSocketHandler:
         context_initializer = None
         if self.session_manager:
             context_aggregator = self.session_manager.create_context_aggregator(client_id)
-            context_initializer = self.session_manager.create_context_initializer(client_id, context_aggregator)
+            context_initializer = self.session_manager.create_context_initializer(
+                client_id, context_aggregator, openai_service, connection.provider or OPENAI
+            )
         
         # Build pipeline components. InputResampler runs FIRST (right after the
         # transport) so every later stage — VAD, context aggregator, OpenAI

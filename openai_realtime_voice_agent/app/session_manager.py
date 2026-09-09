@@ -4,11 +4,11 @@ import time
 from typing import Optional, Dict
 from pipecat.processors.aggregators.llm_context import LLMContext
 
-from app.context_restore import _strip_tool_plumbing
+from app.context_restore import _strip_tool_plumbing, restore_context_silently
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
-from pipecat.frames.frames import Frame, StartFrame, LLMMessagesUpdateFrame
+from pipecat.frames.frames import Frame, StartFrame
 
 logger = logging.getLogger(__name__)
 
@@ -249,22 +249,33 @@ class SessionManager:
         self.set_context_aggregator(client_id, aggregator_pair)
         return aggregator_pair
     
-    def create_context_initializer(self, client_id: str, context_aggregator: LLMContextAggregatorPair) -> Optional['ContextInitializer']:
+    def create_context_initializer(
+        self,
+        client_id: str,
+        context_aggregator: LLMContextAggregatorPair,
+        service,
+        provider: str,
+    ) -> Optional['ContextInitializer']:
         """Create a context initializer if cached messages exist.
-        
+
         Args:
             client_id: Unique identifier for the client device
-            context_aggregator: The context aggregator pair
-            
+            context_aggregator: The context aggregator pair (used only to read
+                the already-restored context; see ContextInitializer's
+                docstring for why delivery no longer goes through it)
+            service: The connection's live LLM service (OpenAI or Gemini)
+            provider: "openai" or "gemini" -- selects the delivery channel
+
         Returns:
             ContextInitializer if cached messages exist, None otherwise
         """
         context = context_aggregator.user().context
         if len(context.get_messages()) > 0:
             return ContextInitializer(
-                context_aggregator=context_aggregator,
                 cached_context=context,
-                client_id=client_id
+                client_id=client_id,
+                service=service,
+                provider=provider,
             )
         return None
     
@@ -292,33 +303,81 @@ class SessionManager:
 
 
 class ContextInitializer(FrameProcessor):
-    """Processor that sends cached context after StartFrame has passed through the pipeline."""
-    
-    def __init__(self, context_aggregator, cached_context, client_id, **kwargs):
+    """Processor that restores cached context after StartFrame passes through
+    the pipeline.
+
+    FIX (Task 9b): the previous version pushed an `LLMMessagesUpdateFrame` at
+    `context_aggregator.user()` via `push_frame`. That never worked, on
+    either engine, possibly ever: `FrameProcessor.push_frame` forwards a
+    frame to whatever is linked next in the pipeline -- it does NOT invoke
+    the target processor's own `process_frame`. So the frame sailed straight
+    past the aggregator's `_handle_llm_messages_update` (which is where
+    `set_messages`/REPLACE semantics and the run_llm=False no-response
+    guarantee actually live) and landed, unhandled, at the LLM service.
+    Neither `OpenAIRealtimeLLMService` nor `GeminiLiveLLMService` has a
+    branch for `LLMMessagesUpdateFrame` in `process_frame`, so it fell
+    through to the default "forward it on" case and vanished. The log line
+    that used to fire here (`📤 Sent cached context...`) printed
+    unconditionally, which is exactly why nobody noticed.
+
+    This is the same defect class Task 6b hit and fixed for a different
+    feature (telling the model who is speaking) -- see `make_speaker_note`
+    and `_send_gemini_note_silently` in websocket_handler.py. The fix here
+    follows the same shape: talk to each engine's own session directly
+    (`app.context_restore.restore_context_silently`) instead of routing
+    through pipecat's frame system, which this specific delivery -- from
+    outside the pipeline's own frame flow, before any real turn has
+    happened -- was never able to reach.
+
+    Note that `context_aggregator.user().context` is frequently the SAME
+    `LLMContext` object as `cached_context` (SessionManager pre-seeds a new
+    session's aggregator with the restored messages at construction time),
+    so this class no longer needs a reference to the aggregator at all --
+    only the messages themselves and the live service to deliver them to.
+    """
+
+    def __init__(self, cached_context, client_id, service, provider, **kwargs):
         super().__init__(**kwargs)
-        self.context_aggregator = context_aggregator
         self.cached_context = cached_context
         self.client_id = client_id
+        self.service = service
+        self.provider = provider
         self.context_sent = False
-    
+
     async def process_frame(self, frame: Frame, direction: FrameDirection):
-        """Process frames and send cached context after StartFrame."""
+        """Process frames and restore cached context after StartFrame."""
         if isinstance(frame, StartFrame):
             await super().process_frame(frame, direction)
             await self.push_frame(frame, direction)
-            
-            # Send cached context after StartFrame has passed through the pipeline
-            # Use LLMMessagesUpdateFrame with run_llm=False to set context without triggering a response
+
+            # Restore cached context after StartFrame has passed through the
+            # pipeline, directly on the engine's own session -- never
+            # triggering a response. The bot waits for the user to speak.
             if self.cached_context and not self.context_sent:
-                context = self.cached_context
-                messages = context.get_messages()
+                messages = self.cached_context.get_messages()
                 if len(messages) > 0:
-                    # Update messages without triggering LLM response
-                    # The bot will wait for the user to speak first
-                    update_frame = LLMMessagesUpdateFrame(messages=messages, run_llm=False)
-                    await self.context_aggregator.user().push_frame(update_frame)
-                    logger.info(f"📤 Sent cached context ({len(messages)} messages) to OpenAI for client {self.client_id} (waiting for user)")
                     self.context_sent = True
+                    try:
+                        restored = await restore_context_silently(
+                            self.provider, self.service, messages
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"⚠️ Failed to restore cached context for client "
+                            f"{self.client_id}: {e!r}"
+                        )
+                        restored = False
+                    if restored:
+                        logger.info(
+                            f"📤 Restored cached context ({len(messages)} "
+                            f"messages) for client {self.client_id} (waiting for user)"
+                        )
+                    else:
+                        logger.info(
+                            f"Cached context for client {self.client_id} was "
+                            f"not restored (engine not connected yet, or "
+                            f"nothing to send)"
+                        )
             return
-        
+
         await self.push_frame(frame, direction)
