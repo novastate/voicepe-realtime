@@ -2,6 +2,33 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.17.0 (fork)
+
+- **Second voice engine: Google Gemini Live**, as an alternative to OpenAI
+  Realtime. `voice_provider` picks the primary engine (`openai` default —
+  unchanged behaviour for existing installs); `voice_provider_backup` names a
+  second engine that takes over automatically when the primary runs out of
+  money, has its key rejected, or its socket dies and a retry doesn't help.
+  New options: `gemini_api_key`, `gemini_model`, `gemini_voice`,
+  `provider_cooldown_minutes` (default 30 — how long the backup runs before
+  the primary is tried again).
+- Failure is classified before any switch is made: quota/billing and
+  auth/model errors switch immediately; a transient error (timeout, dead
+  socket, 5xx) gets one retry on the same engine first; a tool error never
+  triggers a switch.
+- New `sensor.voicepe_<instance>_motor`: which engine is running, with
+  `reason`, `switched_at`, and `retry_primary_in_s` attributes, so a switch is
+  visible instead of only appearing in the log.
+- Both engines get the same tools, system prompt, memory, and duck/interrupt
+  behaviour. What's genuinely different between them (voice names, no
+  `openai_speed` or noise reduction on Gemini, its own VAD tuning, cost
+  observability only implemented for OpenAI so far) is documented in
+  `Docs/superpowers/specs/2026-09-08-gemini-live-provider-design.md` in the
+  main Raawr repo, not hidden behind a claim of parity.
+- 153 unit tests cover the router, failure classification, and both provider
+  modules (no API keys required to run them). **Not yet exercised against a
+  live house** — that verification is a separate, manual step.
+
 ## 0.16.11 (fork)
 
 - Fixed announcements immediately after a single Voice PE reconnect. The sole
