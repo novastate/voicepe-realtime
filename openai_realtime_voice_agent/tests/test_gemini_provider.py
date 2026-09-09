@@ -1,5 +1,7 @@
 """Gemini takes the same tools, in its own shape."""
 
+import pytest
+
 from app.providers import ProviderOptions, build_service
 from app.providers.gemini_live import to_gemini_tools
 
@@ -224,3 +226,63 @@ def test_proactive_audio_reaches_a_native_audio_session():
         OPENAI_SHAPE,
     )
     assert service._settings["proactivity"].proactive_audio is True
+
+
+class _Recorder:
+    """Collects the fatal errors the service would push."""
+
+    def __init__(self):
+        self.fatal = []
+
+
+def _service_with_failures(failures: int, connection_age_s: float):
+    import time as _time
+
+    service = build_service("gemini", _options(), OPENAI_SHAPE)
+    recorder = _Recorder()
+
+    async def fake_push_error(error_msg, exception=None):
+        recorder.fatal.append(error_msg)
+
+    service.push_error = fake_push_error
+    service._consecutive_failures = failures
+    service._connection_start_time = _time.time() - connection_age_s
+    return service, recorder
+
+
+@pytest.mark.asyncio
+async def test_an_idle_hangup_after_a_long_connection_is_forgiven():
+    """The device is push-to-talk, so a quiet house sends Google nothing and
+    Google hangs up -- measured at a very regular ~152s. pipecat only forgives
+    a failure from inside its receive loop, which a silent connection never
+    reaches, so three quiet hang-ups in a row were pushed as fatal. Live
+    2026-09-09 17:05:41: the engine died and stayed dead for 45 minutes."""
+    service, recorder = _service_with_failures(failures=2, connection_age_s=152)
+
+    should_reconnect = await service._handle_connection_error(RuntimeError("1008"))
+
+    assert should_reconnect is True
+    assert recorder.fatal == []
+    # Forgiven back to zero, then this one counted: one strike, not three.
+    assert service._consecutive_failures == 1
+
+
+@pytest.mark.asyncio
+async def test_a_genuinely_broken_engine_still_reaches_fatal():
+    """The forgiveness must not be a blanket amnesty. Three failures inside
+    the stable-connection threshold mean the engine really cannot hold a
+    socket, which is the case the counter exists for."""
+    service, recorder = _service_with_failures(failures=2, connection_age_s=1)
+
+    should_reconnect = await service._handle_connection_error(RuntimeError("1008"))
+
+    assert should_reconnect is False
+    assert recorder.fatal and "fatal" in recorder.fatal[0]
+
+
+@pytest.mark.asyncio
+async def test_the_first_failure_is_never_fatal_whatever_the_age():
+    service, recorder = _service_with_failures(failures=0, connection_age_s=0.5)
+
+    assert await service._handle_connection_error(RuntimeError("1008")) is True
+    assert recorder.fatal == []

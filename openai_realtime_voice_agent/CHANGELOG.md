@@ -2,6 +2,22 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.17.5 (fork)
+
+- **A quiet house no longer kills the Gemini engine.** The Voice PE is
+  push-to-talk: between conversations the add-on sends Google nothing, and
+  Google hangs up on a session it hears nothing from — measured live at a very
+  regular ~152 s of silence. pipecat reconnects in about half a second, so the
+  hang-up itself is invisible. But pipecat only forgives a failure from inside
+  its receive loop, when a message ARRIVES; a silent connection delivers none,
+  so the stable-connection rule never ran and the count never cleared. Three
+  idle hang-ups in a row — about seven and a half quiet minutes — were pushed
+  as a fatal error. Live 2026-09-09 17:05:41: the engine died and the house
+  had no voice until the add-on was restarted 45 minutes later. The service is
+  now a subclass that runs pipecat's own rule at the moment of failure, when
+  the connection's lifetime is known. Three failures inside the threshold
+  still go fatal — that is the case the counter is for.
+
 ## 0.17.4 (fork)
 
 - **A false wake can be reported again.** Both ways of flagging one -- saying

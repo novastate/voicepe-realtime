@@ -10,6 +10,7 @@ is a preview name and will be retired in turn, so the model is a setting and
 this default is only the one that worked on the day it was written.
 """
 import logging
+import time
 from typing import Any, Dict, List
 
 from google.genai.types import (
@@ -163,6 +164,51 @@ def _build_vad_params(options) -> GeminiVADParams:
     )
 
 
+class ResilientGeminiLiveService(GeminiLiveLLMService):
+    """Gemini Live that does not mistake a quiet house for a broken engine.
+
+    The Voice PE is push-to-talk: it streams the microphone only during a turn
+    and the follow-up window, so between conversations this add-on sends
+    Google nothing at all. Google hangs up on a session it hears nothing from
+    -- measured live 2026-09-09 at a very regular ~152 s of silence, with the
+    server's own GoAway on the way out. pipecat reconnects in about half a
+    second, and the reconnect is invisible to the user, so an idle hang-up is
+    ordinary housekeeping for this device, not a failure.
+
+    pipecat counts it as one anyway, and there is a bug in how it forgives
+    them: `_check_and_reset_failure_counter` (which clears the count once a
+    connection has stood for CONNECTION_ESTABLISHED_THRESHOLD seconds) is
+    called only from inside the receive loop, when a message ARRIVES from the
+    server. A silent connection delivers no messages, so on an idle device
+    the reset never runs no matter how long the socket lived. Three idle
+    hang-ups in a row -- about seven and a half quiet minutes -- reach
+    MAX_CONSECUTIVE_FAILURES and are pushed as a fatal error. Observed
+    2026-09-09 17:05:41: the engine died and the house had no voice until the
+    add-on was restarted 45 minutes later.
+
+    The rule pipecat already has is the right one; it just never gets a turn.
+    Running it at the moment of failure -- when the connection's lifetime is
+    known exactly -- is enough. A connection that stood for its threshold
+    before dying is forgiven; three failures inside that window still go
+    fatal, which is the case the counter exists for.
+    """
+
+    async def _handle_connection_error(self, error: Exception) -> bool:
+        """Forgive a connection that stood long enough before it dropped."""
+        lifetime = None
+        if self._connection_start_time:
+            lifetime = time.time() - self._connection_start_time
+        # Runs pipecat's own stable-connection rule, which the receive loop
+        # can only reach while the server is talking to us.
+        self._check_and_reset_failure_counter()
+        if lifetime is not None and self._consecutive_failures == 0:
+            logger.info(
+                f"🔁 Gemini socket closed after {lifetime:.0f}s of an idle house — "
+                f"reconnecting, not counting it against the engine"
+            )
+        return await super()._handle_connection_error(error)
+
+
 def _proactivity_for(options, model: str):
     """Whether this session asks Google to judge if it was spoken to.
 
@@ -226,7 +272,7 @@ def build(options, tools: List[Dict[str, Any]]) -> GeminiLiveLLMService:
         f"end={vad.end_sensitivity} prefix={vad.prefix_padding_ms}ms "
         f"silence={vad.silence_duration_ms}ms"
     )
-    return GeminiLiveLLMService(
+    return ResilientGeminiLiveService(
         api_key=options.api_key,
         model=model,
         voice_id=voice,
