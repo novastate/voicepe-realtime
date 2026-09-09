@@ -26,6 +26,8 @@ from pipecat.services.google.gemini_live.llm import (
 )
 from pipecat.transcriptions.language import Language
 
+from app.providers.tool_registration import ToolRegistrationMixin
+
 logger = logging.getLogger(__name__)
 
 # Verified live 2026-09-08. The other working one is
@@ -190,7 +192,7 @@ def _build_vad_params(options) -> GeminiVADParams:
     )
 
 
-class ResilientGeminiLiveService(GeminiLiveLLMService):
+class ResilientGeminiLiveService(ToolRegistrationMixin, GeminiLiveLLMService):
     """Gemini Live that does not mistake a quiet house for a broken engine.
 
     The Voice PE is push-to-talk: it streams the microphone only during a turn

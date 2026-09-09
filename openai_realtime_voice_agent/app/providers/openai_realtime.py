@@ -10,6 +10,8 @@ import os
 
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
 
+from app.providers.tool_registration import ToolRegistrationMixin
+
 from app.realtime_payload import transform_gpt_transcription_language
 
 logger = logging.getLogger(__name__)
@@ -32,7 +34,7 @@ def _max_context_messages() -> int:
     return max(0, value)
 
 
-class SafeRealtimeLLMService(OpenAIRealtimeLLMService):
+class SafeRealtimeLLMService(ToolRegistrationMixin, OpenAIRealtimeLLMService):
     """OpenAIRealtimeLLMService with audio-truncation-on-interruption disabled.
 
     pipecat's `_truncate_current_audio_response()` (called by `_handle_interruption`
@@ -376,58 +378,6 @@ class SafeRealtimeLLMService(OpenAIRealtimeLLMService):
             )
             return True
         return False
-
-    def register_function(self, function_name, handler, start_callback=None, *,
-                          cancel_on_interruption: bool = True):  # type: ignore[override]
-        """Force cancel_on_interruption=False for every tool registration.
-
-        pipecat cancels in-flight function-call tasks on EVERY user-speech
-        interruption — and semantic_vad fires one per utterance fragment, so
-        merely continuing your own sentence kills the tool call your previous
-        fragment started. By then the HTTP request to Home Assistant has
-        usually already been SENT: the action executes, but its result never
-        reaches the model, which then tells the user it failed (observed
-        live: the lights turned ON while the assistant claimed they
-        wouldn't). Our tools are all short-lived (HA service calls, one web
-        search), so letting them finish and report the truth always beats
-        killing them halfway. This single override covers every registration
-        path (MCP tools via pipecat's MCPClient, web_search, disconnect).
-
-        The handler is also wrapped to tick its connection's liveness around its run, so
-        the PhaseEmitter's thinking-watchdog knows a tool is in flight and a
-        slow tool (web search: 10-20 s of pipeline silence) is never mistaken
-        for a dead turn. All our handlers use the single-param
-        FunctionCallParams signature, so the wrapper does too (pipecat
-        inspects the signature to pick the calling convention).
-        """
-        async def liveness_tracked(params):
-            # Speaker gate (fork): tools listed in male_only_tools only execute
-            # when the last voice-type verdict is "male". Enforced HERE — below
-            # the model — so prompt tricks can't bypass it. Fails closed on
-            # uncertain/stale/absent verdicts. This is convenience gating on a
-            # voice-type heuristic, not biometric auth.
-            if self.male_only_tools and function_name in self.male_only_tools:
-                speaker = self.speaker_probe.gate_speaker() if self.speaker_probe else "unknown"
-                if speaker != "male":
-                    owner = (self.speaker_probe.male_name if self.speaker_probe else "") or "the owner"
-                    logger.info(f"⛔ speaker gate blocked '{function_name}' (speaker={speaker})")
-                    await params.result_callback({
-                        "error": (
-                            f"Not available: this capability is reserved for {owner}, "
-                            f"and the current speaker's voice was not recognized as {owner}. "
-                            f"Relay this politely."
-                        )
-                    })
-                    return
-            self.turn_liveness.tool_started()
-            try:
-                return await handler(params)
-            finally:
-                self.turn_liveness.tool_finished()
-
-        super().register_function(
-            function_name, liveness_tracked, start_callback, cancel_on_interruption=False
-        )
 
     async def _receive_task_handler(self):  # type: ignore[override]
         """Surface OpenAI reader death as an ErrorFrame so recovery can act.

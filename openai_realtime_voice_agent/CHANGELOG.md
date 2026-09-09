@@ -2,6 +2,24 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.19.2 (fork)
+
+- **Tools died 81 ms after they started, and the assistant said they had
+  worked.** Measured live 2026-09-09 22:23: `play_media` was called, the
+  handler logged `🎵 play_media: 'chill' type=playlist player=kontoret`, and
+  81 ms later pipecat cancelled it — while the reply said "jajemän, fixar
+  det" and nothing played. Same for `GetLiveContext` and `vaderprognos`, on
+  every turn all evening. The cause is Gemini's late input transcript: it
+  arrives AFTER the model has already called the tool, and pipecat's user
+  aggregator turns that late transcript into an emulated "user started
+  speaking" — so the very sentence that asked for the tool interrupts it, and
+  the interruption cancels it. The rule that prevents this (`register_function`
+  with `cancel_on_interruption=False`) was written for the OpenAI service and
+  stayed there when the house moved to Gemini. It now lives in one place,
+  `ToolRegistrationMixin`, that both engines mix in, so it cannot protect one
+  engine and forget the other again. The speaker gate and the liveness
+  tracking moved with it and now cover Gemini too — they never did before.
+
 ## 0.19.1 (fork)
 
 - **Fixes a regression 0.18.3 shipped straight into the house.** Waiting for
