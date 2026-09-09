@@ -224,3 +224,56 @@ async def test_a_failing_publish_is_logged_not_lost(caplog, monkeypatch):
         await asyncio.sleep(0)
 
     assert any("provider sensor failed" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_the_task_reference_is_held_then_dropped_when_done(monkeypatch):
+    """asyncio only keeps a WEAK reference to a running task -- something
+    must hold a strong one for its lifetime, or it can be garbage-collected
+    mid-publish. This checks both halves: the reference exists (and is a
+    real, not-yet-finished Task -- not discarded, not a coincidental None)
+    while the publish is outstanding, and disappears once the publish is
+    actually done, so a connection that stays open for hours doesn't keep
+    accumulating finished Task objects."""
+    release = asyncio.Event()
+    calls = []
+
+    async def slow_provider(_status):
+        calls.append("started")
+        await release.wait()
+        calls.append("finished")
+
+    monkeypatch.setattr(ha_sensors.PUBLISHER, "provider", slow_provider)
+
+    handler = _make_handler(ProviderRouter("openai", "gemini"))
+    seen = {}
+
+    async def factory(connection):
+        seen["connection"] = connection
+        return object()
+
+    handler.openai_service_factory = factory
+
+    # serve_connection's own body never truly suspends in this stubbed
+    # setup, so plainly awaiting it (no wait_for/create_task wrapper) lets
+    # it run to completion without ever handing control back to the loop --
+    # the sibling task it creates is scheduled, but gets no turn to run
+    # during this call. That is exactly the moment a bare
+    # `asyncio.create_task(...)` with no assignment would be eligible for
+    # garbage collection: nothing but our own attribute has a strong
+    # reference to it here.
+    await handler.serve_connection(_FakeWebSocket())
+
+    connection = seen["connection"]
+    task = connection.provider_status_task
+    assert isinstance(task, asyncio.Task)
+    assert not task.done()
+    assert calls == []  # confirms it truly hasn't run yet, not just "held"
+
+    release.set()
+    await task  # give it its turn; it runs straight through once resumed
+
+    assert calls == ["started", "finished"]
+    # Dropped: once the task is actually done, the connection no longer
+    # references it -- it does not accumulate forever.
+    assert connection.provider_status_task is None

@@ -1526,7 +1526,7 @@ class WebSocketHandler:
             "playback_prebuffer_ms": self.playback_prebuffer_ms,
         }
 
-    async def _publish_provider_status(self, status: dict) -> None:
+    async def _publish_provider_status(self, connection: DeviceConnection, status: dict) -> None:
         """Send the provider-sensor HTTP publish to Home Assistant.
 
         Runs as a background task (see serve_connection), never awaited by
@@ -1538,12 +1538,21 @@ class WebSocketHandler:
         than relying on asyncio's default "Task exception was never
         retrieved" handling -- means a failure here is still logged, just
         never blocking.
+
+        The `finally` clears `connection.provider_status_task` once this is
+        actually done, so nothing keeps a finished task referenced forever;
+        the identity check is so a second connection's (never possible here,
+        since each connection gets its own task, but cheap insurance) or a
+        stale reference can't be cleared out from under a newer one.
         """
         try:
             from .ha_sensors import PUBLISHER
             await PUBLISHER.provider(status)
         except Exception as e:
             logger.debug(f"provider sensor failed: {e!r}")
+        finally:
+            if connection.provider_status_task is asyncio.current_task():
+                connection.provider_status_task = None
 
     async def serve_connection(
         self,
@@ -1597,7 +1606,16 @@ class WebSocketHandler:
         # can never delay create_transport below or the session it builds.
         if self.router is not None:
             try:
-                asyncio.create_task(self._publish_provider_status(self.router.status()))
+                # Held on the connection, not discarded: asyncio only keeps a
+                # weak reference to a running task, so nothing else holding
+                # this one could let it be garbage-collected mid-publish.
+                # Per-connection (not on self) so a second device's task can
+                # never clobber this one's; _publish_provider_status clears
+                # it itself once done, so nothing holds a finished task
+                # forever.
+                connection.provider_status_task = asyncio.create_task(
+                    self._publish_provider_status(connection, self.router.status())
+                )
             except Exception as e:
                 # Computing status() itself is synchronous and could in
                 # principle raise (e.g. a router double in a test that

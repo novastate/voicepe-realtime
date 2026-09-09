@@ -102,6 +102,14 @@ class DeviceConnection:
     recovery: Any = None
     phase_emitter: Any = None
     records_audio: bool = False
+    # The background task publishing this connection's provider sensor to
+    # Home Assistant (see WebSocketHandler.serve_connection). Held here, on
+    # the per-connection object, so asyncio's weak reference to a running
+    # task can't let it be garbage-collected mid-publish, and so a second
+    # connection's task can never clobber this one's. Cleared to None by
+    # WebSocketHandler._publish_provider_status itself once the publish is
+    # actually done, so nothing keeps a finished task referenced forever.
+    provider_status_task: Any = None
 
     def touch(self) -> None:
         """Mark this device as the most recently used one."""
