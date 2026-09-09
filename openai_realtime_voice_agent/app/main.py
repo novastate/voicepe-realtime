@@ -11,6 +11,10 @@ from pipecat.pipeline.task import PipelineTask
 from app.mcp_service import HomeAssistantMCPService
 from app.phase_emitter import TurnLiveness
 from app.disconnect_tool import get_disconnect_tool_definition, create_disconnect_tool_handler
+from app.follow_up_tool import (
+    get_follow_up_tool_definition,
+    create_follow_up_tool_handler,
+)
 from app.web_search_tool import get_web_search_tool_definition, create_web_search_tool_handler
 from app.search_home_tool import get_search_home_tool_definition, create_search_home_tool_handler
 from app.play_media_tool import get_play_media_tool_definition, create_play_media_tool_handler
@@ -667,6 +671,7 @@ class Application:
             all_tools.append(get_play_media_tool_definition())
 
             # Voice enrollment tool (fork): guided voice-training capture.
+            all_tools.append(get_follow_up_tool_definition())
             all_tools.append(get_enrollment_tool_definition())
             all_tools.append(get_false_alarm_tool_definition())
             all_tools.extend(get_timer_tool_definitions())
@@ -787,6 +792,15 @@ class Application:
             logger.info("✅ Registered voice_enrollment tool handler")
             service.register_function(
                 "mark_false_wake", create_false_alarm_tool_handler()
+            )
+
+            def _note_follow_up():
+                emitter = connection.phase_emitter
+                if emitter is not None:
+                    emitter.note_follow_up_requested()
+
+            service.register_function(
+                "request_follow_up", create_follow_up_tool_handler(_note_follow_up)
             )
             register_timer_tools(service, self.timer_registry, connection.device_id)
             register_memory_tools(service, _current_speaker_name)

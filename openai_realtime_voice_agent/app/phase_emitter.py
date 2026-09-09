@@ -149,6 +149,11 @@ class PhaseEmitter(FrameProcessor):
         # True from the first BotStartedSpeaking of a reply until the engine
         # pushes LLMFullResponseEndFrame (its own "that was the whole answer").
         self._model_turn_open = False
+        # Set by the request_follow_up tool during a turn; consumed at the
+        # engine's end-of-turn, which is the only moment the device can act on
+        # it safely (see follow_up_tool.py).
+        self._follow_up_wanted = False
+        self._send_follow_up = None
         self._idle_task = None
         self._watchdog_task = None
         self._current = None  # last phase actually sent, to dedupe redundant emits
@@ -180,6 +185,35 @@ class PhaseEmitter(FrameProcessor):
         # pipeline and never flows back to it on its own, so this callback is
         # what actually gets "the assistant finished answering" there.
         self._on_turn_success = None
+
+    def set_follow_up_sender(self, sender) -> None:
+        """Wire the async callable that tells the device to hold the mic open.
+
+        Args:
+            sender: async callable(), no arguments. None disables the feature,
+                which is what every test and any caller that has not wired one
+                gets — the device then falls back to its own follow_up_ms.
+        """
+        self._send_follow_up = sender
+
+    def note_follow_up_requested(self) -> None:
+        """Record that this turn's reply wants the microphone held open."""
+        self._follow_up_wanted = True
+
+    async def _flush_follow_up(self) -> None:
+        """Send the pending follow-up request, once, at the end of a turn."""
+        if not self._follow_up_wanted:
+            return
+        self._follow_up_wanted = False
+        if self._send_follow_up is None:
+            return
+        try:
+            await self._send_follow_up()
+            logger.info("🎤 request_follow_up sent — mic stays open for the answer")
+        except Exception as e:
+            # The user can still answer with the wake word; never let this
+            # failure take the turn down with it.
+            logger.warning(f"⚠️ could not request the follow-up window: {e!r}")
 
     def set_turn_success_handler(self, callback) -> None:
         """Wire a callable(), no arguments, invoked when a reply finishes
@@ -356,6 +390,7 @@ class PhaseEmitter(FrameProcessor):
             # died without its end-of-turn would keep the mid-turn grace armed
             # for every idle after it.
             self._model_turn_open = False
+            self._follow_up_wanted = False
             # A: a genuine utterance has begun this turn → not a dangling VAD,
             # and the kill-window must NOT cancel THIS turn's response.
             self._speech_since_wake = True
@@ -400,6 +435,11 @@ class PhaseEmitter(FrameProcessor):
             # BotStoppedSpeaking (which waits for the audio to drain), so by
             # the time the debounce runs this is already the right answer.
             self._model_turn_open = False
+            # And the only safe moment to ask for the follow-up window: the
+            # answer's audio is queued, so the device waits it out before
+            # opening the mic. Sending at tool-call time instead would open it
+            # before the question was even spoken.
+            await self._flush_follow_up()
         elif isinstance(frame, BotStoppedSpeakingFrame):
             # Don't go idle immediately — TTS comes in segments. Only emit idle
             # if the bot stays silent for the debounce window.

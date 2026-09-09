@@ -2,6 +2,32 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.19.0 (fork)
+
+- **The microphone stays open because the model asked, not because a timer
+  said so.** New tool `request_follow_up`. The device has accepted
+  `{"type":"request_follow_up"}` all along — `va_client.cpp`'s own comment
+  names the tool that was supposed to send it, and it never existed on this
+  side. So the window was opened on `follow_up_ms` instead, sent once at
+  connect and applied by the device after EVERY reply: say "that was all",
+  get "Bra. Hörs." back, and the mic still opened for another eight seconds,
+  with a chime, listening to an empty room. The system prompt has always
+  promised the opposite — "the house keeps the microphone open exactly as long
+  as your reply ends with a question mark" — and nothing implemented it.
+  Now the model asks in the same turn as a real question, and says nothing
+  after a finished answer.
+  - Reading the reply for a question mark would have been the obvious fix and
+    is the wrong one: on Gemini the assistant transcript does not reliably
+    reach this pipeline (measured 2026-09-09 — every user line logged, not one
+    assistant line), so that rule would have silently never fired.
+  - The request is recorded at tool-call time but sent at the engine's
+    end-of-turn. The device opens the mic as soon as its speaker drains, which
+    at tool-call time it usually has — sending immediately would open the mic
+    before the question was spoken.
+  - **Set `follow_up_listen_seconds` to 0** to get the new behaviour; anything
+    higher keeps the old unconditional window on top of it.
+- 7 new tests (194 total).
+
 ## 0.18.3 (fork)
 
 - **No more start chime in the middle of an answer.** The phase machine ended

@@ -1064,6 +1064,14 @@ class WebSocketHandler:
         phase_emitter = PhaseEmitter(
             send_phase=send_phase, liveness=connection.turn_liveness
         )
+
+        async def _request_follow_up():
+            # The device's own message, documented in va_client.cpp: wait for
+            # the reply's audio to drain, chime, open the mic. Sent only when
+            # the model asked for it (see app/follow_up_tool.py).
+            await connection.send_json({"type": "request_follow_up"})
+
+        phase_emitter.set_follow_up_sender(_request_follow_up)
         connection.phase_emitter = phase_emitter
 
         connection.recovery = ConnectionRecovery(
