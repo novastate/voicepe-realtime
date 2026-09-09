@@ -1412,20 +1412,26 @@ class WebSocketHandler:
             # Button-cancel shortly after a wake = user flagging a false
             # trigger: label the latest probe capture like mark_false_wake.
             async def _on_button_cancel():
+                # Same rule as the mark_false_wake tool: the counter is the
+                # part that matters and it needs no audio, so it is published
+                # whether or not a capture was kept. This used to sit inside
+                # one try with the listdir, so on a default install (no
+                # recordings, no /share/voice-probes at all) the button
+                # flagged nothing and the sensor never moved.
+                from .speaker_context import mark_latest_probe_as_false_wake
                 try:
-                    import os
-                    d = "/share/voice-probes"
-                    files = sorted(f for f in os.listdir(d)
-                                   if f.startswith("probe_") and f.endswith(".wav"))
-                    if files:
-                        latest = files[-1]
-                        os.rename(os.path.join(d, latest),
-                                  os.path.join(d, latest.replace("probe_", "falsewake_", 1)))
-                        logger.info(f"🏷️ button-flagged false wake: {latest}")
-                        from .ha_sensors import PUBLISHER
-                        await PUBLISHER.false_wake()
+                    marked = mark_latest_probe_as_false_wake()
+                    logger.info(
+                        f"🏷️ button-flagged false wake: {marked}" if marked
+                        else "🏷️ button-flagged false wake (no capture kept)"
+                    )
                 except Exception as e:
-                    logger.warning(f"⚠️ button false-wake flag failed: {e!r}")
+                    logger.warning(f"⚠️ button false-wake capture not marked: {e!r}")
+                try:
+                    from .ha_sensors import PUBLISHER
+                    await PUBLISHER.false_wake()
+                except Exception as e:
+                    logger.warning(f"⚠️ false-wake counter not published: {e!r}")
             serializer.set_button_cancel_handler(_on_button_cancel)
 
             async def _on_first_audio():

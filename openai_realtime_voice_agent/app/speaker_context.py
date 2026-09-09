@@ -41,6 +41,43 @@ CAPTURE_BYTES = int(CAPTURE_SECONDS * SAMPLE_RATE * 2)  # PCM16 mono
 VERDICT_TTL_SECONDS = 120.0
 
 
+def mark_latest_probe_as_false_wake() -> Optional[str]:
+    """Rename the newest wake capture so retraining can find it later.
+
+    Returns:
+        The new filename, or None when there was nothing to rename.
+
+    None is the ORDINARY answer, not a failure: the captures are only written
+    while ENABLE_RECORDING is on (see _classify below), so in a default
+    install PROBE_DUMP_DIR does not exist at all. Both callers used to
+    ``os.listdir`` it directly, so in that install every single false-wake
+    report -- by voice or by button -- ended in a FileNotFoundError. Live
+    2026-09-09:
+
+        ❌ mark_false_wake failed: [Errno 2] No such file or directory:
+           '/share/voice-probes'
+
+    The count is worth keeping even with no audio to keep, so the callers
+    publish the sensor either way; this function only owns the file.
+    """
+    try:
+        files = sorted(
+            f for f in os.listdir(PROBE_DUMP_DIR)
+            if f.startswith("probe_") and f.endswith(".wav")
+        )
+    except FileNotFoundError:
+        # No recordings are being kept. Nothing to mark, nothing wrong.
+        return None
+    if not files:
+        return None
+    latest = files[-1]
+    marked = latest.replace("probe_", "falsewake_", 1)
+    os.rename(os.path.join(PROBE_DUMP_DIR, latest), os.path.join(PROBE_DUMP_DIR, marked))
+    return marked
+
+
+
+
 class SpeakerProbe:
     """Captures post-wake audio and classifies the speaker's voice type."""
 

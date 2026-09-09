@@ -154,25 +154,27 @@ def get_false_alarm_tool_definition() -> Dict[str, Any]:
 def create_false_alarm_tool_handler() -> Callable[["FunctionCallParams"], Awaitable[None]]:
     async def false_alarm_handler(params: "FunctionCallParams") -> None:
         try:
-            probes_dir = "/share/voice-probes"
-            files = sorted(
-                f for f in os.listdir(probes_dir)
-                if f.startswith("probe_") and f.endswith(".wav")
-            )
-            if not files:
-                await params.result_callback({"status": "no recent wake capture found"})
-                return
-            latest = files[-1]
-            marked = latest.replace("probe_", "falsewake_", 1)
-            os.rename(os.path.join(probes_dir, latest), os.path.join(probes_dir, marked))
-            logger.info(f"🏷️ marked false wake: {marked}")
+            from .speaker_context import mark_latest_probe_as_false_wake
+
+            # The COUNT is the part that always works, and the part the
+            # household actually sees (sensor.voicepe_<instance>_false_wakes_
+            # today). Keeping the audio is a debug convenience that only
+            # happens while ENABLE_RECORDING is on, so a missing recording is
+            # not a failure to report back to the user -- it used to raise
+            # FileNotFoundError and make the assistant apologise for a
+            # perfectly ordinary install.
+            marked = mark_latest_probe_as_false_wake()
             try:
                 from .ha_sensors import PUBLISHER
                 await PUBLISHER.false_wake()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"⚠️ false-wake counter not published: {e!r}")
+            if marked:
+                logger.info(f"🏷️ marked false wake: {marked}")
+            else:
+                logger.info("🏷️ false wake noted (no capture kept — recording is off)")
             await params.result_callback(
-                {"status": "marked", "note": "Logged as a false trigger for retraining. Confirm briefly."}
+                {"status": "marked", "note": "Logged as a false trigger. Confirm briefly."}
             )
         except Exception as e:
             logger.error(f"❌ mark_false_wake failed: {e}", exc_info=True)

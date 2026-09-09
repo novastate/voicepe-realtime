@@ -2,6 +2,18 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.17.4 (fork)
+
+- **A false wake can be reported again.** Both ways of flagging one -- saying
+  so ("that was a false alarm") and the button-cancel shortly after a wake --
+  listed `/share/voice-probes` directly. That directory is only written while
+  `ENABLE_RECORDING` is on, so on a normal install it does not exist and every
+  report ended in `FileNotFoundError`: the assistant apologised, and the
+  counter behind `sensor.voicepe_<instance>_false_wakes_today` never moved.
+  The count needs no audio, so it is now published either way, and a missing
+  recording is reported as "nothing kept" rather than as an error. One shared
+  helper replaces the path literal that had been copied into three files.
+
 ## 0.17.3 (fork)
 
 First run in a real house, 2026-09-09, found the Gemini engine had been given
