@@ -85,6 +85,19 @@ async def _seed_openai_context_silently(service, messages) -> bool:
     `conversation.item.added` for this item is not mistaken for a new
     assistant turn starting (see `_handle_evt_conversation_item_added`).
 
+    KNOWN, HARMLESS GAP: unlike `_create_response()`'s own conversation-setup
+    block, this does not also call `_update_settings()`. That call is the
+    only place a leading "system" message *in the restored context* would
+    become the live session's `instructions` (OpenAI's adapter pulls a
+    leading system message out of the messages list into a separate
+    `system_instruction` value -- see `open_ai_realtime_adapter.py` -- which
+    `_create_response()` never reads either, so this isn't a regression).
+    Session instructions come from `ProviderOptions.instructions` via
+    `_handle_evt_session_created` on every connection regardless, so this is
+    harmless today. It would stop being harmless if this code ever needed to
+    honor a *different* instruction string coming back from a restored
+    conversation specifically.
+
     Returns True if something was actually sent, False if skipped (no
     connection yet, or nothing to send). If the pipecat internals this
     depends on have changed shape, that is logged loudly and the restore is
@@ -115,6 +128,15 @@ async def _seed_openai_context_silently(service, messages) -> bool:
     if not items:
         return False
 
+    # NOTE: when this is invoked from ContextInitializer on a brand-new
+    # client connection, WebSocketHandler._preseed_context has ALREADY set
+    # `_llm_needs_conversation_setup = False` (its own, separate guard
+    # against a spontaneous greeting on connect -- see main.py) before this
+    # function ever runs. So the assignment below is a no-op in that path
+    # today, not a bug: it exists to also cover reset_conversation()'s
+    # re-seed (see openai_realtime.py), which runs *without* going through
+    # _preseed_context and would otherwise leave the flag True, letting
+    # _create_response() resend this same conversation a second time.
     for item in items:
         evt = openai_rt_events.ConversationItemCreateEvent(item=item)
         service._messages_added_manually[evt.item.id] = True
@@ -139,18 +161,43 @@ async def _seed_gemini_context_silently(service, messages) -> bool:
     Structural guard is identical: if a future pipecat rename or removal
     drops the flag, log loudly and skip rather than guess at a replacement.
 
+    FIX ROUND 1 (review): this used to stop at the silent send, leaving
+    `service._context` untouched (still None on a fresh connection). The
+    very first real `LLMContextFrame` -- from the user's actual first
+    utterance -- then hit `GeminiLiveLLMService._handle_context`'s
+    `if not self._context:` branch, which calls `_create_initial_response()`
+    and RE-SENDS the whole restored history a second time. Worse:
+    `inference_on_context_initialization` defaults to True and
+    `app/providers/gemini_live.py` never overrides it, so that second send
+    goes out with `turn_complete=True` -- an audible, unprompted monologue
+    reciting the restored conversation the moment the device reconnects.
+    This is exactly the failure Task 6b's three fix rounds were about.
+
+    Setting `service._context = LLMContext()` here (mirroring
+    `WebSocketHandler._preseed_context`'s identical trick on the OpenAI side)
+    makes that first real context frame take `_handle_context`'s `else`
+    branch instead -- which only replaces `self._context` and forwards any
+    newly-completed tool results, never calls `_create_initial_response()`,
+    and never sends anything on its own. Empty (not the restored messages)
+    is deliberate and sufficient: the `else` branch unconditionally
+    overwrites `self._context` with whatever context frame it receives, so
+    there is nothing to preserve here -- only the branch taken matters.
+
     Returns True if something was actually sent, False if skipped (no
     session yet, or nothing to send).
     """
     if not messages:
         return False
 
-    if not hasattr(service, "_needs_turn_complete_message"):
+    if not hasattr(service, "_needs_turn_complete_message") or not hasattr(
+        service, "_context"
+    ):
         logger.error(
-            f"⚠️ {type(service).__name__} has no `_needs_turn_complete_message` "
-            f"attribute -- the silent turn-close bridge this context restore "
-            f"depends on is gone (renamed or removed upstream). Skipping "
-            f"context restore rather than guessing at a replacement."
+            f"⚠️ {type(service).__name__} is missing `_needs_turn_complete_message` "
+            f"or `_context` -- the silent turn-close bridge and/or the "
+            f"first-context guard this context restore depends on are gone "
+            f"(renamed or removed upstream). Skipping context restore rather "
+            f"than guessing at a replacement."
         )
         return False
 
@@ -166,6 +213,11 @@ async def _seed_gemini_context_silently(service, messages) -> bool:
 
     await session.send_client_content(turns=turns, turn_complete=False)
     service._needs_turn_complete_message = True
+    # Stop the first REAL turn's context frame from re-triggering
+    # _create_initial_response() and resending (audibly) what we just sent
+    # silently -- see the guard explanation above.
+    if service._context is None:
+        service._context = LLMContext()
     return True
 
 

@@ -109,8 +109,27 @@ class SafeRealtimeLLMService(OpenAIRealtimeLLMService):
         the reconnected session does NOT self-create a response, and set
         `_llm_needs_conversation_setup = False` (same as the startup pre-seed) — the
         server-VAD drives every user-turn response, so we never need to create one
-        ourselves on reconnect. The live context is untouched (it's restored by the
-        SessionManager on the next real turn).
+        ourselves on reconnect.
+
+        CORRECTED (Task 9b fix round 1): this comment used to claim "the live
+        context is untouched (it's restored by the SessionManager on the next
+        real turn)". That was false, and remained false after Task 9b's first
+        pass at this file — the SessionManager's restore path
+        (ContextInitializer) only ever runs once, on a brand-new client
+        WebSocket connection; it never re-fires for an in-place reconnect of
+        this SAME service instance, because no new StartFrame is produced.
+        Meanwhile `self._context` (this Python object) is untouched by
+        reset — it still holds the full conversation up to the disconnect —
+        but the FRESH OpenAI-side session this reconnect just opened knows
+        NOTHING about it, and clearing `_llm_needs_conversation_setup` above
+        stops `_create_response()`'s own lazy "send initial messages" loop
+        from ever sending it either. Net effect before this fix: every
+        60-minute session cap silently wiped the model's memory of the
+        conversation. `_reseed_context_after_reset()` below re-sends
+        `self._context`'s own messages onto the freshly reconnected session,
+        the same way `ContextInitializer` seeds a brand-new one — using this
+        service's own live context (more current than SessionManager's cache,
+        which only snapshots on disconnect), not the SessionManager's cache.
         """
         self._resetting_conversation = True
         try:
@@ -120,8 +139,54 @@ class SafeRealtimeLLMService(OpenAIRealtimeLLMService):
                 self._llm_needs_conversation_setup = False
             except Exception as e:  # pragma: no cover - defensive
                 logger.warning(f"⚠️ could not clear post-reconnect response flags: {e!r}")
+            await self._reseed_context_after_reset()
         finally:
             self._resetting_conversation = False
+
+    async def _reseed_context_after_reset(self):
+        """Re-seed the freshly reconnected session with the conversation it
+        just lost (see `reset_conversation`'s docstring for why this is
+        needed at all).
+
+        Uses this service's OWN `_context` — the live, ongoing conversation
+        pipecat has been tracking for this connection all along — not the
+        SessionManager's cache (that cache is keyed by client_id for a
+        brand-new WebSocket connection; this is an in-place reconnect of the
+        same service, which the SessionManager never even sees). Tool calls
+        are stripped first for the same reason `_strip_tool_plumbing` exists
+        for the client-reconnect path: their ids belong to the conversation
+        that just ended, and the fresh session rejects a replayed id.
+
+        Known timing caveat, not verifiable without a live API key: this
+        sends immediately after `_connect()` returns, i.e. as soon as the
+        websocket handshake completes, which may be before OpenAI's
+        `session.created` event has arrived. `_create_response()`'s own
+        lazy conversation-setup loop (the path this replaces) only ever ran
+        once pipecat's aggregator finished a real turn — comfortably after
+        `session.created` in practice — so this is untested territory this
+        fix introduces. If OpenAI rejects conversation.item.create sent this
+        early, the fix would need to defer until `_api_session_ready` (the
+        same flag `_run_llm_when_api_session_ready` already waits on).
+        """
+        context = getattr(self, "_context", None)
+        if context is None:
+            return
+        from app.context_restore import _strip_tool_plumbing, restore_context_silently
+        from app.providers import OPENAI
+
+        messages = _strip_tool_plumbing(context.get_messages())
+        if not messages:
+            return
+        try:
+            restored = await restore_context_silently(OPENAI, self, messages)
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to re-seed context after reset: {e!r}")
+            return
+        if restored:
+            logger.info(
+                f"📤 Re-seeded {len(messages)} message(s) onto the reconnected "
+                f"session after reset_conversation (waiting for user)"
+            )
 
     # Error codes that must NOT kill the realtime session. pipecat 0.0.97's
     # _receive_task_handler does `_handle_evt_error(evt); return` on EVERY

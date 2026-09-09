@@ -43,6 +43,10 @@ from pipecat.pipeline.task import PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 
+from app.context_restore import (
+    _seed_gemini_context_silently,
+    _seed_openai_context_silently,
+)
 from app.providers import GEMINI, OPENAI, ProviderOptions, build_service
 from app.session_manager import ContextInitializer
 
@@ -238,4 +242,168 @@ async def test_restored_context_reaches_a_real_gemini_service_without_starting_a
     assert service._needs_turn_complete_message is True, (
         "the silent turn-close bridge was never armed, so the restored turn "
         "will never close on its own"
+    )
+    assert service._context is not None, (
+        "service._context was left None -- the real first LLMContextFrame "
+        "will hit _handle_context's 'if not self._context' branch and "
+        "resend the whole restored conversation a second time, audibly"
+    )
+
+
+@pytest.mark.asyncio
+async def test_gemini_context_guard_stops_a_real_first_turn_from_resending():
+    """FIX ROUND 1 (review): without setting `service._context`, the user's
+    actual first utterance -- delivered by the aggregator as the service's
+    first-ever `LLMContextFrame` -- hits `_handle_context`'s
+    `if not self._context:` branch, which calls `_create_initial_response()`
+    and resends the WHOLE restored conversation a second time. Worse:
+    `inference_on_context_initialization` defaults to True and
+    `app/providers/gemini_live.py` never overrides it, so that second send
+    goes out with `turn_complete=True` -- an audible, unprompted monologue
+    reciting the restored conversation the moment the device reconnects.
+    Exactly the failure class Task 6b spent three fix rounds preventing.
+
+    This drives `_handle_context` directly (the real method on a real,
+    built service) with a real follow-up `LLMContext`, simulating exactly
+    what the aggregator delivers once the user's real first turn completes."""
+    service = build_service(GEMINI, _gemini_options(), [])
+    fake_session = _FakeGeminiSession()
+    service._session = fake_session
+    assert service._context is None  # sanity: real default before any seed
+
+    sent = await _seed_gemini_context_silently(service, RESTORED_MESSAGES)
+    assert sent is True
+    assert len(fake_session.calls) == 1
+
+    # The user's actual first utterance, as pipecat's aggregator would
+    # deliver it: the restored history plus the newly-transcribed turn.
+    new_context = LLMContext(
+        messages=list(RESTORED_MESSAGES)
+        + [{"role": "user", "content": "what about the living room"}]
+    )
+    await service._handle_context(new_context)
+
+    assert len(fake_session.calls) == 1, (
+        "a second call reached the session -- _handle_context took the "
+        "'if not self._context' branch and resent the restored conversation "
+        "a second time, audibly (turn_complete defaults True)"
+    )
+
+
+# --- Fix 3 (review): the structural guards had no tests at all. Follow the
+# pattern test_speaker_injection.py already uses for the equivalent Gemini
+# guard (test_gemini_missing_turn_close_bridge_skips_and_logs_error).
+
+
+@pytest.mark.asyncio
+async def test_openai_seed_skips_and_logs_error_if_bookkeeping_vanishes(caplog):
+    """If a future pipecat renames/removes `_llm_needs_conversation_setup`
+    or `_messages_added_manually`, the restore must be skipped -- not raise,
+    not silently do nothing -- and must say exactly what vanished, loudly."""
+    import logging
+
+    service = build_service(OPENAI, _openai_options(), [])
+    fake_ws = _FakeOpenAIWebSocket()
+    service._websocket = fake_ws
+    del service._llm_needs_conversation_setup
+
+    with caplog.at_level(logging.ERROR, logger="app.context_restore"):
+        sent = await _seed_openai_context_silently(service, RESTORED_MESSAGES)
+
+    assert sent is False
+    assert fake_ws.sent == []  # skipped, not sent
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1
+    assert "_llm_needs_conversation_setup" in errors[0].message
+
+
+@pytest.mark.asyncio
+async def test_openai_seed_skips_quietly_when_not_connected_yet():
+    """No websocket yet is a normal, expected transient state (the restore
+    fires right after StartFrame, which can race ahead of the actual
+    connect) -- must be skipped without logging an error."""
+    service = build_service(OPENAI, _openai_options(), [])
+    assert service._websocket is None  # sanity: real default, never connected
+
+    sent = await _seed_openai_context_silently(service, RESTORED_MESSAGES)
+
+    assert sent is False
+
+
+@pytest.mark.asyncio
+async def test_gemini_seed_skips_and_logs_error_if_bookkeeping_vanishes(caplog):
+    """Same guard, Gemini side: if `_needs_turn_complete_message` or
+    `_context` vanish from a future pipecat, skip loudly rather than guess."""
+    import logging
+
+    service = build_service(GEMINI, _gemini_options(), [])
+    fake_session = _FakeGeminiSession()
+    service._session = fake_session
+    del service._needs_turn_complete_message
+
+    with caplog.at_level(logging.ERROR, logger="app.context_restore"):
+        sent = await _seed_gemini_context_silently(service, RESTORED_MESSAGES)
+
+    assert sent is False
+    assert fake_session.calls == []  # skipped, not sent
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1
+    assert "_needs_turn_complete_message" in errors[0].message or "_context" in errors[0].message
+
+
+@pytest.mark.asyncio
+async def test_gemini_seed_skips_quietly_when_not_connected_yet():
+    """No session yet is a normal, expected transient state -- must be
+    skipped without logging an error."""
+    service = build_service(GEMINI, _gemini_options(), [])
+    assert service._session is None  # sanity: real default, never connected
+
+    sent = await _seed_gemini_context_silently(service, RESTORED_MESSAGES)
+
+    assert sent is False
+
+
+@pytest.mark.asyncio
+async def test_context_initializer_logs_the_not_restored_path_honestly(caplog):
+    """FIX (this task): the old code logged '📤 Sent cached context...'
+    unconditionally, even when nothing was sent -- exactly why nobody
+    noticed the bug. Drive ContextInitializer through the real pipeline with
+    NO websocket connected (restore_context_silently returns False) and
+    confirm the log now says it was NOT restored, not that it was sent."""
+    import logging
+
+    service = build_service(OPENAI, _openai_options(), [])
+    assert service._websocket is None  # never connected in this test
+
+    # OpenAIRealtimeLLMService.start() calls _connect() unconditionally on
+    # StartFrame, which would otherwise make this test dial the real OpenAI
+    # API (and fail on the network, not on the assertion). Stub it out so
+    # `_websocket` stays None -- exactly the "restore fired before connect
+    # finished" race this test means to simulate -- without any network I/O.
+    async def _no_connect():
+        return None
+
+    service._connect = _no_connect
+
+    aggregator_pair, context = _build_restore_aggregator()
+    initializer = ContextInitializer(
+        cached_context=context,
+        client_id="kitchen",
+        service=service,
+        provider=OPENAI,
+    )
+
+    with caplog.at_level(logging.INFO, logger="app.session_manager"):
+        await _drive_wired_pipeline([aggregator_pair.user(), service, initializer])
+
+    assert initializer.context_sent is True, (
+        "the guard against re-attempting restore on a later StartFrame did "
+        "not engage"
+    )
+    messages = [r.message for r in caplog.records]
+    assert any("was not restored" in m for m in messages), (
+        "no honest 'not restored' log line was emitted"
+    )
+    assert not any("Restored cached context" in m for m in messages), (
+        "the success log line fired even though nothing was actually sent"
     )
