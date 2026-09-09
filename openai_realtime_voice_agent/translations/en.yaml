@@ -298,3 +298,40 @@ configuration:
     description: >-
       Bearer token protecting the announce endpoint. Generate a long random
       string; anyone on your LAN with this token can speak through the device.
+  gemini_vad_start_sensitivity:
+    name: "🔀 Voice engine · Gemini: how easily a turn STARTS"
+    description: >-
+      How little sound Gemini needs before it decides you are talking to it.
+      "low" needs clear speech and is the right value in a normal room —
+      Google's own default is "high", and on a speaker that hears its own
+      voice that means the assistant answers music, background talk and its
+      own echo. Only pick "high" in a quiet room where it keeps missing you.
+  gemini_vad_end_sensitivity:
+    name: "🔀 Voice engine · Gemini: how easily a turn ENDS"
+    description: >-
+      How quickly Gemini decides you have finished speaking. "low" waits
+      longer, so it does not cut you off mid-sentence. "high" replies sooner
+      but chops long questions in half.
+  gemini_vad_prefix_padding_ms:
+    name: "🔀 Voice engine · Gemini: lead-in kept before speech (ms)"
+    description: >-
+      How much audio from just before the detected speech start is kept, so
+      the first syllable is not clipped. 300 is a good default. Raise it if
+      the first word of your question keeps going missing.
+  gemini_vad_silence_duration_ms:
+    name: "🔀 Voice engine · Gemini: silence before your turn ends (ms)"
+    description: >-
+      How long you may pause mid-sentence before Gemini treats the turn as
+      finished and answers. 800 lets you think for a moment. Lower it for
+      snappier replies, raise it if it interrupts you while you are still
+      talking.
+  gemini_proactive_audio:
+    name: "🔀 Voice engine · Gemini: decide for itself when it was spoken to"
+    description: >-
+      Google's "proactive audio". The model still hears the room, but judges
+      whether the words were meant for it and stays quiet when they were not —
+      the same behaviour as the Gemini app. Silence costs nothing. REQUIRES a
+      native-audio model: set the Gemini model to
+      models/gemini-2.5-flash-native-audio-latest first. Gemini 3.1 Flash Live
+      does not support it; with that model this setting is ignored and a
+      warning is logged.

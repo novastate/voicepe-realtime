@@ -136,3 +136,91 @@ def test_gemini_never_sees_additional_properties():
     assert "additionalProperties" not in params["properties"]["nested"]
     assert "additionalProperties" not in params["properties"]["listed"]["items"]
     assert params["properties"]["nested"]["properties"]["deep"]["type"] == "string"
+
+
+def test_the_session_always_carries_turn_detection_settings():
+    """Live 2026-09-09: the first Gemini session sent no realtime_input_config
+    at all, so Google ran its automatic activity detection at its own default
+    (START_SENSITIVITY_HIGH). The device answered room noise, its own speaker
+    echo and half-words nobody said -- "Och?", "Ja.", "Ne?", and one whole
+    sentence in Portuguese. pipecat only attaches the config when at least one
+    field is set, so every field is sent."""
+    from google.genai.types import EndSensitivity, StartSensitivity
+
+    service = build_service("gemini", _options(), OPENAI_SHAPE)
+    vad = service._vad_params
+    assert vad is not None
+    assert vad.start_sensitivity == StartSensitivity.START_SENSITIVITY_LOW
+    assert vad.end_sensitivity == EndSensitivity.END_SENSITIVITY_LOW
+    assert vad.prefix_padding_ms == 300
+    assert vad.silence_duration_ms == 800
+
+
+def test_the_sensitivities_follow_the_add_on_settings():
+    from google.genai.types import EndSensitivity, StartSensitivity
+
+    service = build_service(
+        "gemini",
+        _options(
+            gemini_vad_start_sensitivity="high",
+            gemini_vad_end_sensitivity="high",
+            gemini_vad_prefix_padding_ms=120,
+            gemini_vad_silence_duration_ms=400,
+        ),
+        OPENAI_SHAPE,
+    )
+    vad = service._vad_params
+    assert vad.start_sensitivity == StartSensitivity.START_SENSITIVITY_HIGH
+    assert vad.end_sensitivity == EndSensitivity.END_SENSITIVITY_HIGH
+    assert vad.prefix_padding_ms == 120
+    assert vad.silence_duration_ms == 400
+
+
+def test_an_unreadable_sensitivity_falls_back_to_low_not_to_googles_default():
+    """A typo in add-on config must not silently hand the room back to
+    Google's HIGH default -- that is the exact failure this setting exists to
+    prevent, and it is inaudible until the assistant starts answering the
+    television."""
+    from google.genai.types import StartSensitivity
+
+    service = build_service(
+        "gemini", _options(gemini_vad_start_sensitivity="lowish"), OPENAI_SHAPE
+    )
+    assert service._vad_params.start_sensitivity == StartSensitivity.START_SENSITIVITY_LOW
+
+
+def test_a_negative_padding_is_clamped_rather_than_sent():
+    service = build_service(
+        "gemini", _options(gemini_vad_prefix_padding_ms=-50), OPENAI_SHAPE
+    )
+    assert service._vad_params.prefix_padding_ms == 0
+
+
+def test_proactive_audio_is_off_unless_asked_for():
+    service = build_service("gemini", _options(), OPENAI_SHAPE)
+    assert not service._settings.get("proactivity")
+
+
+def test_proactive_audio_needs_a_native_audio_model():
+    """Google's guide is explicit: proactive audio and affective dialog are
+    not supported on Gemini 3.1 Flash Live. Sending the config anyway gets the
+    whole session refused, so an operator who ticks the box without moving the
+    model must lose the feature, not the assistant."""
+    service = build_service(
+        "gemini",
+        _options(gemini_proactive_audio=True),  # still the 3.1 preview model
+        OPENAI_SHAPE,
+    )
+    assert not service._settings.get("proactivity")
+
+
+def test_proactive_audio_reaches_a_native_audio_session():
+    service = build_service(
+        "gemini",
+        _options(
+            model="models/gemini-2.5-flash-native-audio-latest",
+            gemini_proactive_audio=True,
+        ),
+        OPENAI_SHAPE,
+    )
+    assert service._settings["proactivity"].proactive_audio is True

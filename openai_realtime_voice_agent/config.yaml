@@ -1,5 +1,5 @@
 name: OpenAI Realtime 2 Voice Agent (Raawr)
-version: "0.17.2"
+version: "0.17.3"
 slug: openai_realtime_voice_agent
 description: Talk to your home with OpenAI gpt-realtime-2 — a voice agent for the Home Assistant Voice PE, with live device control and web search.
 url: https://github.com/TristanBrotherton/voicepe-realtime
@@ -56,6 +56,19 @@ options:
   gemini_api_key: ""
   gemini_model: "models/gemini-3.1-flash-live-preview"
   gemini_voice: "Charon"
+  # Gemini's own turn detection ("automatic activity detection"). Google's
+  # default is start=high, which answers room noise and the speaker's own echo
+  # (live 2026-09-09). low/low is the equivalent of vad_eagerness: low on the
+  # OpenAI side. Raise start to "high" only in a very quiet room.
+  gemini_vad_start_sensitivity: "low"
+  gemini_vad_end_sensitivity: "low"
+  gemini_vad_prefix_padding_ms: 300
+  gemini_vad_silence_duration_ms: 800
+  # Google's own "was that meant for me?" judgement. Needs a native-audio
+  # model (models/gemini-2.5-flash-native-audio-latest) — gemini-3.1-flash-live
+  # does not support it, and the add-on refuses the combination rather than
+  # letting the session be rejected.
+  gemini_proactive_audio: false
   # How long the backup runs before the primary is tried again.
   provider_cooldown_minutes: 30
   instructions: >-
@@ -169,6 +182,11 @@ schema:
   gemini_api_key: password
   gemini_model: str
   gemini_voice: str
+  gemini_vad_start_sensitivity: "list(low|high)"
+  gemini_vad_end_sensitivity: "list(low|high)"
+  gemini_vad_prefix_padding_ms: int(0,2000)
+  gemini_vad_silence_duration_ms: int(0,5000)
+  gemini_proactive_audio: bool
   provider_cooldown_minutes: int(1,1440)
   instructions: str
   transcription_language: str?

@@ -494,7 +494,27 @@ class ConnectionRecovery(FrameProcessor):
         """Positive-liveness reconnect: for wedged (half-open) sockets that
         produce NO ErrorFrames at all — audio streams out, nothing comes back
         (observed live 2026-07-16: wake + speech after an idle gap → zero
-        server events, no error, request lost)."""
+        server events, no error, request lost).
+
+        Only for an engine that cannot repair itself. handle_error already
+        stands back for a self-healing one; this path did not, and it is the
+        path the wedge detector uses — so on Gemini every quiet wake ran the
+        whole repair: `_go_idle()` first (which is a real, audible phase
+        reset on the device: the chime and the LED, mid-conversation), then
+        `❌ service has no reset_conversation()` and a give-up, leaving a
+        session pipecat was already reconnecting on its own. Observed live
+        2026-09-09, three times in ten minutes. The engine table has said
+        `_SELF_HEALS[GEMINI] = True` since the provider work landed; this is
+        the second place that finally reads it.
+        """
+        from app.providers import self_heals
+
+        if self_heals(self._provider):
+            logger.debug(
+                f"🧟 wedge repair skipped — {self._provider} reconnects its own socket "
+                f"({reason[:60]})"
+            )
+            return
         now = time.monotonic()
         if self._closed or self._reconnecting or now - self._last_attempt < self.RECONNECT_COOLDOWN_S:
             return
@@ -561,7 +581,22 @@ class ConnectionRecovery(FrameProcessor):
         "Quiet" is double-checked: no assistant response in flight AND no mic
         audio for REFRESH_QUIET_S — so it can never fire during a turn, a
         reply, or an open follow-up window.
+
+        OpenAI only. The 60-minute cap is OpenAI Realtime's; Gemini Live has
+        session resumption and reconnects itself, and `_recover` cannot repair
+        it anyway (no `reset_conversation`) — it would only emit a real idle
+        phase at the device and then give up. Same rule as force_reconnect
+        and handle_error: a self-healing engine gets no second hand on the
+        wheel.
         """
+        from app.providers import self_heals
+
+        if self_heals(self._provider):
+            logger.debug(
+                f"⏭️ proactive session refresh skipped — {self._provider} has no "
+                f"session cap to get ahead of"
+            )
+            return
         while True:
             try:
                 await asyncio.sleep(self.REFRESH_CHECK_S)

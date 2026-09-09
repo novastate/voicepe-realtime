@@ -12,7 +12,17 @@ this default is only the one that worked on the day it was written.
 import logging
 from typing import Any, Dict, List
 
-from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService, InputParams
+from google.genai.types import (
+    EndSensitivity,
+    HttpOptions,
+    ProactivityConfig,
+    StartSensitivity,
+)
+from pipecat.services.google.gemini_live.llm import (
+    GeminiLiveLLMService,
+    GeminiVADParams,
+    InputParams,
+)
 from pipecat.transcriptions.language import Language
 
 logger = logging.getLogger(__name__)
@@ -26,6 +36,30 @@ DEFAULT_VOICE = "Charon"
 # Falls back here if the configured language string isn't a Language member.
 # Swedish because that's the house this add-on runs in.
 FALLBACK_LANGUAGE = Language.SV_SE
+
+# Google's automatic activity detection decides when a user turn starts and
+# ends. Pass it nothing and the API runs it at START_SENSITIVITY_HIGH, which
+# is why the first live session answered room noise, its own speaker echo and
+# stray half-words ("Och?", "Ja.", "Né?", one whole sentence in Portuguese) as
+# if they were questions. These maps turn the add-on's plain "low"/"high"
+# strings into the enums google-genai wants.
+_START_SENSITIVITY = {
+    "low": StartSensitivity.START_SENSITIVITY_LOW,
+    "high": StartSensitivity.START_SENSITIVITY_HIGH,
+}
+_END_SENSITIVITY = {
+    "low": EndSensitivity.END_SENSITIVITY_LOW,
+    "high": EndSensitivity.END_SENSITIVITY_HIGH,
+}
+
+# Proactive audio (the model deciding for itself whether it was spoken to)
+# lives behind API version v1beta and only on the native-audio models. The
+# preview model this add-on defaults to, gemini-3.1-flash-live-preview, does
+# NOT support it: Google's own guide says so, and the session is refused
+# rather than degraded. Turning it on without moving the model just breaks
+# the engine, so a mismatch is refused here, loudly, instead of at 1008.
+PROACTIVE_AUDIO_API_VERSION = "v1beta"
+PROACTIVE_AUDIO_MODEL_MARKER = "native-audio"
 
 
 def to_gemini_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -96,13 +130,77 @@ def _resolve_language(language: str) -> Language:
         return FALLBACK_LANGUAGE
 
 
+def _build_vad_params(options) -> GeminiVADParams:
+    """Turn the add-on's turn-detection knobs into Gemini's VAD config.
+
+    Every field is always sent. pipecat only attaches
+    ``realtime_input_config`` when at least one field is set, and a
+    half-filled config would leave the rest at Google's defaults -- which is
+    the state this function exists to get away from. An unknown string falls
+    back to LOW rather than to Google's HIGH default: the failure mode of
+    "slightly too hard to trigger" is a missed word, the failure mode of the
+    default is the assistant talking to the room.
+
+    Args:
+        options: The ProviderOptions carrying the four gemini_vad_* knobs.
+
+    Returns:
+        A fully populated GeminiVADParams.
+    """
+    start = (options.gemini_vad_start_sensitivity or "low").strip().lower()
+    end = (options.gemini_vad_end_sensitivity or "low").strip().lower()
+    if start not in _START_SENSITIVITY:
+        logger.warning(f"⚠️ Unknown gemini_vad_start_sensitivity {start!r}; using 'low'")
+        start = "low"
+    if end not in _END_SENSITIVITY:
+        logger.warning(f"⚠️ Unknown gemini_vad_end_sensitivity {end!r}; using 'low'")
+        end = "low"
+    return GeminiVADParams(
+        start_sensitivity=_START_SENSITIVITY[start],
+        end_sensitivity=_END_SENSITIVITY[end],
+        prefix_padding_ms=max(0, int(options.gemini_vad_prefix_padding_ms)),
+        silence_duration_ms=max(0, int(options.gemini_vad_silence_duration_ms)),
+    )
+
+
+def _proactivity_for(options, model: str):
+    """Whether this session asks Google to judge if it was spoken to.
+
+    Args:
+        options: The ProviderOptions carrying gemini_proactive_audio.
+        model: The resolved model name, which decides whether the feature
+            can be asked for at all.
+
+    Returns:
+        A (ProactivityConfig, HttpOptions) pair, or (None, None) when the
+        feature is off or the model cannot carry it.
+    """
+    if not options.gemini_proactive_audio:
+        return None, None
+    if PROACTIVE_AUDIO_MODEL_MARKER not in model:
+        logger.warning(
+            f"⚠️ gemini_proactive_audio is on but {model} does not support it "
+            f"(it needs a *-{PROACTIVE_AUDIO_MODEL_MARKER}-* model, e.g. "
+            f"models/gemini-2.5-flash-native-audio-latest) — starting WITHOUT it "
+            f"rather than letting the session be refused"
+        )
+        return None, None
+    logger.info("🤫 Proactive audio ON — the model may stay silent when not addressed")
+    return (
+        ProactivityConfig(proactive_audio=True),
+        HttpOptions(api_version=PROACTIVE_AUDIO_API_VERSION),
+    )
+
+
 def build(options, tools: List[Dict[str, Any]]) -> GeminiLiveLLMService:
     """Build a configured Gemini Live session for one device.
 
     Args:
         options: The ProviderOptions carrying every knob from the add-on config.
-            Speed, noise reduction and the OpenAI turn-detection knobs have no
-            equivalent here and are ignored.
+            Speed and noise reduction have no equivalent here and are ignored.
+            Turn detection DOES have one -- Google's automatic activity
+            detection -- but it is configured through the gemini_vad_* knobs,
+            not the OpenAI semantic_vad ones, so those are ignored too.
         tools: Tool definitions in OpenAI Realtime shape.
 
     Returns:
@@ -111,13 +209,22 @@ def build(options, tools: List[Dict[str, Any]]) -> GeminiLiveLLMService:
     model = options.model or DEFAULT_MODEL
     voice = options.voice or DEFAULT_VOICE
     language = _resolve_language(options.language or "sv-SE")
+    vad = _build_vad_params(options)
+    proactivity, http_options = _proactivity_for(options, model)
     params = InputParams(
         max_tokens=options.max_output_tokens or 4096,
         language=language,
+        vad=vad,
+        proactivity=proactivity,
     )
     logger.info(
         f"🔧 Gemini Live session: model={model} voice={voice} "
         f"lang={language} tools={len(tools)}"
+    )
+    logger.info(
+        f"🎚️ Gemini turn detection: start={vad.start_sensitivity} "
+        f"end={vad.end_sensitivity} prefix={vad.prefix_padding_ms}ms "
+        f"silence={vad.silence_duration_ms}ms"
     )
     return GeminiLiveLLMService(
         api_key=options.api_key,
@@ -132,4 +239,7 @@ def build(options, tools: List[Dict[str, Any]]) -> GeminiLiveLLMService:
         tools=[{"function_declarations": to_gemini_tools(tools)}] if tools else None,
         start_audio_paused=False,
         params=params,
+        # Only passed when proactive audio asked for it; None otherwise leaves
+        # google-genai on its own default version.
+        http_options=http_options,
     )

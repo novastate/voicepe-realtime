@@ -2,6 +2,40 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.17.3 (fork)
+
+First run in a real house, 2026-09-09, found the Gemini engine had been given
+a session but not a room. Three fixes, all Gemini-only — OpenAI is untouched.
+
+- **Turn detection is now configured, not left to Google.** The session sent
+  no `realtime_input_config` at all, so the API ran its automatic activity
+  detection at its own `START_SENSITIVITY_HIGH`. On a speaker that hears its
+  own voice that means answering room noise, the tail of its own reply, and
+  half-words nobody said — the log has it answering `Och?`, `Ja.`, `Né?` and
+  one whole sentence in Portuguese. Four new settings, defaulting to the
+  equivalent of the OpenAI side's `vad_eagerness: low`:
+  `gemini_vad_start_sensitivity` (low), `gemini_vad_end_sensitivity` (low),
+  `gemini_vad_prefix_padding_ms` (300), `gemini_vad_silence_duration_ms`
+  (800 — Google's own recommended range is 500–800 ms).
+- **The wedge repair no longer fights an engine that heals itself.** Twelve
+  seconds after any quiet wake, `force_reconnect` ran the full OpenAI repair
+  on Gemini: it forced an idle phase at the device first — which the user
+  hears as the end-of-turn chime and sees as the LED, mid-conversation — and
+  only then discovered `service has no reset_conversation()` and gave up,
+  leaving a session pipecat was already reconnecting on its own. Observed
+  three times in ten minutes. `handle_error` had stood back from a
+  self-healing engine since the provider work; `force_reconnect` and the
+  proactive 60-minute-cap refresh now read the same table.
+- **Optional: `gemini_proactive_audio`.** Google's own "was that meant for
+  me?" judgement — the model hears the room but stays silent when it was not
+  addressed, and silence is not billed. This is what the Gemini app does. It
+  needs a native-audio model (`models/gemini-2.5-flash-native-audio-latest`)
+  on API version `v1beta`; Gemini 3.1 Flash Live does not support it, so with
+  that model the setting is ignored and warned about rather than allowed to
+  get the session refused.
+- 12 new tests (170 total). All six of the new behaviour tests were confirmed
+  to fail against 0.17.2 before the fixes landed.
+
 ## 0.17.0 (fork)
 
 - **Second voice engine: Google Gemini Live**, as an alternative to OpenAI

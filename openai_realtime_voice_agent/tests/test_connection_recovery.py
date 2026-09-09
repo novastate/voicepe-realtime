@@ -559,3 +559,55 @@ async def test_a_non_repairing_error_does_not_delay_the_wedge_detector():
     rec = _recovery("openai", router, switched)
     await rec.handle_error("Rate limit reached for requests")
     assert rec._last_attempt == 0.0
+
+
+@pytest.mark.asyncio
+async def test_the_wedge_repair_stands_back_from_a_self_healing_engine():
+    """Live 2026-09-09, three times in ten minutes: every quiet wake on Gemini
+    ran the whole wedge repair. `_recover` emits a real idle phase at the
+    device FIRST (the chime and the LED, mid-conversation) and only then hits
+    `service has no reset_conversation()` and gives up -- while pipecat was
+    already reconnecting the session itself. handle_error had the self_heals
+    guard from the start; force_reconnect, which is the path the wedge
+    detector actually uses, did not."""
+    switched = []
+    router = ProviderRouter("gemini", "openai")
+    rec = _recovery("gemini", router, switched)
+    idled = []
+    rec._emit_idle = lambda value: idled.append(value)
+    rec._last_attempt = 0.0
+
+    await rec.force_reconnect("wedge: silent after wake")
+
+    assert rec._service.resets == 0        # no repair attempted
+    assert idled == []                     # and no chime at the device
+    assert switched == []
+
+
+@pytest.mark.asyncio
+async def test_the_wedge_repair_still_runs_for_an_engine_that_cannot_heal():
+    """The guard above must not be a blanket off-switch: OpenAI Realtime has
+    no reconnect logic of its own, so its wedge repair is the only thing that
+    gets a half-open socket back."""
+    switched = []
+    router = ProviderRouter("openai", "gemini")
+    rec = _recovery("openai", router, switched)
+    rec._last_attempt = 0.0
+
+    await rec.force_reconnect("wedge: silent after wake")
+
+    assert rec._service.resets == 1
+
+
+@pytest.mark.asyncio
+async def test_the_proactive_refresh_loop_never_starts_for_a_self_healing_engine():
+    """The 60-minute cap is OpenAI Realtime's. On Gemini this loop could only
+    ever reach the same dead `_recover` path -- idle the device, then fail --
+    so it must return before its first sleep instead of polling forever."""
+    router = ProviderRouter("gemini", "openai")
+    rec = _recovery("gemini", router, [])
+    rec.REFRESH_CHECK_S = 0
+
+    # Returns rather than looping: without the guard this never completes.
+    await asyncio.wait_for(rec._proactive_refresh_loop(), timeout=1.0)
+    assert rec._service.resets == 0

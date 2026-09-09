@@ -9,6 +9,11 @@ VOICE_PROVIDER_BACKUP=$(bashio::config 'voice_provider_backup')
 GEMINI_API_KEY=$(bashio::config 'gemini_api_key')
 GEMINI_MODEL=$(bashio::config 'gemini_model')
 GEMINI_VOICE=$(bashio::config 'gemini_voice')
+GEMINI_VAD_START_SENSITIVITY=$(bashio::config 'gemini_vad_start_sensitivity')
+GEMINI_VAD_END_SENSITIVITY=$(bashio::config 'gemini_vad_end_sensitivity')
+GEMINI_VAD_PREFIX_PADDING_MS=$(bashio::config 'gemini_vad_prefix_padding_ms')
+GEMINI_VAD_SILENCE_DURATION_MS=$(bashio::config 'gemini_vad_silence_duration_ms')
+GEMINI_PROACTIVE_AUDIO=$(bashio::config 'gemini_proactive_audio')
 PROVIDER_COOLDOWN_MINUTES=$(bashio::config 'provider_cooldown_minutes')
 SPEAKER_MALE_NAME=$(bashio::config 'speaker_male_name')
 WAKE_SOUND_ENTITY=$(bashio::config 'wake_sound_entity')
@@ -74,6 +79,11 @@ export VOICE_PROVIDER_BACKUP
 export GEMINI_API_KEY
 export GEMINI_MODEL
 export GEMINI_VOICE
+export GEMINI_VAD_START_SENSITIVITY
+export GEMINI_VAD_END_SENSITIVITY
+export GEMINI_VAD_PREFIX_PADDING_MS
+export GEMINI_VAD_SILENCE_DURATION_MS
+export GEMINI_PROACTIVE_AUDIO
 export PROVIDER_COOLDOWN_MINUTES
 export SPEAKER_MALE_NAME
 export WAKE_SOUND_ENTITY

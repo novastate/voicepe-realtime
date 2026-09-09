@@ -57,6 +57,24 @@ class ProviderOptions:
     transcription_language: str = ""
     # Gemini only
     language: str = "sv-SE"
+    # Gemini's own turn detection (Google's "automatic activity detection").
+    # Left unset, Google runs it at START_SENSITIVITY_HIGH, which treats room
+    # noise, the speaker's own echo and half-words as a user turn -- observed
+    # live 2026-09-09 as answers to "Och?", "Ja." and one Portuguese sentence
+    # nobody said. LOW is the equivalent of the OpenAI side's
+    # vad_eagerness="low": harder to start a turn, slower to call it finished.
+    gemini_vad_start_sensitivity: str = "low"
+    gemini_vad_end_sensitivity: str = "low"
+    gemini_vad_prefix_padding_ms: int = 300
+    gemini_vad_silence_duration_ms: int = 800
+    # "Proactive audio": Google's own answer to a speaker that hears the room.
+    # The model listens to everything but decides for itself whether the audio
+    # was addressed to it, and stays silent when it was not (silence is not
+    # billed as output audio). This is the behaviour the Gemini app has.
+    # It needs a NATIVE-AUDIO model -- gemini-2.5-flash-native-audio-* -- on
+    # API version v1beta; Gemini 3.1 Flash Live does not support it and the
+    # session is refused outright, so it is off unless asked for.
+    gemini_proactive_audio: bool = False
 
 
 def _known(provider: str) -> str:

@@ -484,6 +484,30 @@ class Application:
         self.gemini_api_key = os.environ.get("GEMINI_API_KEY", "").strip()
         self.gemini_model = os.environ.get("GEMINI_MODEL", "").strip()
         self.gemini_voice = os.environ.get("GEMINI_VOICE", "").strip()
+        # Gemini's own turn detection. Defaults match the OpenAI side's
+        # vad_eagerness="low": hard to start a turn, slow to end one. Left
+        # unconfigured, Google runs at HIGH and the assistant answers the room.
+        self.gemini_vad_start_sensitivity = (
+            os.environ.get("GEMINI_VAD_START_SENSITIVITY", "").strip() or "low"
+        )
+        self.gemini_vad_end_sensitivity = (
+            os.environ.get("GEMINI_VAD_END_SENSITIVITY", "").strip() or "low"
+        )
+        try:
+            self.gemini_vad_prefix_padding_ms = int(
+                os.environ.get("GEMINI_VAD_PREFIX_PADDING_MS", "300")
+            )
+        except ValueError:
+            self.gemini_vad_prefix_padding_ms = 300
+        try:
+            self.gemini_vad_silence_duration_ms = int(
+                os.environ.get("GEMINI_VAD_SILENCE_DURATION_MS", "800")
+            )
+        except ValueError:
+            self.gemini_vad_silence_duration_ms = 800
+        self.gemini_proactive_audio = (
+            os.environ.get("GEMINI_PROACTIVE_AUDIO", "").strip().lower() == "true"
+        )
 
         # Store configuration for session creation
         self.openai_api_key = openai_api_key
@@ -540,6 +564,11 @@ class Application:
                 instructions=instructions,
                 max_output_tokens=self.max_output_tokens,
                 language=self.transcription_language or "sv-SE",
+                gemini_vad_start_sensitivity=self.gemini_vad_start_sensitivity,
+                gemini_vad_end_sensitivity=self.gemini_vad_end_sensitivity,
+                gemini_vad_prefix_padding_ms=self.gemini_vad_prefix_padding_ms,
+                gemini_vad_silence_duration_ms=self.gemini_vad_silence_duration_ms,
+                gemini_proactive_audio=self.gemini_proactive_audio,
             )
         return ProviderOptions(
             api_key=self.openai_api_key,
