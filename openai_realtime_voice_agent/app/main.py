@@ -567,6 +567,7 @@ class Application:
         self.enrollment_conductor.on_finished = _auto_build_voiceprint
         # Bana 0 speaks HA's confirmation through the same guarded lane.
         self.websocket_handler.say = self._guarded_say
+        self.websocket_handler.engine_probe = probe_engine
         self._ack_clips = {}
         self.timer_registry.allow_legacy_ring = lambda device_id: (
             len(self.websocket_handler.devices) == 1
@@ -1176,6 +1177,14 @@ class Application:
 
         engines = [p for p, key in ((GEMINI, self.gemini_api_key), (OPENAI, self.openai_api_key),
                                     (XAI, self.xai_api_key)) if key]
+        # Bana 0's offline lines speak through the conductor lane (_guarded_say),
+        # which caches on disk by text: rendered once online, they play offline.
+        from app.bana0 import LOKALA_REPLIKER
+        for text in LOKALA_REPLIKER:
+            try:
+                await self.enrollment_conductor._tts(text)
+            except Exception as e:
+                logger.warning(f"⚠️ offline line not cached: {e!r}")
         for provider in engines:
             for text in EARLY_ACK_PHRASES:
                 try:

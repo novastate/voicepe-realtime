@@ -26,6 +26,13 @@ RATE, WIDTH, CHANNELS = 16000, 2, 1
 CHUNK_BYTES = 3200  # 100 ms of 16 kHz PCM16 mono
 AUDIO = {"rate": RATE, "width": WIDTH, "channels": CHANNELS}
 
+# Without internet (raawr US-018) the cloud TTS cannot render HA's reply or an
+# answer. These two lines are rendered at startup (main._warm_early_acks) and
+# cached on disk, so they play offline. Never a question mark: it opens the mic.
+OK_FALLBACK = "Klart."
+OFFLINE_LINE = "Jag når inte nätet just nu. Lampor och sånt fungerar ändå."
+LOKALA_REPLIKER = (OK_FALLBACK, OFFLINE_LINE)
+
 
 def stt_adress(value: str) -> Optional[tuple[str, int]]:
     """The `bana0_stt` option, "host" or "host:port" (Wyoming default 10300). Empty or bad = off."""
@@ -118,10 +125,12 @@ async def tur(
     say: Callable[[str], Awaitable[None]],
     skicka_svar_till_modellen: Callable[[str], Awaitable[None]],
     skapa_svar: Callable[[], Awaitable[None]],
+    efter_miss: Optional[Callable[[], None]] = None,
 ) -> str:
     """One finished user turn. Returns 'bana0' on a hit, 'modell' otherwise.
 
     `stt(pcm, timeout)` is typically transkribera bound to host/port.
+    `efter_miss()` runs after the model was asked (vakta_natet, US-018).
     """
     try:
         text = await stt(pcm, timeout_stt) if pcm else None
@@ -130,17 +139,59 @@ async def tur(
         logger.warning(f"bana0: turn failed, model answers: {e!r}")
         svar = None
     if not svar:
-        await skapa_svar()
+        try:
+            await skapa_svar()
+        except Exception as e:  # no model socket: efter_miss says why
+            logger.warning(f"bana0: asking the model failed: {e!r}")
+        if efter_miss is not None:
+            efter_miss()
         return "modell"
     # HA already acted: from here on the model must never be asked to answer,
     # or the room hears the order handled twice.
     logger.info(f"bana0: hit {text!r} -> {svar!r}")
-    for steg in (say, skicka_svar_till_modellen):
+    try:
+        await say(svar)
+    except Exception as e:
+        # Offline the cloud TTS cannot render HA's reply; the lamp is on, so
+        # say the cached "Klart." rather than nothing (US-018).
+        logger.warning(f"bana0: say failed after a hit, saying {OK_FALLBACK!r}: {e!r}")
         try:
-            await steg(svar)
-        except Exception as e:
-            logger.warning(f"bana0: {getattr(steg, '__name__', steg)} failed after a hit: {e!r}")
+            await say(OK_FALLBACK)
+        except Exception as e2:
+            logger.warning(f"bana0: fallback say failed too: {e2!r}")
+    try:
+        await skicka_svar_till_modellen(svar)
+    except Exception as e:
+        logger.warning(f"bana0: telling the model failed after a hit: {e!r}")
     return "bana0"
+
+
+async def vakta_natet(
+    *,
+    natet_nere: Callable[[], Awaitable[bool]],
+    claim: Callable[[], bool],
+    say: Callable[[str], Awaitable[None]],
+) -> bool:
+    """After a miss: if the model's engine cannot be reached, say OFFLINE_LINE.
+
+    `claim()` is the turn's once-only silence slot (TurnLiveness.claim_silence_ack):
+    false when the model already spoke or the "Ett ögonblick" ack took it, so
+    the room never hears both. True when the line was said.
+    """
+    try:
+        if not await natet_nere():
+            return False
+    except Exception as e:
+        logger.warning(f"bana0: engine probe raised: {e!r}")
+    if not claim():
+        return False
+    logger.warning("bana0: the engine is unreachable, saying so")
+    try:
+        await say(OFFLINE_LINE)
+    except Exception as e:
+        logger.warning(f"bana0: offline line failed: {e!r}")
+        return False
+    return True
 
 
 async def lagg_till_svar(service, text: str) -> None:

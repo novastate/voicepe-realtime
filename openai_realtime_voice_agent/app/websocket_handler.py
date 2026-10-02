@@ -30,6 +30,8 @@ from app.providers import (
     supports_client_events,
 )
 from app import bana0
+
+OFFLINE_PROBE_S = 1.5  # US-018: under EARLY_ACK_SILENCE_MS (2000 on core)
 from app.raw_audio_serializer import RawAudioSerializer
 from app.session_manager import SessionManager
 from app.audio_recording_service import AudioRecordingService
@@ -1070,6 +1072,9 @@ class WebSocketHandler:
         # announcer `say(text, device_id)` that speaks HA's confirmation.
         self.bana0_stt: Optional[tuple[str, int]] = None
         self.bana0_timeouts: tuple[float, float] = (0.6, 4.0)
+        # "Does this engine's API answer at all?" (main.probe_engine), sync.
+        # Set by main; None = no offline line (US-018).
+        self.engine_probe: Optional[Callable[[str], bool]] = None
         self.say = None
     
     def create_transport(
@@ -1511,6 +1516,26 @@ class WebSocketHandler:
                     raise RuntimeError("no announcer wired")
                 await self.say(text, client_id)
 
+            async def _natet_nere() -> bool:
+                # Under the silence ack's 2 s, so the honest line wins the slot
+                # over "Ett ögonblick." A probe that hangs is a dead network.
+                try:
+                    return not await asyncio.wait_for(
+                        asyncio.to_thread(self.engine_probe, provider), OFFLINE_PROBE_S)
+                except asyncio.TimeoutError:
+                    return True
+
+            def _efter_miss():
+                liveness = getattr(connection, "turn_liveness", None)
+                if self.engine_probe is None or liveness is None:
+                    return
+                asked = time.monotonic()
+                asyncio.get_running_loop().create_task(bana0.vakta_natet(
+                    natet_nere=_natet_nere,
+                    claim=lambda: liveness.claim_silence_ack(asked),
+                    say=_say,
+                ))
+
             async def _on_user_turn_end():
                 bana = await bana0.tur(
                     serializer.take_turn_audio(),
@@ -1520,6 +1545,7 @@ class WebSocketHandler:
                     say=_say,
                     skicka_svar_till_modellen=lambda text: bana0_hit(provider, openai_service, text),
                     skapa_svar=lambda: bana0_miss(provider, openai_service),
+                    efter_miss=_efter_miss,
                 )
                 if bana == "bana0":
                     await phase_emitter.force_idle("bana0")

@@ -2,6 +2,16 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.25.7 (fork)
+
+- **Utan internet (raawr US-018).** Snabbvägen tände lampan men högtalaren
+  kunde tiga: HA:s svar talas genom molnets TTS. Går det inte säger den nu
+  "Klart.", förrenderat vid start och cachat på disk. En fråga som inte når
+  modellen får "Jag når inte nätet just nu. Lampor och sånt fungerar ändå."
+  när motorns API inte svarar inom 1,5 s (`probe_engine`), i samma enda
+  tystnadsplats som "Ett ögonblick." - aldrig båda. Ett misslyckat
+  modellanrop efter en miss kraschar inte längre turen.
+
 ## 0.25.6 (fork)
 
 - **"Jag kollar" säger vad agenten gör.** Ägaren 2026-10-02 23:12: de fasta
