@@ -166,6 +166,25 @@ async def tur(
     return "bana0"
 
 
+async def natet_nere(probe: Callable[[str], bool], engines, timeout: float) -> bool:
+    """True when NO engine's API answers within `timeout` (sync `probe`, in threads).
+
+    Every engine, not just the one running: an xAI-only outage is a failover
+    for the router, not "no internet" for the room. A probe that hangs or
+    raises counts as down for that engine.
+    """
+    async def one(engine) -> bool:
+        try:
+            return bool(await asyncio.wait_for(asyncio.to_thread(probe, engine), timeout))
+        except Exception:
+            return False
+
+    engines = [e for e in dict.fromkeys(engines) if e]
+    if not engines:
+        return False
+    return not any(await asyncio.gather(*(one(e) for e in engines)))
+
+
 async def vakta_natet(
     *,
     natet_nere: Callable[[], Awaitable[bool]],

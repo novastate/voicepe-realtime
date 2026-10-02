@@ -31,7 +31,9 @@ from app.providers import (
 )
 from app import bana0
 
-OFFLINE_PROBE_S = 1.5  # US-018: under EARLY_ACK_SILENCE_MS (2000 on core)
+# US-018: well under EARLY_ACK_SILENCE_MS (1500 default, 2000 on core), counted
+# from the same moment, so the honest line wins the slot over "Ett ögonblick."
+OFFLINE_PROBE_S = 1.0
 from app.raw_audio_serializer import RawAudioSerializer
 from app.session_manager import SessionManager
 from app.audio_recording_service import AudioRecordingService
@@ -1075,6 +1077,7 @@ class WebSocketHandler:
         # "Does this engine's API answer at all?" (main.probe_engine), sync.
         # Set by main; None = no offline line (US-018).
         self.engine_probe: Optional[Callable[[str], bool]] = None
+        self._offline_tasks: set = set()
         self.say = None
     
     def create_transport(
@@ -1516,25 +1519,21 @@ class WebSocketHandler:
                     raise RuntimeError("no announcer wired")
                 await self.say(text, client_id)
 
-            async def _natet_nere() -> bool:
-                # Under the silence ack's 2 s, so the honest line wins the slot
-                # over "Ett ögonblick." A probe that hangs is a dead network.
-                try:
-                    return not await asyncio.wait_for(
-                        asyncio.to_thread(self.engine_probe, provider), OFFLINE_PROBE_S)
-                except asyncio.TimeoutError:
-                    return True
-
             def _efter_miss():
                 liveness = getattr(connection, "turn_liveness", None)
                 if self.engine_probe is None or liveness is None:
                     return
+                router = self.router
+                engines = (router.primary, router.backup) if router is not None else (provider,)
                 asked = time.monotonic()
-                asyncio.get_running_loop().create_task(bana0.vakta_natet(
-                    natet_nere=_natet_nere,
+                task = asyncio.get_running_loop().create_task(bana0.vakta_natet(
+                    natet_nere=lambda: bana0.natet_nere(self.engine_probe, engines, OFFLINE_PROBE_S),
                     claim=lambda: liveness.claim_silence_ack(asked),
                     say=_say,
                 ))
+                # The loop keeps tasks weakly; hold it until it is done.
+                self._offline_tasks.add(task)
+                task.add_done_callback(self._offline_tasks.discard)
 
             async def _on_user_turn_end():
                 bana = await bana0.tur(

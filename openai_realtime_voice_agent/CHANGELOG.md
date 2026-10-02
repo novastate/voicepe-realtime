@@ -8,9 +8,12 @@ All notable changes to this add-on. Newest first.
   kunde tiga: HA:s svar talas genom molnets TTS. Går det inte säger den nu
   "Klart.", förrenderat vid start och cachat på disk. En fråga som inte når
   modellen får "Jag når inte nätet just nu. Lampor och sånt fungerar ändå."
-  när motorns API inte svarar inom 1,5 s (`probe_engine`), i samma enda
-  tystnadsplats som "Ett ögonblick." - aldrig båda. Ett misslyckat
-  modellanrop efter en miss kraschar inte längre turen.
+  när INGEN motors API svarar inom 1 s (`bana0.natet_nere`, alla motorer
+  parallellt - bara xAI nere är en failover, inte "inget nät"), i samma
+  enda tystnadsplats som "Ett ögonblick." - aldrig båda; proben räknas från
+  samma stund och hinner före kvittot. Ett misslyckat modellanrop efter en
+  miss kraschar inte längre turen. Konduktörens TTS ger upp anslutningen
+  efter 3 s (var 30), så "Klart." inte väntar på ett dött nät.
 
 ## 0.25.6 (fork)
 

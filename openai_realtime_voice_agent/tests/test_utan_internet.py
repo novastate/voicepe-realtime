@@ -1,4 +1,6 @@
 """Without internet (raawr US-018): bana 0 still confirms, a question gets an honest no."""
+import time
+
 import pytest
 
 from app import bana0
@@ -79,11 +81,6 @@ async def test_natet_nere_sager_det():
 
 
 @pytest.mark.asyncio
-async def test_probe_som_kraschar_raknas_som_nere():
-    assert await _vakta(OSError("dns")) == (True, [bana0.OFFLINE_LINE])
-
-
-@pytest.mark.asyncio
 async def test_natet_uppe_ingen_replik():
     assert await _vakta(False) == (False, [])
 
@@ -95,3 +92,48 @@ async def test_modellen_eller_ogonblick_tog_platsen_ingen_replik():
 
 def test_replikerna_ar_inga_fragor():
     assert all("?" not in r for r in bana0.LOKALA_REPLIKER)
+
+
+# --- natet_nere: every engine, in parallel, a hang is a dead network ---
+
+@pytest.mark.asyncio
+async def test_alla_motorer_nere_ar_natet_nere():
+    assert await bana0.natet_nere(lambda e: False, ("xai", "gemini"), 0.5) is True
+
+
+@pytest.mark.asyncio
+async def test_en_motor_uppe_ar_inte_natet_nere():
+    # xAI down, Gemini up: the router fails over; the room must not hear "no net".
+    assert await bana0.natet_nere(lambda e: e == "gemini", ("xai", "gemini"), 0.5) is False
+
+
+@pytest.mark.asyncio
+async def test_probe_som_hanger_raknas_som_nere_inom_tiden():
+    start = time.monotonic()
+    assert await bana0.natet_nere(lambda e: time.sleep(2) or True, ("xai", "gemini"), 0.3) is True
+    assert time.monotonic() - start < 1.0  # parallel, and bounded by the timeout
+
+
+@pytest.mark.asyncio
+async def test_probe_som_kraschar_raknas_som_nere():
+    def probe(engine):
+        raise OSError("dns")
+    assert await bana0.natet_nere(probe, ("xai",), 0.5) is True
+
+
+@pytest.mark.asyncio
+async def test_inga_motorer_ar_inte_natet_nere():
+    assert await bana0.natet_nere(lambda e: False, (None, ""), 0.5) is False
+
+
+def test_main_kopplar_in_proben():
+    # initialize() needs HA and the engines; its source is what wires the probe.
+    import inspect
+    import app.main as m
+    assert "websocket_handler.engine_probe = probe_engine" in inspect.getsource(m.Application.initialize)
+
+
+def test_proben_hinner_fore_tystnadskvittot():
+    from app import websocket_handler
+    from app.providers.tool_registration import _silence_ack_ms
+    assert websocket_handler.OFFLINE_PROBE_S * 1000 < _silence_ack_ms()
