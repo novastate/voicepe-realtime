@@ -2,6 +2,17 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.25.8 (fork)
+
+- **Snabbvägen bekräftas av modellen, inte av HA:s torra röst.** Ägaren
+  2026-10-03: "hellre tyst än den torra". Efter en träff talas HA:s svar inte
+  längre; modellen får ett systemmeddelande om vad som gjorts och ombeds
+  bekräfta med en mening, utan verktyg (`tool_choice: none`), så den inte kan
+  göra ordern igen. Live 0.25.6 på xAI svarade modellen ändå efter träffen,
+  ovanpå HA:s röst - två bekräftelser. Säger modellen inget på 2,5 s (utan
+  internet) spelas "Klart." i motorns egen röst ur diskcachen; på Gemini, som
+  aldrig hör ordern, direkt. Även "nätet är nere" spelas i motorns röst.
+
 ## 0.25.7 (fork)
 
 - **Utan internet (raawr US-018).** Snabbvägen tände lampan men högtalaren

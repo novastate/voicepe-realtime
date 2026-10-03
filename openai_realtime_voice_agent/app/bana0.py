@@ -122,14 +122,18 @@ async def tur(
     stt: Callable[[bytes, float], Awaitable[Optional[str]]],
     timeout_stt: float,
     timeout_comms: float,
-    say: Callable[[str], Awaitable[None]],
     skicka_svar_till_modellen: Callable[[str], Awaitable[None]],
     skapa_svar: Callable[[], Awaitable[None]],
     efter_miss: Optional[Callable[[], None]] = None,
+    efter_traff: Optional[Callable[[], None]] = None,
 ) -> str:
     """One finished user turn. Returns 'bana0' on a hit, 'modell' otherwise.
 
     `stt(pcm, timeout)` is typically transkribera bound to host/port.
+    On a hit HA's own reply is NOT spoken (the owner 2026-10-03: "hellre tyst
+    än den torra"): the model is told what was done and confirms in its own
+    words, with no tools (`skicka_svar_till_modellen`). `efter_traff()` is the
+    net when the model stays silent (vakta_bekraftelse, US-018).
     `efter_miss()` runs after the model was asked (vakta_natet, US-018).
     """
     try:
@@ -146,24 +150,46 @@ async def tur(
         if efter_miss is not None:
             efter_miss()
         return "modell"
-    # HA already acted: from here on the model must never be asked to answer,
-    # or the room hears the order handled twice.
+    # HA already acted: the model may only confirm it, never do it again.
     logger.info(f"bana0: hit {text!r} -> {svar!r}")
     try:
-        await say(svar)
-    except Exception as e:
-        # Offline the cloud TTS cannot render HA's reply; the lamp is on, so
-        # say the cached "Klart." rather than nothing (US-018).
-        logger.warning(f"bana0: say failed after a hit, saying {OK_FALLBACK!r}: {e!r}")
-        try:
-            await say(OK_FALLBACK)
-        except Exception as e2:
-            logger.warning(f"bana0: fallback say failed too: {e2!r}")
-    try:
-        await skicka_svar_till_modellen(svar)
+        await skicka_svar_till_modellen(gjort(text, svar))
     except Exception as e:
         logger.warning(f"bana0: telling the model failed after a hit: {e!r}")
+    if efter_traff is not None:
+        efter_traff()
     return "bana0"
+
+
+def gjort(text: str, svar: str) -> str:
+    """What the model is told after a hit: the order, HA's reply, and what to do."""
+    return (
+        f"Användaren sa: \"{text}\". Huset har REDAN gjort det; Home Assistant svarade: "
+        f"\"{svar}\". Bekräfta kort med egna ord, en mening. Anropa inga verktyg och gör inget mer."
+    )
+
+
+async def vakta_bekraftelse(
+    *,
+    vanta_s: float,
+    claim: Callable[[], bool],
+    say_ok: Callable[[], Awaitable[None]],
+) -> bool:
+    """After a hit: if the model has said nothing after `vanta_s`, say OK_FALLBACK.
+
+    Offline the model never answers; the room still hears it was done, in the
+    engine's own voice (cached clip). True when the clip was said.
+    """
+    await asyncio.sleep(vanta_s)
+    if not claim():
+        return False
+    logger.warning(f"bana0: no confirmation from the model, saying {OK_FALLBACK!r}")
+    try:
+        await say_ok()
+    except Exception as e:
+        logger.warning(f"bana0: fallback confirmation failed: {e!r}")
+        return False
+    return True
 
 
 async def natet_nere(probe: Callable[[str], bool], engines, timeout: float) -> bool:
@@ -213,13 +239,20 @@ async def vakta_natet(
     return True
 
 
-async def lagg_till_svar(service, text: str) -> None:
-    """Tell the realtime model what HA said, as an assistant item. No response."""
+async def be_om_bekraftelse(service, besked: str) -> None:
+    """After a hit: tell the model what was done and ask for a short spoken confirmation.
+
+    A system item, then response.create with no tools, so the model cannot
+    act on the order a second time.
+    """
     await service.send_client_event(events.ConversationItemCreateEvent(
         item=events.ConversationItem(
-            type="message", role="assistant",
-            content=[events.ItemContent(type="output_text", text=text)],
+            type="message", role="system",
+            content=[events.ItemContent(type="input_text", text=besked)],
         )
+    ))
+    await service.send_client_event(events.ResponseCreateEvent(
+        response=events.ResponseProperties(tool_choice="none")
     ))
 
 

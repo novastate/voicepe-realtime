@@ -12,7 +12,7 @@ async def _stt(pcm, timeout):
     return "tänd kontoret"
 
 
-def _tur(prova_svar, say, skapa_svar=None, efter_miss=None, monkeypatch=None):
+def _tur(prova_svar, skapa_svar=None, efter_miss=None, efter_traff=None, monkeypatch=None):
     async def prova(text, timeout):
         return prova_svar
 
@@ -25,36 +25,48 @@ def _tur(prova_svar, say, skapa_svar=None, efter_miss=None, monkeypatch=None):
         pass
 
     return bana0.tur(
-        PCM, stt=_stt, timeout_stt=1.0, timeout_comms=1.0, say=say,
+        PCM, stt=_stt, timeout_stt=1.0, timeout_comms=1.0,
         skicka_svar_till_modellen=skicka, skapa_svar=skapa_svar or skapa,
-        efter_miss=efter_miss,
+        efter_miss=efter_miss, efter_traff=efter_traff,
     )
 
 
 @pytest.mark.asyncio
-async def test_traff_utan_molnrost_sager_klart(monkeypatch):
+async def test_traff_vaktar_bekraftelsen(monkeypatch):
+    vakt = []
+    assert await _tur("Slog på lampan", efter_traff=lambda: vakt.append(1),
+                      monkeypatch=monkeypatch) == "bana0"
+    assert vakt == [1]
+
+
+async def _bekrafta(claimed):
     said = []
 
-    async def say(text):
-        if text != bana0.OK_FALLBACK:
-            raise RuntimeError("TTS nere: inget internet")
-        said.append(text)
+    async def say_ok():
+        said.append(bana0.OK_FALLBACK)
 
-    assert await _tur("Slog på lampan", say, monkeypatch=monkeypatch) == "bana0"
-    assert said == [bana0.OK_FALLBACK]
+    sagt = await bana0.vakta_bekraftelse(vanta_s=0.01, claim=lambda: claimed, say_ok=say_ok)
+    return sagt, said
+
+
+@pytest.mark.asyncio
+async def test_modellen_tyst_efter_traff_ger_klart():
+    assert await _bekrafta(True) == (True, [bana0.OK_FALLBACK])
+
+
+@pytest.mark.asyncio
+async def test_modellen_bekraftade_sjalv_inget_klart():
+    assert await _bekrafta(False) == (False, [])
 
 
 @pytest.mark.asyncio
 async def test_miss_dar_modellen_inte_nas_kraschar_inte_och_vaktar(monkeypatch):
     calls = []
 
-    async def say(text):
-        calls.append(("say", text))
-
     async def skapa():
         raise RuntimeError("no socket")
 
-    bana = await _tur(None, say, skapa_svar=skapa,
+    bana = await _tur(None, skapa_svar=skapa,
                       efter_miss=lambda: calls.append("vakt"), monkeypatch=monkeypatch)
     assert bana == "modell"
     assert calls == ["vakt"]
