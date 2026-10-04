@@ -165,6 +165,20 @@ async def bana0_hit(provider: str, service, text: str) -> None:
         await service.drop_turn()
 
 
+async def bana0_hit_tyst(provider: str, service, text: str) -> None:
+    """A hit whose answer was already spoken: the model is only told, never asked.
+
+    OpenAI/xAI: the answer as an assistant item, no response. Gemini never
+    heard the turn: dropped, as for any hit.
+    """
+    from app import bana0
+
+    if supports_client_events(provider):
+        await bana0.lagg_till_svar(service, text)
+    else:
+        await service.drop_turn()
+
+
 async def bana0_miss(provider: str, service) -> None:
     """Bana 0 missed: let the model answer the turn."""
     from app import bana0

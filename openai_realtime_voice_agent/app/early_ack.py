@@ -95,8 +95,8 @@ def to_clip_rate(pcm: bytes, mime: str) -> bytes:
     return out.astype(np.int16).tobytes()
 
 
-async def gemini_tts(text: str, api_key: str, voice: str, model: str = "") -> bytes:
-    """`text` in a Gemini prebuilt voice, as 24 kHz PCM16, cached on disk."""
+async def gemini_tts(text: str, api_key: str, voice: str, model: str = "", cache: bool = True) -> bytes:
+    """`text` in a Gemini prebuilt voice, as 24 kHz PCM16, cached on disk unless `cache` is off."""
     import hashlib
 
     from google import genai
@@ -106,7 +106,7 @@ async def gemini_tts(text: str, api_key: str, voice: str, model: str = "") -> by
     path = os.path.join(
         CACHE_DIR, "gemini_" + hashlib.md5(f"{model}:{voice}:{text}".encode()).hexdigest() + ".pcm"
     )
-    if os.path.exists(path) and os.path.getsize(path) > 0:
+    if cache and os.path.exists(path) and os.path.getsize(path) > 0:
         with open(path, "rb") as f:
             return f.read()
     client = genai.Client(api_key=api_key)
@@ -133,6 +133,8 @@ async def gemini_tts(text: str, api_key: str, voice: str, model: str = "") -> by
             break
     if not pcm:
         raise ValueError("Gemini TTS returned no audio")
+    if not cache:
+        return pcm
     try:
         os.makedirs(CACHE_DIR, exist_ok=True)
         with open(path, "wb") as f:
@@ -145,7 +147,7 @@ async def gemini_tts(text: str, api_key: str, voice: str, model: str = "") -> by
 XAI_TTS_URL = "https://api.x.ai/v1/tts"
 
 
-async def xai_tts(text: str, api_key: str, voice: str) -> bytes:
+async def xai_tts(text: str, api_key: str, voice: str, cache: bool = True) -> bytes:
     """`text` in an xAI voice, as 24 kHz PCM16, cached on disk (0.25.0).
 
     The ack on the xai engine comes in the session's own voice, like Charon
@@ -158,7 +160,7 @@ async def xai_tts(text: str, api_key: str, voice: str) -> bytes:
 
     text = os.environ.get("XAI_ACK_PREFIX", "") + text
     path = os.path.join(CACHE_DIR, "xai_" + hashlib.md5(f"{voice}:{text}".encode()).hexdigest() + ".pcm")
-    if os.path.exists(path) and os.path.getsize(path) > 0:
+    if cache and os.path.exists(path) and os.path.getsize(path) > 0:
         with open(path, "rb") as f:
             return f.read()
     async with httpx.AsyncClient(timeout=15) as client:
@@ -171,6 +173,8 @@ async def xai_tts(text: str, api_key: str, voice: str) -> bytes:
     r.raise_for_status()
     if not r.content:
         raise ValueError("xAI TTS returned no audio")
+    if not cache:
+        return r.content
     try:
         os.makedirs(CACHE_DIR, exist_ok=True)
         with open(path, "wb") as f:

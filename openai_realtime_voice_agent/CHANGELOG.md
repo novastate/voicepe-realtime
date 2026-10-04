@@ -2,6 +2,15 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.1 (fork)
+
+- **Klockan läses upp direkt, utan språkmodell.** Comms snabbväg släpper nu
+  igenom HA:s `HassGetCurrentTime` och märker svaret `raawr_bana0.tala`
+  (raawr spår A, gren `story/bana0-klockan`). Ett sådant svar läses upp med
+  motorns egen röst, renderat varje gång (inte cachat - det ändras varje
+  minut); modellen får bara veta vad som sagts och ombeds aldrig svara, och
+  inget "Klart." läggs ovanpå. Lampor som förut.
+
 ## 0.27.0 (fork) - tidigare 0.25.8 + 0.25.7, ovanpå sovläget
 
 - **Snabbvägen bekräftas av modellen, inte av HA:s torra röst.** Ägaren

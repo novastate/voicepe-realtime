@@ -580,6 +580,7 @@ class Application:
         self.websocket_handler.say = self._guarded_say
         self.websocket_handler.engine_probe = probe_engine
         self.websocket_handler.ack_clip = self._ack_clip
+        self.websocket_handler.tal_clip = self._tal_clip
         self._ack_clips = {}
         self.timer_registry.allow_legacy_ring = lambda device_id: (
             len(self.websocket_handler.devices) == 1
@@ -1152,6 +1153,16 @@ class Application:
             return
         logger.info(f"⏱ early ack: {text}")
         await self._guarded_say(text, connection.device_id, pace=False, pcm=pcm)
+
+    async def _tal_clip(self, provider, text) -> bytes:
+        """`text` in the engine's voice, rendered now and not cached (an answer, not a phrase)."""
+        from app.providers import GEMINI, XAI
+
+        if provider == GEMINI:
+            return await gemini_tts(text, self.gemini_api_key, self.gemini_voice or "Charon", cache=False)
+        if provider == XAI:
+            return await xai_tts(text, self.xai_api_key, self.xai_voice, cache=False)
+        return await self.enrollment_conductor._tts(text, voice=self.voice)
 
     async def _ack_clip(self, provider, text) -> bytes:
         """The ack in the voice of the engine that answers (0.23.3).

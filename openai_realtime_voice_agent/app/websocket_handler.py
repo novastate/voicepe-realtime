@@ -24,6 +24,7 @@ from app.multi_client_transport import MixedFastAPIWebsocketTransport
 from app.providers import (
     OPENAI,
     bana0_hit,
+    bana0_hit_tyst,
     bana0_miss,
     drop_pending_input_audio,
     input_sample_rate,
@@ -1167,6 +1168,8 @@ class WebSocketHandler:
         self._offline_tasks: set = set()
         # main._ack_clip: a phrase in the engine's own voice, cached on disk.
         self.ack_clip = None
+        # main._tal_clip: any text in the engine's voice, not cached (raawr_bana0.tala).
+        self.tal_clip = None
         self.say = None
     
     def create_transport(
@@ -1631,6 +1634,14 @@ class WebSocketHandler:
                 self._offline_tasks.add(task)
                 task.add_done_callback(self._offline_tasks.discard)
 
+            async def _tala(text):
+                # The answer itself (the time), in the engine's voice, rendered
+                # each time (not cached: it changes every minute).
+                if self.say is None or self.tal_clip is None:
+                    raise RuntimeError("no announcer wired")
+                pcm = await self.tal_clip(provider, text)
+                await self.say(text, client_id, pace=False, pcm=pcm)
+
             def _efter_traff():
                 liveness = getattr(connection, "turn_liveness", None)
                 if liveness is None:
@@ -1654,6 +1665,8 @@ class WebSocketHandler:
                     timeout_comms=timeout_comms,
                     skicka_svar_till_modellen=lambda text: bana0_hit(provider, openai_service, text),
                     efter_traff=_efter_traff,
+                    tala=_tala,
+                    lagg_till=lambda text: bana0_hit_tyst(provider, openai_service, text),
                     skapa_svar=lambda: bana0_miss(provider, openai_service),
                     efter_miss=_efter_miss,
                 )

@@ -91,6 +91,16 @@ async def transkribera(pcm16k: bytes, host: str, port: int, timeout: float) -> O
         return None
 
 
+class Svar(str):
+    """HA's spoken reply, plus whether comms asked for it to be spoken as is.
+
+    `tala` comes from comms' `raawr_bana0.tala` (raawr, spår A 2026-10-04): an
+    answer like the time must be read out; a lamp is confirmed in the model's
+    own words. A str, so every caller that only wants the text is unchanged.
+    """
+    tala = False
+
+
 async def prova(text: str, timeout: float) -> Optional[str]:
     """Ask HA's conversation agent via comms. HA's spoken reply on a hit, else None.
 
@@ -107,10 +117,13 @@ async def prova(text: str, timeout: float) -> Optional[str]:
             )
         if r.status_code != 200:
             return None
-        speech = r.json()["response"]["speech"]["plain"]["speech"]
-        if not isinstance(speech, str):
+        body = r.json()
+        speech = body["response"]["speech"]["plain"]["speech"]
+        if not isinstance(speech, str) or not speech.strip():
             return None
-        return speech.strip() or None
+        svar = Svar(speech.strip())
+        svar.tala = bool((body.get("raawr_bana0") or {}).get("tala"))
+        return svar
     except Exception as e:
         logger.warning(f"bana0: comms failed: {e!r}")
         return None
@@ -126,6 +139,8 @@ async def tur(
     skapa_svar: Callable[[], Awaitable[None]],
     efter_miss: Optional[Callable[[], None]] = None,
     efter_traff: Optional[Callable[[], None]] = None,
+    tala: Optional[Callable[[str], Awaitable[None]]] = None,
+    lagg_till: Optional[Callable[[str], Awaitable[None]]] = None,
 ) -> str:
     """One finished user turn. Returns 'bana0' on a hit, 'modell' otherwise.
 
@@ -150,8 +165,21 @@ async def tur(
         if efter_miss is not None:
             efter_miss()
         return "modell"
-    # HA already acted: the model may only confirm it, never do it again.
     logger.info(f"bana0: hit {text!r} -> {svar!r}")
+    if getattr(svar, "tala", False) and tala is not None:
+        # An answer to be read out (the time): spoken in the engine's own voice,
+        # the model only told about it, never asked - one answer, not two.
+        try:
+            await tala(svar)
+        except Exception as e:
+            logger.warning(f"bana0: speaking HA's answer failed: {e!r}")
+        if lagg_till is not None:
+            try:
+                await lagg_till(svar)
+            except Exception as e:
+                logger.warning(f"bana0: telling the model failed: {e!r}")
+        return "bana0"
+    # HA already acted: the model may only confirm it, never do it again.
     try:
         await skicka_svar_till_modellen(gjort(text, svar))
     except Exception as e:
@@ -247,6 +275,16 @@ async def vakta_natet(
         logger.warning(f"bana0: offline line failed: {e!r}")
         return False
     return True
+
+
+async def lagg_till_svar(service, text: str) -> None:
+    """Tell the realtime model what was already said, as an assistant item. No response."""
+    await service.send_client_event(events.ConversationItemCreateEvent(
+        item=events.ConversationItem(
+            type="message", role="assistant",
+            content=[events.ItemContent(type="output_text", text=text)],
+        )
+    ))
 
 
 async def be_om_bekraftelse(service, besked: str) -> None:

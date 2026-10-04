@@ -544,3 +544,47 @@ async def test_gemini_tappad_tur_sags_hogt():
         await asyncio.sleep(0)
     assert said == [(TURN_LOST_LINE, "kontoret")]
     assert idle == ["turn-lost"]
+
+
+
+# --- comms marks an answer to be read out (raawr_bana0.tala, spår A 2026-10-04) ---
+
+@pytest.mark.asyncio
+async def test_prova_laser_tala_fran_comms(comms):
+    comms.svar = httpx.Response(200, json={
+        "response": {"speech": {"plain": {"speech": "Klockan är 20:15."}}},
+        "raawr_bana0": {"intent": "HassGetCurrentTime", "tala": True}})
+    svar = await bana0.prova("vad är klockan", 4.0)
+    assert svar == "Klockan är 20:15." and svar.tala is True
+    comms.svar = _ha("Slog på lampan")
+    assert (await bana0.prova("tänd lampan", 4.0)).tala is False
+
+
+@pytest.mark.asyncio
+async def test_tala_traff_lases_upp_och_modellen_far_bara_veta(comms):
+    comms.svar = httpx.Response(200, json={
+        "response": {"speech": {"plain": {"speech": "Klockan är 20:15."}}},
+        "raawr_bana0": {"intent": "HassGetCurrentTime", "tala": True}})
+    server, port, _ = await _wyoming(_transcript("vad är klockan"))
+    service, sagt, vakt = FakeService(), [], []
+
+    async def stt(pcm, timeout):
+        return await bana0.transkribera(pcm, "127.0.0.1", port, timeout)
+
+    async def tala(text):
+        sagt.append(text)
+
+    async def skapa():
+        raise AssertionError("a hit never asks the model to answer")
+
+    async with server:
+        assert await bana0.tur(
+            PCM, stt=stt, timeout_stt=1.0, timeout_comms=4.0,
+            skicka_svar_till_modellen=lambda t: bana0.be_om_bekraftelse(service, t),
+            skapa_svar=skapa, efter_traff=lambda: vakt.append(1),
+            tala=tala, lagg_till=lambda t: bana0.lagg_till_svar(service, t),
+        ) == "bana0"
+    assert sagt == ["Klockan är 20:15."]
+    assert vakt == []  # no "Klart." on top
+    assert service.typer() == ["conversation.item.create"]  # told, not asked
+    assert service.events[0].item.role == "assistant"
