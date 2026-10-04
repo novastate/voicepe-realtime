@@ -215,7 +215,9 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
     async def _ateranslut(self, forut: bool) -> None:
         await self._connect()  # Live has no resumption: always a fresh session
 
-    async def _ar_uppkopplad(self, timeout: float = 5.0) -> bool:
+    async def _ar_uppkopplad(self, timeout: float = 3.0) -> bool:
+        # Under ConnectionRecovery.VAKNA_TIMEOUT_S (5 s), so a session that never
+        # starts lands in SovlageMixin's "asleep again" here, not in a cancel.
         try:
             await asyncio.wait_for(self._started.wait(), timeout)
         except asyncio.TimeoutError:
@@ -316,8 +318,10 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
         self._reply_end_task = asyncio.get_running_loop().create_task(self._end_reply_later())
 
     async def _end_reply_later(self):
-        await asyncio.sleep(_env_float("OPENAI_LIVE_REPLY_GAP_MS", 600.0) / 1000.0)
+        await asyncio.sleep(_env_float("OPENAI_LIVE_REPLY_GAP_MS", 1500.0) / 1000.0)
         self._reply_end_task = None
+        if getattr(self, "_verktyg_pagar", 0) > 0:
+            return  # a tool is still running: the answer comes after it
         self._reply_open = False
         await self.push_frame(TTSStoppedFrame())
         await self.push_frame(LLMFullResponseEndFrame())
@@ -347,13 +351,19 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
             args = {}
         call = FunctionCallFromLLM(function_name=item.get("name", ""), tool_call_id=item.get("call_id", ""),
                                    arguments=args, context=self._context)
-        # Off the reader: a slow tool must not stop the socket being read.
-        asyncio.get_running_loop().create_task(self.run_function_calls([call]))
+        # Off the reader: a slow tool must not stop the socket being read. While
+        # it runs the reply is not over, however long the silence (review of US-025).
+        self._verktyg_pagar = getattr(self, "_verktyg_pagar", 0) + 1
+        task = asyncio.get_running_loop().create_task(self.run_function_calls([call]))
+        self._verktyg_tasks = getattr(self, "_verktyg_tasks", set())
+        self._verktyg_tasks.add(task)
+        task.add_done_callback(self._verktyg_tasks.discard)
 
     async def broadcast_frame(self, frame_cls, **kwargs):
         """pipecat hands a tool's result back by broadcasting a frame; send it to Live too."""
         await super().broadcast_frame(frame_cls, **kwargs)
         if frame_cls is FunctionCallResultFrame:
+            self._verktyg_pagar = max(0, getattr(self, "_verktyg_pagar", 0) - 1)
             result = kwargs.get("result")
             output = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
             await self._send({"type": "response.item.create", "item": {

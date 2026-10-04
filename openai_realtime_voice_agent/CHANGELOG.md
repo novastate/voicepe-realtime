@@ -11,7 +11,7 @@ All notable changes to this add-on. Newest first.
   `session.input_audio.append` (16 kHz), ut som `session.output_audio.delta`
   (24 kHz), verktyg via Responses-delegering (`response.event` ->
   `function_call_output` + `response.create`), `session.close`. Inget
-  "ljud klart"-event: `OPENAI_LIVE_REPLY_GAP_MS` (600) utan ljud avslutar
+  "ljud klart"-event: `OPENAI_LIVE_REPLY_GAP_MS` (1500) utan ljud avslutar
   svaret.
 - Som de andra: sover till väckningen, snabbvägen först (turens ljud hålls
   tills bana 0 avgjort, Live hör aldrig en träff), lokala turer, maxtid och

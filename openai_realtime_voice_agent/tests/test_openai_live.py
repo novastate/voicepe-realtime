@@ -287,3 +287,76 @@ async def test_nekad_vakning_flyttar_hogtalaren_till_nasta_motor():
     await asyncio.sleep(0.05)
     flytt.assert_awaited_once()
     assert router.current() == "gemini"
+
+
+# --- review of US-025 (adversarial, 2026-10-04) ---
+
+@pytest.mark.asyncio
+async def test_produktionsvagen_somnar_nar_session_started_uteblir():
+    """Through ConnectionRecovery.vakna with its real 5 s limit: the engine's own
+    3 s wait must end first, so the engine is asleep and the lock free again."""
+    from app.websocket_handler import ConnectionRecovery
+
+    fake = FakeLive(started=False)
+    server, url = await _server(fake)
+    async with server:
+        s = _service(url)
+        r = ConnectionRecovery(s, provider=OPENAI_LIVE)
+        await r.vakna()
+        assert s.sover is True and openai_live._Las.agare is None
+
+
+@pytest.mark.asyncio
+async def test_yttre_tidsgrans_soever_motorn():
+    """Even if the outer limit fires first, the engine goes back to sleep."""
+    from app.websocket_handler import ConnectionRecovery
+
+    fake = FakeLive(started=False)
+    server, url = await _server(fake)
+    async with server:
+        s = _service(url)
+        r = ConnectionRecovery(s, provider=OPENAI_LIVE)
+        r.VAKNA_TIMEOUT_S = 0.3  # shorter than the engine's own 3 s wait
+        await r.vakna()
+        assert s.sover is True and openai_live._Las.agare is None
+
+
+@pytest.mark.asyncio
+async def test_nedrivning_raknar_minuterna():
+    from app.device_registry import DeviceConnection
+    from app.websocket_handler import WebSocketHandler
+
+    fake = FakeLive()
+    server, url = await _server(fake)
+    async with server:
+        s = _service(url)
+        assert await s.vakna() is True
+        s._uppkopplad_sedan -= 120  # two minutes connected
+        conn = DeviceConnection(device_id="kontoret", websocket=object(), serializer=None)
+        conn.openai_service = s
+        await WebSocketHandler()._teardown(conn)
+        assert s.sover is True and openai_live._Las.agare is None
+        assert openai_live.OPENAI_BUDGET.anvant() >= 119
+
+
+@pytest.mark.asyncio
+async def test_svaret_tar_inte_slut_medan_ett_verktyg_kor():
+    fake = FakeLive()
+    server, url = await _server(fake)
+    async with server:
+        s = _service(url)
+        s._turns = None
+        done = []
+
+        async def klar():
+            done.append(1)
+
+        s.set_turn_complete_handler(klar)
+        await s.vakna()
+        s._verktyg_pagar = 1  # a delegated tool is running
+        await fake.conn.send(json.dumps({"type": "session.output_audio.delta",
+                                         "delta": base64.b64encode(b"\x00\x01" * 240).decode()}))
+        assert await _vant(lambda: any(isinstance(f, TTSAudioRawFrame) for f in s.frames))
+        await asyncio.sleep(0.3)  # past the (test) 100 ms gap
+        assert done == []
+        await s.sova("klar")

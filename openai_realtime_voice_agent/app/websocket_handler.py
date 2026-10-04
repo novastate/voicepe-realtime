@@ -791,7 +791,16 @@ class ConnectionRecovery(FrameProcessor):
                     logger.warning(f"🔀 {self._provider} refused the wake ({grund}) — this speaker moves to {nasta}")
                     self._vakna_task = asyncio.create_task(self._on_failover())
         except asyncio.TimeoutError:
-            logger.warning(f"⚠️ cloud connect on wake took over {self.VAKNA_TIMEOUT_S:.0f}s — going on")
+            # The engine's own wait did not end in time: put it to sleep, so the
+            # half-open socket closes, its lock is released, the minutes are
+            # counted, and the next wake tries again (review of US-025).
+            logger.warning(f"⚠️ cloud connect on wake took over {self.VAKNA_TIMEOUT_S:.0f}s — asleep again")
+            sova = getattr(self._service, "sova", None)
+            if sova is not None:
+                try:
+                    await sova("connect on wake timed out")
+                except Exception as e:
+                    logger.warning(f"⚠️ sleep after a timed-out wake failed: {e!r}")
 
     def _tal_sedan_vakning(self) -> bool:
         """A real utterance since this wake, not the open mic.
