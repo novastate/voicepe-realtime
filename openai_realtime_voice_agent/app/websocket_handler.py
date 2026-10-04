@@ -779,6 +779,17 @@ class ConnectionRecovery(FrameProcessor):
         try:
             if await asyncio.wait_for(self._maskin.vakna(self._service), self.VAKNA_TIMEOUT_S):
                 self._connected_at = time.monotonic()
+            elif getattr(self._service, "vagran", None) and self._router is not None:
+                # OpenAI Live refused this wake (the other speaker holds its one
+                # session, or its daily cap is used). Minimal fallback: report it
+                # as money so the router moves on, and rebuild this connection on
+                # that engine; he wakes it again. ponytail: a per-wake fallback
+                # would keep this utterance; build it if Live becomes the primary.
+                grund = self._service.vagran
+                nasta = self._router.report_failure(self._provider, f"insufficient_quota (openai_live: {grund})")
+                if nasta != self._provider and self._on_failover is not None:
+                    logger.warning(f"🔀 {self._provider} refused the wake ({grund}) — this speaker moves to {nasta}")
+                    self._vakna_task = asyncio.create_task(self._on_failover())
         except asyncio.TimeoutError:
             logger.warning(f"⚠️ cloud connect on wake took over {self.VAKNA_TIMEOUT_S:.0f}s — going on")
 
