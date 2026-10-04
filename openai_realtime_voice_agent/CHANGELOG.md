@@ -2,6 +2,28 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.28.0 (fork)
+
+- **OpenAI Live som röstmotor, `openai_live`** (raawr US-025). Henriks
+  OpenAI-nyckel tillåter bara Live (gpt-live-1); Realtime-motorn `openai`
+  lämnas orörd. Eget protokoll (`app/providers/openai_live.py`):
+  `session.start` -> `session.started`, ljud in som
+  `session.input_audio.append` (16 kHz), ut som `session.output_audio.delta`
+  (24 kHz), verktyg via Responses-delegering (`response.event` ->
+  `function_call_output` + `response.create`), `session.close`. Inget
+  "ljud klart"-event: `OPENAI_LIVE_REPLY_GAP_MS` (600) utan ljud avslutar
+  svaret.
+- Som de andra: sover till väckningen, snabbvägen först (turens ljud hålls
+  tills bana 0 avgjort, Live hör aldrig en träff), lokala turer, maxtid och
+  dagstak. Henriks två regler för motorn: **en OpenAI-session åt gången** i
+  hela processen, och **eget tak `OPENAI_MAX_MINUTER_PER_DAG` (6)** i
+  `/data/moln_minuter_openai.json`. En nekad väckning flyttar högtalaren till
+  nästa motor i kedjan (han väcker igen).
+- `VOICE_PROVIDERS=gemini,openai_live,xai`. Inställningar: `OPENAI_LIVE_MODEL`
+  (gpt-live-1), `OPENAI_LIVE_VOICE` (marin), `OPENAI_LIVE_DELEGATION_MODEL`,
+  `OPENAI_LIVE_TAIL_MS`. Protokollfält som inte är provade live står på ett
+  ställe: `openai_live.session_config` (ponytail).
+
 ## 0.27.0 (fork) - tidigare 0.25.8 + 0.25.7, ovanpå sovläget
 
 - **Snabbvägen bekräftas av modellen, inte av HA:s torra röst.** Ägaren

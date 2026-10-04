@@ -13,23 +13,27 @@ GEMINI = "gemini"
 # xAI Grok Voice: OpenAI Realtime's protocol on xAI's socket, so it takes the
 # OpenAI side of every branch below (0.25.0).
 XAI = "xai"
-PROVIDERS = (OPENAI, GEMINI, XAI)
+# OpenAI Live (gpt-live-1, 0.28.0, raawr US-025): its own protocol, Gemini's
+# side of every branch below (no raw Realtime events; it sleeps instead of
+# being repaired - providers/openai_live.py).
+OPENAI_LIVE = "openai_live"
+PROVIDERS = (OPENAI, GEMINI, XAI, OPENAI_LIVE)
 
 # What each engine wants the microphone audio to be. The device produces
 # 16 kHz; OpenAI needs it raised, Gemini takes it as it is. Both answer with
 # 24 kHz, which is what the pipeline already plays.
-_INPUT_RATE = {OPENAI: 24000, GEMINI: 16000, XAI: 24000}
+_INPUT_RATE = {OPENAI: 24000, GEMINI: 16000, XAI: 24000, OPENAI_LIVE: 16000}
 
 # pipecat's OpenAI Realtime service has no reconnect logic; a dead socket
 # floods ErrorFrames forever. The Gemini service has _reconnect,
 # _handle_connection_error and session resumption, so it repairs itself and
 # ConnectionRecovery must keep its hands off.
-_SELF_HEALS = {OPENAI: False, GEMINI: True, XAI: False}
+_SELF_HEALS = {OPENAI: False, GEMINI: True, XAI: False, OPENAI_LIVE: True}
 
 # Raw client events are OpenAI Realtime's own protocol. Gemini Live has no
 # equivalent, so anything sent that way reaches one engine and vanishes on the
 # other -- which is how the speaker's name silently stopped reaching the model.
-_CLIENT_EVENTS = {OPENAI: True, GEMINI: False, XAI: True}
+_CLIENT_EVENTS = {OPENAI: True, GEMINI: False, XAI: True, OPENAI_LIVE: False}
 
 
 @dataclass
@@ -204,6 +208,9 @@ def build_service(provider: str, options: ProviderOptions, tools: List[Dict[str,
     elif provider == XAI:
         from app.providers import xai_realtime
         service = xai_realtime.build(options, tools)
+    elif provider == OPENAI_LIVE:
+        from app.providers import openai_live
+        service = openai_live.build(options, tools)
     else:
         from app.providers import gemini_live
         service = gemini_live.build(options, tools)
