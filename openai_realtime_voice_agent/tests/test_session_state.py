@@ -113,26 +113,32 @@ FORBUDET = {"sova", "send_phase"}
 
 
 def _overtradelser():
-    """Calls in app/ that wake or sleep the engine or send a phase to a device,
-    outside the state machine. A `def` is not a call; the dict a device
-    frame is made of is not either. (The music-ducking signal, AC-5, goes through
-    the machine too; this guard grows with it.)"""
+    """Uses in app/ of the engine's wake/sleep or a device's phase sender, outside
+    the state machine: a call, or the method taken as a value (G's review of
+    PR #19: `g = svc.sova; await g(r)` got past a call-only guard). Allowed:
+    the machine's own file; `.vakna` on `self`, the recovery wrapper or the machine (it
+    calls the machine); the one wiring, `SessionMaskin(id, connection.send_phase)`.
+    A `def` is not a use. (The music-ducking signal, AC-5, goes through the
+    machine too; this guard grows with it.)"""
     funna = []
     for fil in sorted(APP.rglob("*.py")):
         if fil.name == "session_state.py":
             continue
-        for nod in ast.walk(ast.parse(fil.read_text())):
-            if not isinstance(nod, ast.Call):
-                continue
-            f = nod.func
-            namn = f.attr if isinstance(f, ast.Attribute) else f.id if isinstance(f, ast.Name) else None
-            if namn in FORBUDET:
-                funna.append(f"{fil.name}:{nod.lineno} {ast.unparse(f)}")
-            elif namn == "vakna" and isinstance(f, ast.Attribute) and ast.unparse(f.value).endswith("service"):
-                funna.append(f"{fil.name}:{nod.lineno} {ast.unparse(f)}")
-            elif (namn == "getattr" and len(nod.args) > 1 and isinstance(nod.args[1], ast.Constant)
-                  and nod.args[1].value in FORBUDET | {"vakna"}):
+        traed = ast.parse(fil.read_text())
+        tillatna = {id(a) for n in ast.walk(traed)
+                    if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "SessionMaskin"
+                    for a in n.args}
+        for nod in ast.walk(traed):
+            if isinstance(nod, ast.Attribute) and id(nod) not in tillatna:
+                if nod.attr in FORBUDET:
+                    funna.append(f"{fil.name}:{nod.lineno} {ast.unparse(nod)}")
+                elif nod.attr == "vakna" and ast.unparse(nod.value) not in ("self", "connection.recovery", "self._maskin"):
+                    funna.append(f"{fil.name}:{nod.lineno} {ast.unparse(nod)}")
+            elif (isinstance(nod, ast.Call) and getattr(nod.func, "id", "") == "getattr" and len(nod.args) > 1
+                  and isinstance(nod.args[1], ast.Constant) and nod.args[1].value in FORBUDET | {"vakna"}):
                 funna.append(f"{fil.name}:{nod.lineno} getattr(..., {nod.args[1].value!r})")
+            elif isinstance(nod, ast.Call) and isinstance(nod.func, ast.Name) and nod.func.id in FORBUDET | {"vakna"}:
+                funna.append(f"{fil.name}:{nod.lineno} {nod.func.id}()")
     return funna
 
 
