@@ -546,15 +546,32 @@ async def test_lopande_bokforing_rubbar_inte_maxtiden(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_kill_9_tappar_hogst_en_minut(egen_budget, tmp_path):
-    """The process dies with a session open 3 min; a new process reads the ledger."""
-    s = Fake()
-    await s.vakna()
-    _oppen_sedan(s, 180)
-    s.bokfor_lopande()  # the sleep loop's last tick, under a minute before the kill
-    # kill -9 here: no sova(), no teardown.
+@pytest.mark.parametrize("fas", [0.0, 2.5, 4.99])
+async def test_kill_9_med_bada_hogtalarna_tappar_hogst_en_minut(egen_budget, monkeypatch, fas):
+    """Both speakers open, the sleep loop's 5 s tick, kill -9 at the worst moment
+    (just before a booking): the ledger in a new process lacks at most 60 s of
+    what the journal shows (G's review of PR #17: 120 s with a 60 s step)."""
+    import app.providers.sovlage as sovlage
+
+    nu = [1000.0]
+    monkeypatch.setattr(sovlage.time, "monotonic", lambda: nu[0])
+    kontoret, koket = Fake(), Fake()
+    await kontoret.vakna()
+    nu[0] += fas
+    await koket.vakna()
+    start = {kontoret: 1000.0, koket: 1000.0 + fas}
+    varst = 0.0
+    for _ in range(int(300 / 0.01)):  # 300 s in 10 ms steps, a tick every 5 s
+        nu[0] = round(nu[0] + 0.01, 2)
+        if round(nu[0] * 100) % 500 == 0:
+            for s in (kontoret, koket):
+                s.bokfor_lopande()
+        if round(nu[0] * 100) % 500 == 499:  # kill -9 now, just before a tick:
+            journalen = sum(nu[0] - t for t in start.values())  # both full sessions
+            varst = max(varst, journalen - egen_budget.anvant())  # vs what is booked
     ny_process = Budget(path=egen_budget.path, today=lambda: "2026-10-04")
-    assert ny_process.anvant() >= 180 - 60
+    assert ny_process.anvant() == egen_budget.anvant()
+    assert varst <= 60.0
 
 
 @pytest.mark.asyncio
@@ -580,6 +597,14 @@ async def test_tva_hogtalare_35_och_30_min_nekar_nasta_vakning(egen_budget, monk
     await kontoret.sova("tyst")
     await koket.sova("tyst")
     assert await Fake().vakna() is False
+
+
+def test_dodad_mellan_de_tva_skrivningarna_ger_det_nya_vardet(tmp_path):
+    """kill -9 after the ledger was replaced but before its copy: the higher wins."""
+    path = tmp_path / "m.json"
+    Budget(path=str(path), today=lambda: "2026-10-04").lagg_till(1234)
+    path.write_text('{"2026-10-04": 1300.0}')  # the new value; the copy still says 1234
+    assert Budget(path=str(path), today=lambda: "2026-10-04").anvant() == 1300.0
 
 
 @pytest.mark.parametrize("fel", ["trasig", "tom", "borta"])

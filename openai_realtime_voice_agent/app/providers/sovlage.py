@@ -64,6 +64,9 @@ def max_sekunder_per_dag() -> float:
 
 
 KOPIA = ".kopia"
+# AC-4 allows 1 min between ledger and journal for the whole house: two
+# speakers x (20 s + the 5 s tick) = 50 s lost at most on a kill -9.
+BOKFOR_VAR_S = 20.0
 
 
 class Budget:
@@ -196,9 +199,10 @@ class SovlageMixin:
         self._oppna.discard(self)
         self.budget.lagg_till(sekunder)
 
-    def bokfor_lopande(self, var_s: float = 60.0) -> None:
-        """Book an open session every `var_s`, so a kill -9 loses at most that
-        much of it (US-032 AC-4). The session clock, and so the cap, is untouched."""
+    def bokfor_lopande(self, var_s: float = BOKFOR_VAR_S) -> None:
+        """Book an open session every `var_s`, so a kill -9 loses at most
+        `var_s` + one sleep-loop tick of it (US-032 AC-4). The session clock,
+        and so the cap, is untouched."""
         sekunder = self._obokfort()
         if sekunder < var_s:
             return

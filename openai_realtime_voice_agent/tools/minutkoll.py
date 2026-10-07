@@ -3,8 +3,10 @@
 Sums the journal's connect/close pairs ("☁️ connected ... [moln abc123]",
 "🧾 cloud session closed ... [moln abc123]") and compares the sum with the
 ledger's growth over the same span. A session the process died with (kill -9)
-ends at the next systemd line about the unit. Exit 1 when they differ by more
-than a minute.
+ends at the next systemd line about the unit; one already open at the start
+counts from the start. Sessions still open now count in the journal but are
+booked only every 20 s, so run it with nothing open. Exit 1 when they differ
+by more than a minute.
 
     python tools/minutkoll.py                                  # today, from midnight UTC
     python tools/minutkoll.py --fran "2026-10-07 16:00:00" --start-varde 1563.8
@@ -24,7 +26,7 @@ UNIT = "raawr-rostagent"
 TAGG = re.compile(r"\[moln (\w+)\]")
 
 
-def summera(rader, slut: dt.datetime) -> float:
+def summera(rader, slut: dt.datetime, fran: dt.datetime | None = None) -> float:
     """Connected seconds in (timestamp, text) lines, in time order."""
     oppna, total = {}, 0.0
     for ts, text in rader:
@@ -33,6 +35,10 @@ def summera(rader, slut: dt.datetime) -> float:
             oppna[m.group(1)] = ts
         elif m and "cloud session closed" in text:
             start = oppna.pop(m.group(1), None)
+            if start is None and fran is not None:
+                # Open before the span began: count only its part inside it.
+                efter = re.search(r"after (\d+)s", text)
+                start = max(fran, ts - dt.timedelta(seconds=int(efter.group(1)))) if efter else ts
             if start is not None:
                 total += (ts - start).total_seconds()
         elif "systemd[" in text and f"{UNIT}.service" in text:
@@ -75,7 +81,7 @@ def main() -> int:
     a = p.parse_args()
     nu = dt.datetime.utcnow()
     fran = dt.datetime.fromisoformat(a.fran) if a.fran else nu.replace(hour=0, minute=0, second=0, microsecond=0)
-    journalen = summera(journal(fran, nu), nu)
+    journalen = summera(journal(fran, nu), nu, fran)
     ledgern = ledger_varde(a.ledger, fran.date().isoformat()) - a.start_varde
     skillnad = ledgern - journalen
     print(f"journalen {journalen / 60:.2f} min, minutfilen {ledgern / 60:.2f} min, skillnad {skillnad / 60:+.2f} min")
