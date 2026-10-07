@@ -1201,7 +1201,7 @@ class Application:
                     await self._ack_clip(provider, text)
                 except Exception as e:
                     logger.warning(f"⚠️ early ack clip not cached: {e!r}")
-                    return
+                    break  # this engine; the others and the clock still warm
         for provider in engines:
             await self._warm_klockan(provider)
 

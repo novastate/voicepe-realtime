@@ -1684,18 +1684,20 @@ class WebSocketHandler:
                 self._offline_tasks.add(task)
                 task.add_done_callback(self._offline_tasks.discard)
 
-            async def _klockan():
-                """The time from cached clips; the model never hears the question (AC-7)."""
+            async def _klockan(fraga):
+                """The time from cached clips; the model never answers the question (AC-7)."""
                 if self.say is None or self.ack_clip is None:
                     raise RuntimeError("no announcer wired")
                 delar = klockan.delar()
                 pcm = b"".join([await self.ack_clip(provider, d, fallback=False) for d in delar])
                 await self.say(" ".join(delar), client_id, pace=False, pcm=pcm)
-                if not supports_client_events(provider):
-                    try:
+                try:
+                    if supports_client_events(provider):  # it heard the turn
+                        await bana0.redan_besvarat(openai_service, fraga, " ".join(delar))
+                    else:
                         await openai_service.drop_turn()  # Gemini held the turn back
-                    except Exception as e:
-                        logger.warning(f"⚠️ clock: dropping the held turn failed: {e!r}")
+                except Exception as e:
+                    logger.warning(f"⚠️ clock: settling the turn with the model failed: {e!r}")
 
             async def _on_user_turn_end():
                 bana = await bana0.tur(

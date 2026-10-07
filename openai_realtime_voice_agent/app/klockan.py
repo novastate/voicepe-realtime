@@ -20,12 +20,11 @@ _TIOTAL = {20: "tjugo", 30: "trettio", 40: "fyrtio", 50: "femtio"}
 # The question, not just the word: "ställ klockan på sju" or "väck mig klockan
 # sex" are orders for the model. Whisper writes "var" for "vad" (2026-10-02).
 _FRAGA = re.compile(
-    r"^(?:hej björn )?(?:"
-    r"(?:vad|var|va|hur mycket) (?:är|e) klockan(?: nu)?"
-    r"|(?:vet du |kan du säga )?(?:vad|var|va|hur mycket) klockan är(?: nu)?"
-    r"|hur dags är det(?: nu)?"
-    r"|klockan"
-    r")$"
+    r"^(?:(?:hej )?björn )?(?:"
+    r"(?:vad|var|va|hur mycket) (?:är|e) (?:klockan|tiden)"
+    r"|(?:vet du |kan du säga )?(?:vad|var|va|hur mycket) klockan är"
+    r"|hur dags är det"
+    r")(?: just)?(?: nu)?(?: då)?(?: björn)?$"
 )
 
 

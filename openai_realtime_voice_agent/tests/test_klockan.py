@@ -17,13 +17,17 @@ FEM_SATT = [
 ]
 
 
-@pytest.mark.parametrize("text", FEM_SATT + ["vad e klockan", "Klockan?"])
+@pytest.mark.parametrize("text", FEM_SATT + [
+    "vad e klockan", "Vad är klockan just nu?", "Vad är klockan nu då?", "Björn, vad är klockan?",
+    "Vad är klockan, Björn?", "Vad är tiden?",
+])
 def test_klockfragor_kanns_igen(text):
     assert klockan.ar_klockfraga(text)
 
 
 @pytest.mark.parametrize("text", [
-    None, "", "ställ klockan på sju", "väck mig klockan sex", "tänd lampan i kontoret",
+    None, "", "Klockan.", "klockan sju", "ställ klockan på sju", "väck mig klockan sex",
+    "tänd lampan i kontoret",
     "vad är klockan i New York", "sätt en timer på tio minuter",
 ])
 def test_annat_ar_ingen_klockfraga(text):
@@ -73,7 +77,7 @@ async def test_klockan_svarar_utan_comms_och_modell(comms, fraga):
     server, port, _ = await _wyoming(_transcript(fraga))
     service, said = FakeService(), []
 
-    async def klocka():
+    async def klocka(text):
         said.extend(klockan.delar(FAST))
 
     async with server:
@@ -88,7 +92,7 @@ async def test_annan_fraga_gar_vidare_som_i_dag(comms):
     server, port, _ = await _wyoming(_transcript("hur varmt är det ute"))
     service, said = FakeService(), []
 
-    async def klocka():
+    async def klocka(text):
         said.append("klocka")
 
     async with server:
@@ -103,7 +107,7 @@ async def test_klocka_som_fallerar_ger_vanlig_tur(comms):
     server, port, _ = await _wyoming(_transcript("vad är klockan"))
     service, said = FakeService(), []
 
-    async def klocka():
+    async def klocka(text):
         raise RuntimeError("no clip")
 
     async with server:
@@ -112,29 +116,33 @@ async def test_klocka_som_fallerar_ger_vanlig_tur(comms):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("fel, vantat_forvantat", [
+@pytest.mark.parametrize("fel, pa_disk, vantat_forvantat", [
     # tre fails twice and is skipped; the rest go on, each render paced.
-    ({"Klockan är tre": 2}, [8.0, 8.0, 8.0, 60, 8.0]),
+    ({"Klockan är tre": 2}, set(), [8.0, 8.0, 8.0, 60, 8.0]),
     # three clips in a row fail twice: the engine is down, stop.
-    ({"Klockan är noll": 2, "Klockan är ett": 2, "Klockan är två": 2}, [60, 8.0, 60, 8.0, 60]),
+    ({"Klockan är noll": 2, "Klockan är ett": 2, "Klockan är två": 2}, set(), [60, 8.0, 60, 8.0, 60]),
+    # a clip already on disk costs no request and no wait.
+    ({}, {"Klockan är noll", "Klockan är ett"}, [8.0]),
 ])
-async def test_uppvarmningen_haller_googles_takt(monkeypatch, fel, vantat_forvantat):
+async def test_uppvarmningen_haller_googles_takt(monkeypatch, fel, pa_disk, vantat_forvantat):
     """10 TTS requests/min (429 on 2026-10-07): a render waits, the disk does not,
     and no clip is cached in another voice."""
     import app.main as main
 
-    vantat = []
+    vantat, nu = [], [0.0]
 
     async def sov(s):
         vantat.append(s)
 
-    tider = iter(range(0, 100000, 1))
     monkeypatch.setattr(main.asyncio, "sleep", sov)
-    monkeypatch.setattr(main.time, "monotonic", lambda: next(tider))  # every render "takes" 1 s
+    monkeypatch.setattr(main.time, "monotonic", lambda: nu[0])
 
     class Agent:
         async def _ack_clip(self, provider, text, fallback=True):
             assert fallback is False
+            if text in pa_disk:
+                return b"pcm"
+            nu[0] += 1.0  # a render takes a second
             if fel.get(text):
                 fel[text] -= 1
                 raise RuntimeError("no audio")
@@ -145,4 +153,28 @@ async def test_uppvarmningen_haller_googles_takt(monkeypatch, fel, vantat_forvan
     if len(fel) == 3:
         assert vantat == vantat_forvantat  # stopped after the third
     else:
-        assert len(vantat) == 24 + 59 + 1  # every clip paced, plus the one minute wait
+        renderade = 24 + 59 - len(pa_disk)
+        assert len(vantat) == renderade + (1 if fel else 0)  # plus the one minute wait
+
+
+@pytest.mark.asyncio
+async def test_klockan_varms_for_varje_motor_aven_nar_en_replik_fallerar():
+    """The clock warms for every engine with a key, also when an engine's early
+    acks fail (OpenAI 401 on core, 2026-10-07)."""
+    import app.main as main
+
+    klockor = []
+
+    class Agent:
+        gemini_api_key, openai_api_key, xai_api_key = "g", "o", ""
+
+        async def _ack_clip(self, provider, text, fallback=True):
+            if provider == "openai":
+                raise RuntimeError("401")
+            return b"pcm"
+
+        async def _warm_klockan(self, provider):
+            klockor.append(provider)
+
+    await main.Application._warm_early_acks(Agent())
+    assert klockor == ["gemini", "openai"]
