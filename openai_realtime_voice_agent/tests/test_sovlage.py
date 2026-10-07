@@ -722,8 +722,9 @@ async def test_loggtaggen_far_minutkoll_att_para_upp_och_nerkoppling(tmp_path, c
              for i, r in enumerate(r for r in caplog.records if mk.TAGG.search(r.getMessage()))]
     assert len(rader) == 4  # connect + close, for each of the two books
     assert {mk.TAGG.search(t).group(1) for _, t in rader} == {"moln", "prov"}
-    assert mk.summera(rader, dt.datetime(2026, 10, 4, 13), typ="prov") > 0
-    assert mk.summera(rader, dt.datetime(2026, 10, 4, 13), typ="moln") > 0
+    # Paired connect/close = the 60 s between them; an unpaired connect would run to `slut` (3600 s+).
+    assert mk.summera(rader, dt.datetime(2026, 10, 4, 13), typ="prov") == 60
+    assert mk.summera(rader, dt.datetime(2026, 10, 4, 13), typ="moln") == 60
     assert len(a._tagg()) == len(b._tagg()) == 11 and a._tagg().startswith("prov ")
     # A fake id() with many hex digits (64-bit addresses) keeps the book name.
     assert re.fullmatch(r"(moln|prov) [0-9a-f]{6}", b._tagg())
