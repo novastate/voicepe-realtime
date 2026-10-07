@@ -198,7 +198,7 @@ class SovlageMixin:
 
     def _tagg(self) -> str:
         """'moln 1a2b3c' or 'prov 1a2b3c': tools/minutkoll.py pairs the journal lines by it."""
-        return f"{self.budget.etikett} {id(self):x}"[-(len(self.budget.etikett) + 7):]
+        return f"{self.budget.etikett} {id(self) & 0xFFFFFF:06x}"
 
     def _obokfort(self) -> float:
         if self._uppkopplad_sedan is None:

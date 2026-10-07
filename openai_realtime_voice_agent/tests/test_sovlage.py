@@ -4,6 +4,8 @@ The cost: xAI bills per connected minute, and the agent reconnected a quiet
 session every 900 s, all night. Each test here fails on 0.25.6.
 """
 import asyncio
+import datetime as dt
+import logging
 import time
 from unittest.mock import AsyncMock
 
@@ -693,3 +695,35 @@ def test_attrapp_pipelinen_far_den_egna_boken():
 
     kalla = inspect.getsource(WebSocketHandler.build_pipeline)
     assert "openai_service.budget = budget_for(client_id)" in kalla
+
+
+@pytest.mark.asyncio
+async def test_loggtaggen_far_minutkoll_att_para_upp_och_nerkoppling(tmp_path, caplog):
+    """G's review of PR #20: the tag lost its book name once id() had more than six hex
+    digits, so tools/minutkoll.py summed 0 against a real journal."""
+    import importlib.util
+    import pathlib
+    import re
+
+    spec = importlib.util.spec_from_file_location(
+        "minutkoll", pathlib.Path(__file__).parent.parent / "tools" / "minutkoll.py")
+    mk = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mk)
+    caplog.set_level(logging.INFO)
+    prov = Budget(path=str(tmp_path / "p.json"), today=lambda: "2026-10-04", prov=True)
+    riktig = Budget(path=str(tmp_path / "r.json"), today=lambda: "2026-10-04")
+    a, b = Fake(), Fake()
+    a.budget, b.budget = prov, riktig
+    for s_ in (a, b):
+        await s_.vakna()
+        _oppen_sedan(s_, 60)
+        await s_.sova("tyst")
+    rader = [(dt.datetime(2026, 10, 4, 12, 0, 0) + dt.timedelta(seconds=60 * i), r.getMessage())
+             for i, r in enumerate(r for r in caplog.records if mk.TAGG.search(r.getMessage()))]
+    assert len(rader) == 4  # connect + close, for each of the two books
+    assert {mk.TAGG.search(t).group(1) for _, t in rader} == {"moln", "prov"}
+    assert mk.summera(rader, dt.datetime(2026, 10, 4, 13), typ="prov") > 0
+    assert mk.summera(rader, dt.datetime(2026, 10, 4, 13), typ="moln") > 0
+    assert len(a._tagg()) == len(b._tagg()) == 11 and a._tagg().startswith("prov ")
+    # A fake id() with many hex digits (64-bit addresses) keeps the book name.
+    assert re.fullmatch(r"(moln|prov) [0-9a-f]{6}", b._tagg())
