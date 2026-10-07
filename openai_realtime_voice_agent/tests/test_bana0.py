@@ -460,7 +460,7 @@ def _gemini_koppling(stt, events):
     async def force_idle(reason=""):
         idle.append(reason)
 
-    async def clip(provider, text):
+    async def clip(provider, text, fallback=True):
         return b"pcm"
 
     handler.say = say
@@ -500,11 +500,31 @@ async def test_gemini_traff_google_hor_aldrig_ordern(ha_svarar):
 
 
 @pytest.mark.asyncio
+async def test_gemini_klockan_google_hor_aldrig_fragan(ha_svarar, monkeypatch):
+    """US-032 AC-7: "vad är klockan" on Gemini is said from the cached clips;
+    neither comms nor Google hears it, so it works offline."""
+    from app import klockan
+    from test_gemini_provider import _kinds
+
+    monkeypatch.setattr(klockan, "delar", lambda nu=None: ["Klockan är fjorton", "och tjugotvå minuter"])
+    server, port, _ = await _wyoming(_transcript("Vad är klockan?"))
+    connection, service, google, said, idle = _gemini_koppling(
+        ("127.0.0.1", port), [None, "start", None, "end"])
+    async with server:
+        await _speak(connection, service, 4)
+        await service._turn_end_task
+        await asyncio.sleep(0.05)
+    assert said == [("Klockan är fjorton och tjugotvå minuter", "kontoret")]
+    assert idle == ["klockan"]
+    assert _kinds(google) == []
+
+
+@pytest.mark.asyncio
 async def test_gemini_miss_ger_modellen_hela_turen(ha_svarar):
     from test_gemini_provider import _frame, _kinds
 
     ha_svarar.append(None)
-    server, port, _ = await _wyoming(_transcript("vad är klockan"))
+    server, port, _ = await _wyoming(_transcript("hur varmt är det ute"))
     connection, service, google, said, idle = _gemini_koppling(
         ("127.0.0.1", port), [None, "start", None, "end"])
     async with server:

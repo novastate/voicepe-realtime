@@ -20,6 +20,7 @@ import httpx
 from pipecat.services.openai.realtime import events
 
 from app import ha_api
+from app import klockan as klocka
 
 logger = logging.getLogger(__name__)
 
@@ -127,8 +128,12 @@ async def tur(
     skapa_svar: Callable[[], Awaitable[None]],
     efter_miss: Optional[Callable[[], None]] = None,
     efter_traff: Optional[Callable[[], None]] = None,
+    klockan: Optional[Callable[[], Awaitable[None]]] = None,
 ) -> str:
-    """One finished user turn. Returns 'bana0' on a hit, 'modell' otherwise.
+    """One finished user turn. Returns 'klockan', 'bana0' on a hit, 'modell' otherwise.
+
+    `klockan()` says the time from cached clips (US-032 AC-7): a clock question
+    reaches neither comms nor the model. If it fails, the turn goes on as before.
 
     `stt(pcm, timeout)` is typically transkribera bound to host/port.
     On a hit HA's own reply is NOT spoken (the owner 2026-10-03: "hellre tyst
@@ -139,6 +144,13 @@ async def tur(
     """
     try:
         text = await stt(pcm, timeout_stt) if pcm else None
+        if klockan is not None and klocka.ar_klockfraga(text):
+            try:
+                await klockan()
+                logger.info(f"bana0: clock {text!r}")
+                return "klockan"
+            except Exception as e:
+                logger.warning(f"bana0: the clock failed, the turn goes on: {e!r}")
         svar = await prova(text, timeout_comms) if text else None
     except Exception as e:
         logger.warning(f"bana0: turn failed, model answers: {e!r}")
