@@ -180,6 +180,46 @@ async def test_gemini_senare_vakning_ateruptar_med_handtaget():
     service._connect.assert_awaited_with("h1")
 
 
+class _Klar:
+    """A finished connection task, as pipecat leaves it after a refused connect."""
+    def done(self):
+        return True
+
+
+@pytest.mark.asyncio
+async def test_gemini_avvisat_handtag_ger_ett_nytt_samtal_i_samma_vakning():
+    """Live 2026-10-07 12:16: Google answered the resume with 1011 in 0.9 s.
+    The wake was lost, and the handle stayed for the next wake too."""
+    service = _service(GEMINI)
+    service._session_resumption_handle = "gammalt"
+    anrop = []
+
+    async def connect(handle):
+        anrop.append(handle)
+        if handle is None:
+            service._session = object()
+        else:
+            service._connection_task = _Klar()
+
+    service._connect = connect
+    await service._ateranslut(True)
+    assert anrop == ["gammalt", None]
+    assert service._session_resumption_handle is None
+
+
+@pytest.mark.asyncio
+async def test_gemini_langsam_aterupptagning_provas_inte_om():
+    """No answer at all (the net, not Google) keeps the one attempt: a second
+    connect would only add another wait to the wake."""
+    service = _service(GEMINI)
+    service._session_resumption_handle = "h1"
+    service._connect = AsyncMock()
+    service._connection_task = None
+    service._ar_uppkopplad = AsyncMock(return_value=False)
+    await service._ateranslut(True)
+    service._connect.assert_awaited_once_with("h1")
+
+
 @pytest.mark.asyncio
 async def test_vakning_fran_enheten_vacker_motorn_genom_ledningen():
     from test_bana0 import _koppling
@@ -390,3 +430,37 @@ async def test_pagande_samtal_bryts_inte_av_vakningstaket():
     r._last_input_audio = now
     await _kor_sovloopen(r)
     assert s.sover is False and s.calls == []
+
+
+@pytest.mark.asyncio
+async def test_foljdfonstret_som_stangs_ar_ingen_vakning_utan_tal():
+    """Live 2026-10-07 (satellite stand-in on core): a question, a reply, and
+    the follow-up window closing (device 'flush') put the engine to sleep 3 s
+    later as 'wake without speech', not after 30 s of quiet. The flush clears
+    the dangling-VAD flag; it is not a wake, and the user did speak."""
+    from pipecat.frames.frames import UserStartedSpeakingFrame
+
+    from app.phase_emitter import PhaseEmitter
+
+    async def tyst(_value):
+        pass
+
+    async def ingen_vidare(*_a, **_k):
+        pass
+
+    pe = PhaseEmitter(tyst, idle_debounce_s=0)
+    pe.push_frame = ingen_vidare
+    s = Fake()
+    s.sover = False
+    r = ConnectionRecovery(s, phase_emitter=pe, provider=GEMINI)
+
+    pe.note_device_wake()  # the wake
+    await pe.process_frame(UserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    pe.note_wake()  # the follow-up window closed: flush
+
+    now = time.monotonic()
+    r._last_wake = now - (r.VAKNA_TIMEOUT_S + 1)
+    assert r._vakning_utan_tal(now) is False
+
+    pe.note_device_wake()  # a new wake nobody answers still counts
+    assert r._vakning_utan_tal(now) is True
