@@ -15,7 +15,9 @@ All notable changes to this add-on. Newest first.
   därför högst 60 klipp om dagen och fortsätter nästa UTC-dygn. Den tar de
   närmaste timmarna först. Tre fel i rad betyder att kvoten eller motorn är
   slut, och då väntar den till i morgon i stället för att ge upp. Saknas ett
-  klipp svarar modellen som förut.
+  klipp svarar modellen som förut. Dagens antal räknas från disken, så en
+  omstart samma dag börjar inte om på 60. Varje motor värms parallellt med sin
+  egen kvot. Hel timme heter "Hon är sex.", inte "prick", eftersom 17:58 avrundas.
 
 ## 0.27.8 (fork)
 

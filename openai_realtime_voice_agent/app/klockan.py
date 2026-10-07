@@ -20,7 +20,7 @@ TZ = ZoneInfo("Europe/Stockholm")
 _TIMMAR = ["tolv", "ett", "två", "tre", "fyra", "fem", "sex", "sju", "åtta", "nio", "tio", "elva"]
 # Five-minute slots: (words, whether the hour named is the next one).
 _LAGEN = [
-    ("prick {}", False), ("fem över {}", False), ("tio över {}", False),
+    ("{}", False), ("fem över {}", False), ("tio över {}", False),
     ("kvart över {}", False), ("tjugo över {}", False), ("fem i halv {}", True),
     ("halv {}", True), ("fem över halv {}", True), ("tjugo i {}", True),
     ("kvart i {}", True), ("tio i {}", True), ("fem i {}", True),

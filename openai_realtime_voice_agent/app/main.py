@@ -19,12 +19,29 @@ KLOCK_TAKT_S = 8.0  # ponytail: 7.5 renders/min under Gemini TTS's 10/min; ask f
 KLOCK_PER_DAG = 60  # of Gemini TTS's 100 a day; the rest is left for live replies
 
 
-def till_ny_dag() -> float:
-    """Seconds to 00:05 UTC, when Google's daily quota has started over."""
+def till_ny_dag(nu=None) -> float:
+    """Seconds to the next 00:05 UTC, when Google's daily quota has started over
+    (a 429 at 14:28 UTC said retry in 33226 s: about 23:42 UTC)."""
     import datetime as _dt
-    nu = _dt.datetime.now(_dt.timezone.utc)
-    imorgon = (nu + _dt.timedelta(days=1)).replace(hour=0, minute=5, second=0, microsecond=0)
-    return (imorgon - nu).total_seconds()
+    nu = nu or _dt.datetime.now(_dt.timezone.utc)
+    mal = nu.replace(hour=0, minute=5, second=0, microsecond=0)
+    if mal <= nu:
+        mal += _dt.timedelta(days=1)
+    return (mal - nu).total_seconds()
+
+
+def renderat_idag(provider, cache_dir=None) -> int:
+    """Clips this engine's TTS rendered today (UTC), from the disk cache, so a
+    restart on the same day does not start a fresh daily share."""
+    import datetime as _dt
+    from app import early_ack
+    cache_dir = cache_dir or early_ack.CACHE_DIR
+    midnatt = _dt.datetime.now(_dt.timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    try:
+        with os.scandir(cache_dir) as filer:
+            return sum(1 for f in filer if f.name.startswith(f"{provider}_") and f.stat().st_mtime >= midnatt)
+    except OSError:
+        return 0
 from app.disconnect_tool import get_disconnect_tool_definition, create_disconnect_tool_handler
 from app.follow_up_tool import (
     get_follow_up_tool_definition,
@@ -1211,8 +1228,8 @@ class Application:
                 except Exception as e:
                     logger.warning(f"⚠️ early ack clip not cached: {e!r}")
                     break  # this engine; the others and the clock still warm
-        for provider in engines:
-            await self._warm_klockan(provider)
+        # Side by side: each engine has its own TTS quota (G's review of PR #18).
+        await asyncio.gather(*(self._warm_klockan(p) for p in engines))
 
     async def _warm_klockan(self, provider, takt_s: float = KLOCK_TAKT_S) -> None:
         """The clock's clips in the engine's own voice (US-032 AC-7), soonest first.
@@ -1228,7 +1245,7 @@ class Application:
         """
         from app.klockan import alla_delar
 
-        saknas, i_rad, idag = [], 0, 0
+        saknas, i_rad, idag = [], 0, renderat_idag(provider)
         for text in alla_delar():
             for forsok in (1, 2):
                 start = time.monotonic()
@@ -1250,7 +1267,7 @@ class Application:
                 logger.warning(f"⚠️ clock clips paused ({provider}) until tomorrow: "
                                f"{'three failed in a row' if i_rad >= 3 else f'{idag} rendered today'}")
                 await asyncio.sleep(till_ny_dag())
-                i_rad, idag = 0, 0
+                i_rad, idag = 0, renderat_idag(provider)
         logger.info(f"🕐 clock clips ready ({provider}), missing: {saknas or 'none'}")
 
     def _markera_ha_verktyg(self, connection, schema) -> None:

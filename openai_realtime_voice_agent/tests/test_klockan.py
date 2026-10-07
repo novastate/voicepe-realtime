@@ -46,12 +46,12 @@ def _kl(h, m, tz=klockan.TZ, manad=10):
     (_kl(17, 30), "Hon är halv sex."),
     (_kl(17, 35), "Hon är fem över halv sex."),
     (_kl(17, 45), "Hon är kvart i sex."),
-    (_kl(17, 58), "Hon är prick sex."),
+    (_kl(17, 58), "Hon är sex."),
     (_kl(9, 5), "Hon är fem över nio."),
     (_kl(9, 15), "Hon är kvart över nio."),
-    (_kl(0, 0), "Hon är prick tolv."),
+    (_kl(0, 0), "Hon är tolv."),
     (_kl(12, 40), "Hon är tjugo i ett."),
-    (_kl(23, 58), "Hon är prick tolv."),
+    (_kl(23, 58), "Hon är tolv."),
     (_kl(11, 30), "Hon är halv tolv."),
     # UTC in, Stockholm out: summer +2, winter +1.
     (_kl(12, 30, timezone.utc), "Hon är halv tre."),
@@ -170,6 +170,7 @@ async def test_uppvarmningen_haller_googles_takt(monkeypatch, fel, pa_disk, per_
     monkeypatch.setattr(main.time, "monotonic", lambda: nu[0])
     monkeypatch.setattr(main, "till_ny_dag", lambda: 86400)
     monkeypatch.setattr(main, "KLOCK_PER_DAG", per_dag)
+    monkeypatch.setattr(main, "renderat_idag", lambda provider: 0)
     monkeypatch.setattr(klockan, "datetime", type("D", (), {"now": staticmethod(lambda tz=None: _kl(0, 0))}))
 
     class Agent:
@@ -210,3 +211,53 @@ async def test_klockan_varms_for_varje_motor_aven_nar_en_replik_fallerar():
 
     await main.Application._warm_early_acks(Agent())
     assert klockor == ["gemini", "openai"]
+
+
+@pytest.mark.parametrize("nu, sekunder", [
+    (datetime(2026, 10, 7, 14, 28, tzinfo=timezone.utc), (9 * 60 + 37) * 60),
+    (datetime(2026, 10, 8, 0, 2, tzinfo=timezone.utc), 180),  # not a whole day
+    (datetime(2026, 10, 8, 0, 5, tzinfo=timezone.utc), 24 * 3600),
+])
+def test_nasta_dag_ar_nasta_0005_utc(nu, sekunder):
+    import app.main as main
+
+    assert main.till_ny_dag(nu) == sekunder
+
+
+def test_dagens_renderingar_raknas_fran_disken(tmp_path):
+    """A restart on the same day keeps counting (G: 60 + 60 > Google's 100)."""
+    import os
+    import time as _time
+    import app.main as main
+
+    for i in range(3):
+        (tmp_path / f"gemini_{i}.pcm").write_bytes(b"x")
+    gammal = tmp_path / "gemini_igar.pcm"
+    gammal.write_bytes(b"x")
+    os.utime(gammal, (_time.time() - 2 * 86400,) * 2)
+    (tmp_path / "xai_0.pcm").write_bytes(b"x")
+    assert main.renderat_idag("gemini", str(tmp_path)) == 3
+
+
+@pytest.mark.asyncio
+async def test_omstart_samma_dag_fortsatter_rakna(monkeypatch):
+    import app.main as main
+
+    vantat = []
+
+    async def sov(s):
+        vantat.append("imorgon" if s == 86400 else s)
+
+    tid = [0.0]
+    monkeypatch.setattr(main.asyncio, "sleep", sov)
+    monkeypatch.setattr(main.time, "monotonic", lambda: tid[0])
+    monkeypatch.setattr(main, "till_ny_dag", lambda: 86400)
+    monkeypatch.setattr(main, "renderat_idag", lambda provider: 59)
+
+    class Agent:
+        async def _ack_clip(self, provider, text, fallback=True):
+            tid[0] += 1.0
+            return b"pcm"
+
+    await main.Application._warm_klockan(Agent(), "gemini", takt_s=8.0)
+    assert vantat[:2] == [8.0, "imorgon"]  # 59 already today: one more, then tomorrow
