@@ -178,3 +178,29 @@ def test_kedjekollen_godkanner_en_obruten_kedja_och_fangar_en_bruten():
     assert ok is False and "slutar i WAKE" in rader[-1]
     ok, rader = k.kolla(["🧭 attrapp: rejected closed in IDLE (x)"], "attrapp")
     assert ok is False and rader[0].startswith("avvisad")
+
+
+@pytest.mark.asyncio
+async def test_tappad_lank_stanger_kedjan_i_idle():
+    """Case D of the stand-in run on core (2026-10-07): the link dropped in
+    THINKING, nothing closed the chain."""
+    from app.device_registry import DeviceConnection
+    from app.websocket_handler import WebSocketHandler
+
+    class Tjanst:
+        sover = False
+
+        def bokfor(self):
+            pass
+
+        async def disconnect(self):
+            pass
+
+    handler = WebSocketHandler()
+    c = DeviceConnection(device_id="attrapp", websocket=object())
+    c.maskin = SessionMaskin("attrapp")
+    for e in ("wake", "listening", "thinking"):
+        c.maskin.handle(e, "t")
+    c.openai_service = Tjanst()
+    await handler._teardown(c)
+    assert c.maskin.state == IDLE

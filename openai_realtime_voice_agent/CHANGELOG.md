@@ -11,6 +11,9 @@ All notable changes to this add-on. Newest first.
   Varje byte blir en journalrad med orsak, `🧭 kontoret: SPEAKING -> CLOSING
   (close: quiet for 30s)`. En händelse som läget inte tillåter ändrar ingenting
   och skrivs som `rejected`. Väckningen vinner alltid över en nedstängning.
+- **En tappad länk stänger kedjan.** Provet med låtsashögtalaren på core visade
+  att kedjan stannade i THINKING när länken bröts. Nu stänger nedrivningen den
+  (`close: link lost or displaced`) och kedjan slutar i IDLE.
 - **En källtextsvakt** i `tests/test_session_state.py` faller om en annan modul
   anropar motorns `sova`/`vakna` eller enhetens `send_phase`. På 0.27.9 fångar den
   sju anrop i `websocket_handler.py` och `xai_realtime.py`.

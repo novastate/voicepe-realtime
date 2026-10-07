@@ -2195,6 +2195,12 @@ class WebSocketHandler:
             # sova() is not the only close: a displacing reconnect and cleanup
             # land here too. bokfor() clears the clock, so a session that
             # already slept is not counted twice.
+            # The link dropped or a newer connection displaced this one: the
+            # engine goes down without sova(), so the state machine closes here
+            # (AC-9: the chain must end in IDLE, with its reason).
+            maskin = connection.maskin
+            stangs = (maskin is not None and not getattr(service, "sover", True)
+                      and maskin.handle("close", "link lost or displaced"))
             bokfor = getattr(service, "bokfor", None)
             if bokfor is not None:
                 try:
@@ -2210,6 +2216,8 @@ class WebSocketHandler:
                     break
                 except Exception as e:
                     logger.debug(f"{method}() for {connection.device_id}: {e!r}")
+            if stangs:
+                maskin.handle("closed", "link lost or displaced")
         connection.task = None
         connection.runner = None
         connection.pipeline = None
