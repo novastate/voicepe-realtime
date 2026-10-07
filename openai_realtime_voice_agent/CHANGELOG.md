@@ -6,8 +6,13 @@ All notable changes to this add-on. Newest first.
 
 - **Home Assistant tillbaka: verktygen hämtas vid nästa väckning.** Förut
   stängdes högtalarens anslutning när HA kom tillbaka, och den nya anslutningen
-  väckte molnet. Nu hämtas en misslyckad eller kort verktygslista om vid nästa
-  väckning, innan molnmotorn kopplas upp. Högtalaren stannar uppkopplad.
+  väckte molnet. Nu hämtas en misslyckad verktygslista om vid nästa väckning,
+  innan molnmotorn kopplas upp. Högtalaren stannar uppkopplad. Hämtningen vid
+  väckning har ett eget tak, `MCP_TOOLS_WAKE_TIMEOUT_SECONDS` (förval 1), så
+  en hängande HA inte håller molnuppkopplingen i `MCP_TOOLS_TIMEOUT_SECONDS`.
+  En lista som HA svarar med är sanningen även när den är kortare:
+  högvattenmärket sjunker, och borttagna integrationer hämtas inte om vid
+  varje väckning.
 - **Provet av reservmotorn fryser inte längre agenten.** Det gjorde ett
   blockerande anrop i upp till 2 s. Nu väntar det utan att stoppa allt annat.
 
