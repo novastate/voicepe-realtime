@@ -370,7 +370,8 @@ async def test_misslyckad_uppkoppling_somnar_igen_och_nasta_vakning_forsoker():
     assert s.sover is True
     s.uppe = True  # the net is back
     assert await s.vakna() is True
-    assert s.calls == [("upp", False), ("upp", False)]
+    # "ner": the failed wake tears down its unfinished connect (0.27.6).
+    assert s.calls == [("upp", False), "ner", ("upp", False)]
 
 
 @pytest.mark.asyncio
@@ -464,3 +465,49 @@ async def test_foljdfonstret_som_stangs_ar_ingen_vakning_utan_tal():
 
     pe.note_device_wake()  # a new wake nobody answers still counts
     assert r._vakning_utan_tal(now) is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("handtag", ["gammalt", None])
+async def test_en_handskakning_som_inte_hann_klart_rivs_vid_vakningens_slut(handtag, monkeypatch):
+    """G's review of 0.27.6 (fynd 1): a handshake still running when the wake
+    gives up came up afterwards as a session outside every cap - asleep by the
+    books, never booked, never put to sleep. Same for a slow first handshake
+    (handtag None: no resume, the net is slow). The wake must tear it down."""
+    monkeypatch.setenv("MOLN_LEDGER", "/dev/null/ingen")
+    service = _service(GEMINI)
+    service.budget = Budget(path=str(__import__("tempfile").mktemp()))
+    service._session_resumption_handle = handtag
+    service._vaknat_forut = True
+    anrop = []
+
+    async def kommer_sent():
+        await asyncio.sleep(10)
+        service._session = object()
+
+    class Klar:
+        def done(self):
+            return True
+
+    async def connect(h):
+        anrop.append(h)
+        if h is not None:
+            service._connection_task = Klar()  # Google said no at once
+        else:
+            service._connection_task = asyncio.create_task(kommer_sent())
+
+    async def disconnect():
+        task = service._connection_task
+        if task is not None and hasattr(task, "cancel"):
+            task.cancel()
+        service._connection_task = None
+        service._session = None
+
+    service._connect = connect
+    service._disconnect = disconnect
+    t0 = time.monotonic()
+    assert await service.vakna() is False
+    assert time.monotonic() - t0 < 4.6  # inside ConnectionRecovery.VAKNA_TIMEOUT_S
+    await asyncio.sleep(0.05)
+    assert service._connection_task is None
+    assert service._session is None and service.sover is True

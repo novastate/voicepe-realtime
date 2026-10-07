@@ -13,6 +13,10 @@ All notable changes to this add-on. Newest first.
   Fönstrets flush släckte flaggan för tal, så motorn somnade ~3 s senare
   ("wake without speech") i stället för efter 30 s tystnad. Tystnadsregeln
   gäller igen efter ett samtal.
+- **En väckning som ger upp river sin halvfärdiga uppkoppling.** Förut kunde en
+  handskakning som inte hann klart komma upp efteråt som en session utanför
+  tio-minuterstaket och dygnstaket (G:s granskning av 0.27.6, fynd 1). Gäller
+  också en långsam första uppkoppling, som redan fanns i 0.27.5.
 - `tools/satellit_attrapp.py` och `tools/sessionsgranser.py`: en högtalare
   utan människa, och en domare som läser journalen per fall (raawr US-032 AC-3).
 

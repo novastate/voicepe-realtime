@@ -501,7 +501,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         logger.warning("☁️ Gemini refused the resumption handle — starting a fresh conversation")
         self._session_resumption_handle = None
         self._connection_task = None
-        self._vanta_till = min(time.monotonic() + 3.0, start + 4.5)
+        self._vanta_till = min(time.monotonic() + 3.0, start + 3.5)  # + teardown ≤ 1 s < 5 s
         await self._connect(None)
 
     async def _ar_uppkopplad(self, timeout: float = 3.0) -> bool:  # SovlageMixin
