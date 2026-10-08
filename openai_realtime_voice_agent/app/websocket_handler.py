@@ -36,6 +36,7 @@ from app.session_state import SessionMaskin
 # The turn's audio may have grown by this much since the early speech-to-text started
 # (the last stretch of quiet, ~0.3 s at 16 kHz PCM16 mono) and still be the same words.
 SPEC_STT_SLACK_BYTES = 16000 * 2 * 6 // 10
+SPEC_LANGD_SKILLNAD_S = 0.3  # bana 0's turn audio vs what the engine holds
 SPEC_STT_KONTROLL = os.environ.get("SPEC_STT_KONTROLL", "1") != "0"  # 0 = off
 
 # US-018: well under EARLY_ACK_SILENCE_MS (1500 default, 2000 on core), counted
@@ -1736,6 +1737,8 @@ class WebSocketHandler:
                     spec["task"] = asyncio.get_running_loop().create_task(
                         bana0.transkribera(pcm, host, port, timeout_stt))
 
+            kontroller = set()
+
             async def _kontrollera(tidig, pcm, t):
                 """Live 2026-10-08: two clock questions missed after the early text was used.
                 Read the whole turn again, after the fact, and say if it differs."""
@@ -1755,7 +1758,9 @@ class WebSocketHandler:
                         logger.info(f"⚡ bana0: using the early speech-to-text (turn grew {len(pcm) - n} B since)")
                         tidig = await asyncio.wait_for(task, t)
                         if SPEC_STT_KONTROLL:  # off the critical path: does the whole turn read the same?
-                            asyncio.get_running_loop().create_task(_kontrollera(tidig, pcm, t))
+                            kontroll = asyncio.get_running_loop().create_task(_kontrollera(tidig, pcm, t))
+                            kontroller.add(kontroll)  # held here, or the loop may drop it half way
+                            kontroll.add_done_callback(kontroller.discard)
                         return tidig
                     except Exception as e:  # a failed early try is not the turn's answer
                         logger.debug(f"bana0: early speech-to-text unusable ({e!r}), asking again")
@@ -1766,8 +1771,14 @@ class WebSocketHandler:
                 return await bana0.transkribera(pcm, host, port, t)
 
             async def _on_user_turn_end():
+                pcm = serializer.take_turn_audio()
+                motorns = getattr(openai_service, "held_seconds", lambda: None)()
+                if motorns is not None and abs(len(pcm) / 32000 - motorns) > SPEC_LANGD_SKILLNAD_S:
+                    logger.warning(
+                        f"⚠️ bana0: the turn audio is {len(pcm) / 32000:.2f} s but the engine holds "
+                        f"{motorns:.2f} s — a question may have been cut")
                 bana = await bana0.tur(
-                    serializer.take_turn_audio(),
+                    pcm,
                     stt=_stt,
                     timeout_stt=timeout_stt,
                     timeout_comms=timeout_comms,
@@ -1783,6 +1794,7 @@ class WebSocketHandler:
             openai_service.on_user_turn_end = _on_user_turn_end
             def _tur_borjar():
                 _spec_rensa()
+                logger.info(f"⚡ bana0: turn audio starts in {getattr(getattr(connection, 'maskin', None), 'state', '?')}")
                 serializer.start_turn_audio()
 
             openai_service.on_user_turn_start = _tur_borjar

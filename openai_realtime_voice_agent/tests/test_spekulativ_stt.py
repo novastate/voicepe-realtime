@@ -159,3 +159,20 @@ async def test_kontroll_varnar_nar_tidig_text_skiljer_sig_fran_hela_turen(ha_sva
         await asyncio.sleep(0.3)
     assert len(anrop) == 2 and anrop[0] < anrop[1]
     assert any("differs from the whole turn 'Så kan.'" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_varning_nar_banans_ljud_och_motorns_skiljer_mer_an_0_3_s(ha_svarar, monkeypatch, caplog):
+    import logging
+    caplog.set_level(logging.INFO)
+    ha_svarar.append("Släckte i kontoret")
+    server, port, seen = await _wyoming(_transcript("släck kontoret"))
+    connection, service, google, said, idle = _gemini_koppling(
+        ("127.0.0.1", port), [None, "start", "preend", None, "end"])
+    monkeypatch.setattr(type(service), "held_seconds", lambda self: 99.0, raising=False)
+    async with server:
+        await _speak(connection, service, 5)
+        await service._turn_end_task
+        await asyncio.sleep(0.05)
+    assert any("the engine holds 99.00 s" in r.getMessage() for r in caplog.records)
+    assert any("turn audio starts in" in r.getMessage() for r in caplog.records)
