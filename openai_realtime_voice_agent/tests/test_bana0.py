@@ -531,7 +531,7 @@ async def test_gemini_traff_google_hor_aldrig_ordern(ha_svarar):
         await _speak(connection, service, 4)
         await service._turn_end_task
         await asyncio.sleep(0.05)  # the net runs at once: Gemini never hears the order
-    assert said == [(bana0.OK_FALLBACK, "kontoret")]
+    assert len(said) == 1 and said[0][0] in bana0.OK_VARIANTER and said[0][1] == "kontoret"
     assert idle == ["bana0"]
     assert _kinds(google) == []
     assert [t for t, _, _ in seen if t == "transcribe"]

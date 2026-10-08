@@ -305,3 +305,39 @@ async def test_bana_0_loggar_vad_tal_till_text_horde(comms, caplog):
     async with server:
         await _klocktur(port, FakeService(), [], lambda t: None)
     assert any("bana0: heard 'vad är klockan'" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("varianter", [bana0.OK_VARIANTER, bana0.OFFLINE_VARIANTER])
+async def test_egna_repliker_fem_ganger_minst_tre_varianter_aldrig_samma_tva_i_rad(varianter):
+    """US-032 AC-8."""
+    sagt = []
+
+    async def say(text):
+        sagt.append(text)
+
+    for _ in range(200):  # random: many rounds of five, all must hold
+        sagt.clear()
+        for _ in range(5):
+            await bana0.saga(say, varianter)
+        assert len(set(sagt)) >= 3 and all(a != b for a, b in zip(sagt, sagt[1:]))
+
+
+@pytest.mark.asyncio
+async def test_en_variant_som_saknas_ger_en_annan_aldrig_tystnad():
+    sagt = []
+
+    async def say(text):
+        if text == bana0.OK_VARIANTER[1]:
+            raise RuntimeError("no clip")
+        sagt.append(text)
+
+    for _ in range(50):
+        assert await bana0.saga(say, bana0.OK_VARIANTER) != bana0.OK_VARIANTER[1]
+    assert sagt and bana0.OK_VARIANTER[1] not in sagt
+
+    async def ingen(text):
+        raise RuntimeError("no clip")
+
+    with pytest.raises(RuntimeError):
+        await bana0.saga(ingen, bana0.OK_VARIANTER)

@@ -96,7 +96,8 @@ async def _vakta(nere, claimed=True):
 
 @pytest.mark.asyncio
 async def test_natet_nere_sager_det():
-    assert await _vakta(True) == (True, [bana0.OFFLINE_LINE])
+    sagt, said = await _vakta(True)
+    assert sagt is True and len(said) == 1 and said[0] in bana0.OFFLINE_VARIANTER
 
 
 @pytest.mark.asyncio

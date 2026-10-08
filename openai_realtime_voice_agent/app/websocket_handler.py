@@ -1693,7 +1693,7 @@ class WebSocketHandler:
                 vanta = OK_VANTA_S if supports_client_events(provider) else 0.0
                 task = asyncio.get_running_loop().create_task(bana0.vakta_bekraftelse(
                     vanta_s=vanta, claim=lambda: bana0.ingen_bekraftelse_an(liveness, asked),
-                    say_ok=lambda: _say(bana0.OK_FALLBACK),
+                    say_ok=lambda: bana0.saga(_say, bana0.OK_VARIANTER),
                 ))
                 self._offline_tasks.add(task)
                 task.add_done_callback(self._offline_tasks.discard)
