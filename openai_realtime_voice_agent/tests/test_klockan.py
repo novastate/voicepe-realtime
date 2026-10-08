@@ -191,26 +191,47 @@ async def test_uppvarmningen_haller_googles_takt(monkeypatch, fel, pa_disk, per_
 
 
 @pytest.mark.asyncio
-async def test_klockan_varms_for_varje_motor_aven_nar_en_replik_fallerar():
-    """The clock warms for every engine with a key, also when an engine's early
-    acks fail (OpenAI 401 on core, 2026-10-07)."""
+async def test_klockan_varms_for_gemini_och_xai_aldrig_openai():
+    """OpenAI's key is Live-only: TTS answers 403 (owner 2026-10-07), so it is no clip source."""
     import app.main as main
 
     klockor = []
 
     class Agent:
-        gemini_api_key, openai_api_key, xai_api_key = "g", "o", ""
+        gemini_api_key, openai_api_key, xai_api_key = "g", "o", "x"
 
         async def _ack_clip(self, provider, text, fallback=True):
-            if provider == "openai":
-                raise RuntimeError("401")
+            assert provider != "openai"
             return b"pcm"
 
         async def _warm_klockan(self, provider):
             klockor.append(provider)
 
     await main.Application._warm_early_acks(Agent())
-    assert klockor == ["gemini", "openai"]
+    assert klockor == ["gemini", "xai"]
+
+
+@pytest.mark.asyncio
+async def test_en_openai_session_far_geminis_klipp():
+    import app.main as main
+
+    gjorda = []
+
+    async def gemini_tts(text, key, voice):
+        gjorda.append(("gemini", text))
+        return b"g"
+
+    class Agent:
+        gemini_api_key, xai_api_key, gemini_voice = "g", "", None
+        _ack_clips = {}
+
+    orig = main.gemini_tts
+    main.gemini_tts = gemini_tts
+    try:
+        assert await main.Application._ack_clip(Agent(), "openai", "Hon är sex.", fallback=False) == b"g"
+    finally:
+        main.gemini_tts = orig
+    assert gjorda == [("gemini", "Hon är sex.")]
 
 
 @pytest.mark.parametrize("nu, start", [
