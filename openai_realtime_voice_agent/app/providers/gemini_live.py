@@ -402,6 +402,14 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         await self._send_activity(activity_end=ActivityEnd())
         self.arm_silence_ack()
 
+    def held_seconds(self) -> Optional[float]:
+        """Seconds of mic audio held back for bana 0 (what the model would be given on a
+        miss); None when no turn is held."""
+        held = getattr(self, "_held", None)
+        if not held:
+            return None
+        return sum(len(f.audio) / (2 * (f.sample_rate or 16000)) for f in held)
+
     def _decide_turn(self) -> None:
         """Run bana 0's decision once per held turn, off the audio path."""
         if self._turn_end_task is None or self._turn_end_task.done():
