@@ -121,3 +121,75 @@ async def test_utan_preend_fraga_bana_0_som_forut(ha_svarar):
         await _speak(connection, service, 5)
         await service._turn_end_task
     assert _stt_korningar(seen) == 1
+
+
+def test_kontrollen_av_den_tidiga_texten_ar_pa_som_standard():
+    from app import websocket_handler
+    assert websocket_handler.SPEC_STT_KONTROLL is True
+
+
+@pytest.fixture(autouse=True)
+def _utan_kontroll(monkeypatch, request):
+    """The check reads the turn a second time; the other tests count speech-to-text runs."""
+    from app import websocket_handler
+    if "kontroll" not in request.node.name:
+        monkeypatch.setattr(websocket_handler, "SPEC_STT_KONTROLL", False)
+
+
+@pytest.mark.asyncio
+async def test_kontroll_varnar_nar_tidig_text_skiljer_sig_fran_hela_turen(ha_svarar, monkeypatch, caplog):
+    import logging
+    caplog.set_level(logging.INFO)
+    ha_svarar.append("Släckte i kontoret")
+    server, port, seen = await _wyoming(_transcript("släck kontoret"))
+    connection, service, google, said, idle = _gemini_koppling(
+        ("127.0.0.1", port), [None, "start", "preend", None, "end"])
+    riktig = bana0.transkribera
+    anrop = []
+
+    async def transkribera(pcm, host, port_, timeout):
+        anrop.append(len(pcm))
+        text = await riktig(pcm, host, port_, timeout)
+        return text if len(anrop) == 1 else "Så kan."  # the second reading of the turn differs
+
+    monkeypatch.setattr(bana0, "transkribera", transkribera)
+    async with server:
+        await _speak(connection, service, 5)
+        await service._turn_end_task
+        await asyncio.sleep(0.3)
+    assert len(anrop) == 2 and anrop[0] < anrop[1]
+    assert any("differs from the whole turn 'Så kan.'" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_varning_nar_banans_ljud_och_motorns_skiljer_mer_an_0_3_s(ha_svarar, monkeypatch, caplog):
+    import logging
+    caplog.set_level(logging.INFO)
+    ha_svarar.append("Släckte i kontoret")
+    server, port, seen = await _wyoming(_transcript("släck kontoret"))
+    connection, service, google, said, idle = _gemini_koppling(
+        ("127.0.0.1", port), [None, "start", "preend", None, "end"])
+    monkeypatch.setattr(type(service), "held_seconds", lambda self: 99.0, raising=False)
+    async with server:
+        await _speak(connection, service, 5)
+        await service._turn_end_task
+        await asyncio.sleep(0.05)
+    assert any("the engine holds 99.00 s" in r.getMessage() and r.levelno == logging.WARNING for r in caplog.records)
+    assert any("turn audio starts, phase" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_motorn_med_mindre_ljud_an_banan_ar_normalt_och_ger_bara_info(ha_svarar, monkeypatch, caplog):
+    import logging
+    caplog.set_level(logging.INFO)
+    ha_svarar.append("Släckte i kontoret")
+    server, port, seen = await _wyoming(_transcript("släck kontoret"))
+    connection, service, google, said, idle = _gemini_koppling(
+        ("127.0.0.1", port), [None, "start", "preend", None, "end"])
+    monkeypatch.setattr(type(service), "held_seconds", lambda self: 0.0, raising=False)
+    async with server:
+        await _speak(connection, service, 5)
+        await service._turn_end_task
+        await asyncio.sleep(0.05)
+    rader = [r for r in caplog.records if "the engine holds 0.00 s" in r.getMessage()]
+    assert rader and all(r.levelno == logging.INFO for r in rader)

@@ -2,6 +2,23 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.19 (fork)
+
+- **Bana 0:s ljudlängd mot motorns, och fasen vid turstart (raawr US-032, A:s granskning av #27).**
+  Bana 0:s ljud hoppar över fasen replying men motorn får det ändå, så en fråga kan stympas.
+  Vid turslut loggas bana 0:s ljudlängd och motorns varje tur; varning bara när motorn håller
+  mer än 0,3 s mer än bana 0 (normalt har bana 0 ~0,3 s mer, förrullen 0,8 mot 0,5 s). Emitterns
+  fas (den som styr hoppet i serialiseraren) loggas vid turstart. Kontrolluppgiftens referens hålls nu (kan inte städas
+  bort mitt i).
+
+## 0.27.18 (fork)
+
+- **Kontroll av den tidiga tal-till-texten (raawr US-032).** Live 2026-10-08 missade två
+  klockfrågor efter att den tidiga texten använts ('Så kan.'). Syntetisk röst går igenom, så
+  felet är inte bevisat. Nu läses hela turen en gång till i bakgrunden (inte på den kritiska
+  vägen) och loggen säger `early speech-to-text 'X' differs from the whole turn 'Y'` om de skiljer.
+  `SPEC_STT_KONTROLL=0` stänger av. Ingen ändring av vad bana 0 svarar.
+
 ## 0.27.17 (fork)
 
 - **Egna repliker i flera varianter (raawr US-032 AC-8).** Bekräftelsen efter en order
