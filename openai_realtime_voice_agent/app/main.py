@@ -1201,12 +1201,15 @@ class Application:
 
         Gemini: its own TTS with the session's prebuilt voice (Charon).
         xAI: its own TTS with the session's voice (0.25.0).
-        OpenAI: gpt-4o-mini-tts with the session's voice (cedar). A failed
-        render falls back to the conductor's old clip, once per phrase and
-        engine, and says so in the log.
+        OpenAI has no clip voice (its key is Live-only, TTS answers 403): an
+        OpenAI session gets Gemini's clip, or xAI's when there is no Gemini key.
+        With neither key, the conductor's clip. A failed render falls back to the conductor's old clip, once per phrase
+        and engine, and says so in the log.
         """
         from app.providers import GEMINI, XAI
 
+        if provider not in (GEMINI, XAI):
+            provider = GEMINI if self.gemini_api_key else XAI if self.xai_api_key else provider
         clips = self._ack_clips
         if (provider, text) in clips:
             return clips[(provider, text)]
@@ -1231,10 +1234,10 @@ class Application:
     async def _warm_early_acks(self) -> None:
         """Render every ack once per configured engine, so the first slow tool is not slower."""
         from app.bana0 import LOKALA_REPLIKER
-        from app.providers import GEMINI, OPENAI, XAI
+        from app.providers import GEMINI, XAI
 
-        engines = [p for p, key in ((GEMINI, self.gemini_api_key), (OPENAI, self.openai_api_key),
-                                    (XAI, self.xai_api_key)) if key]
+        # OpenAI is no clip source: its key is Live-only and TTS answers 403 (owner 2026-10-07).
+        engines = [p for p, key in ((GEMINI, self.gemini_api_key), (XAI, self.xai_api_key)) if key]
         for provider in engines:
             # Bana 0's lines too: offline only the cached clip can speak (US-018).
             for text in (EARLY_ACK_PHRASES if early_ack_paa() else ()) + LOKALA_REPLIKER:

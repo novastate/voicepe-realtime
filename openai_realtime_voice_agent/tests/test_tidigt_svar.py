@@ -182,6 +182,7 @@ def _app(liveness):
     app._last_early_ack = None
     app._ack_clips = {}
     app.voice = "cedar"
+    app.gemini_api_key = app.xai_api_key = ""  # no clip engine: the conductor's clip
     app.enrollment_conductor = SimpleNamespace(_tts=AsyncMock(return_value=b"\0" * 4800))
     app._guarded_say = AsyncMock()
     connection = SimpleNamespace(turn_liveness=liveness, device_id="kontoret", provider=OPENAI)
@@ -228,9 +229,10 @@ async def test_ack_voice_follows_the_engine(monkeypatch):
     assert app._guarded_say.await_args.kwargs["pcm"] == b"G" * 4800
     app.enrollment_conductor._tts.assert_not_awaited()
 
-    connection.provider = OPENAI
+    connection.provider = OPENAI  # no clip voice of its own (TTS 403): Gemini's clip
     await app._early_ack(connection, time.monotonic())
-    assert app.enrollment_conductor._tts.await_args.kwargs == {"voice": "cedar"}
+    app.enrollment_conductor._tts.assert_not_awaited()
+    assert gemini.await_count == 1  # the clip for (gemini, phrase) is cached or rendered once
 
 
 @pytest.mark.asyncio

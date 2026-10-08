@@ -2,6 +2,12 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.16 (fork)
+
+- **OpenAI är ingen klippkälla (raawr US-032).** OpenAI-nyckeln är avsiktligt Live-only och dess
+  TTS svarar 403. Uppvärmningen renderar bara med Gemini och xAI, och en OpenAI-session får
+  Geminis klipp (xAI:s om Gemini-nyckel saknas).
+
 ## 0.27.15 (fork)
 
 - **Bana 0 loggar vad tal-till-text hörde (raawr US-032).** En rad `bana0: heard '...'` per tur,
