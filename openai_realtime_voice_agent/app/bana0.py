@@ -14,6 +14,7 @@ import asyncio
 import inspect
 import json
 import logging
+import random
 from typing import Awaitable, Callable, Optional
 
 import httpx
@@ -31,9 +32,41 @@ AUDIO = {"rate": RATE, "width": WIDTH, "channels": CHANNELS}
 # Without internet (raawr US-018) the cloud TTS cannot render HA's reply or an
 # answer. These two lines are rendered at startup (main._warm_early_acks) and
 # cached on disk, so they play offline. Never a question mark: it opens the mic.
-OK_FALLBACK = "Klart."
-OFFLINE_LINE = "Jag når inte nätet just nu. Lampor och sånt fungerar ändå."
-LOKALA_REPLIKER = (OK_FALLBACK, OFFLINE_LINE)
+# Each line has variants (US-032 AC-8): the same line five times in a row gives at
+# least three different ones, never the same twice running (`saga`).
+OK_VARIANTER = ("Klart.", "Fixat.", "Ordnat.", "Gjort.", "Då var det klart.")
+OFFLINE_VARIANTER = (
+    "Jag når inte nätet just nu. Lampor och sånt fungerar ändå.",
+    "Nätet är nere just nu. Lampor och sånt funkar ändå.",
+    "Inget nät här just nu, men lamporna går att styra.",
+)
+OK_FALLBACK, OFFLINE_LINE = OK_VARIANTER[0], OFFLINE_VARIANTER[0]
+LOKALA_REPLIKER = OK_VARIANTER + OFFLINE_VARIANTER
+_PASAR: dict = {}  # a shuffled bag per line: every variant once before any twice
+_SENAST: dict = {}
+
+
+async def saga(say: Callable[[str], Awaitable[None]], varianter: tuple) -> str:
+    """Say one of `varianter` from a shuffled bag: five in a row are at least three
+    different ones and never the same twice running. A variant that cannot be said
+    (its clip is missing) gives the next, never silence; raises only when every
+    variant failed. Returns the line said."""
+    pase = _PASAR.setdefault(varianter, [])
+    fel = None
+    for _ in range(2 * len(varianter)):
+        if not pase:
+            pase.extend(random.sample(varianter, len(varianter)))
+            if pase[-1] == _SENAST.get(varianter):  # pop() takes the last: not the one just said
+                pase.insert(0, pase.pop())
+        text = pase.pop()
+        try:
+            await say(text)
+        except Exception as e:
+            fel = e
+            continue
+        _SENAST[varianter] = text
+        return text
+    raise fel
 
 
 def stt_adress(value: str) -> Optional[tuple[str, int]]:
@@ -199,7 +232,7 @@ async def vakta_bekraftelse(
     claim: Callable[[], bool],
     say_ok: Callable[[], Awaitable[None]],
 ) -> bool:
-    """After a hit: if the model has said nothing after `vanta_s`, say OK_FALLBACK.
+    """After a hit: if the model has said nothing after `vanta_s`, say one of OK_VARIANTER.
 
     Offline the model never answers; the room still hears it was done, in the
     engine's own voice (cached clip). True when the clip was said.
@@ -207,7 +240,7 @@ async def vakta_bekraftelse(
     await asyncio.sleep(vanta_s)
     if not claim():
         return False
-    logger.warning(f"bana0: no confirmation from the model, saying {OK_FALLBACK!r}")
+    logger.warning("bana0: no confirmation from the model, saying it is done")
     try:
         await say_ok()
     except Exception as e:
@@ -245,7 +278,7 @@ async def vakta_natet(
     claim: Callable[[], bool],
     say: Callable[[str], Awaitable[None]],
 ) -> bool:
-    """After a miss: if the model's engine cannot be reached, say OFFLINE_LINE.
+    """After a miss: if the model's engine cannot be reached, say one of OFFLINE_VARIANTER.
 
     `claim()` is the turn's once-only silence slot (TurnLiveness.claim_silence_ack):
     false when the model already spoke or the "Ett ögonblick" ack took it, so
@@ -260,7 +293,7 @@ async def vakta_natet(
         return False
     logger.warning("bana0: the engine is unreachable, saying so")
     try:
-        await say(OFFLINE_LINE)
+        await saga(say, OFFLINE_VARIANTER)
     except Exception as e:
         logger.warning(f"bana0: offline line failed: {e!r}")
         return False

@@ -93,7 +93,7 @@ async def test_en_paus_som_inte_blev_tal_ger_en_enda_stt_och_modellen_hor_inget_
         await asyncio.sleep(0.05)
     assert _stt_korningar(seen) == 1 and len(anrop) == 1  # the early one is used, not asked again
     assert anrop[0] < slutlangd[0]  # and it was asked on the audio up to "preend", not the whole turn
-    assert said == [(bana0.OK_FALLBACK, "kontoret")] and idle == ["bana0"]
+    assert len(said) == 1 and said[0][0] in bana0.OK_VARIANTER and said[0][1] == "kontoret" and idle == ["bana0"]
     assert _kinds(google) == []  # a hit: Google never heard the order
 
 

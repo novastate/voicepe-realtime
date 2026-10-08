@@ -2,6 +2,14 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.17 (fork)
+
+- **Egna repliker i flera varianter (raawr US-032 AC-8).** Bekräftelsen efter en order
+  ("Klart.") har fem varianter och "når inte nätet" tre. De dras ur en blandad påse: fem i rad
+  ger minst tre olika, aldrig samma två gånger efter varandra. En variant vars klipp saknas ger
+  nästa, aldrig tystnad. Uppvärmningen renderar alla varianter (`LOKALA_REPLIKER`).
+  "Kan inte nu" finns inte som replik i koden och är inte med.
+
 ## 0.27.16 (fork)
 
 - **OpenAI är ingen klippkälla (raawr US-032).** OpenAI-nyckeln är avsiktligt Live-only och dess
