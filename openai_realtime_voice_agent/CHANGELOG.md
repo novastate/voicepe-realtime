@@ -2,6 +2,12 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.15 (fork)
+
+- **Bana 0 loggar vad tal-till-text hörde (raawr US-032).** En rad `bana0: heard '...'` per tur,
+  så att en klockfråga som missar går att förklara (live 2026-10-08 16:52 gick den till modellen
+  utan att loggen visade texten).
+
 ## 0.27.14 (fork)
 
 - **Klockklippens kvotdygn följer Google (raawr US-032).** Googles TTS-kvot nollas vid

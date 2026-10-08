@@ -144,6 +144,7 @@ async def tur(
     """
     try:
         text = await stt(pcm, timeout_stt) if pcm else None
+        logger.info(f"bana0: heard {text!r}")
         if klockan is not None and klocka.ar_klockfraga(text):
             try:
                 await klockan(text)

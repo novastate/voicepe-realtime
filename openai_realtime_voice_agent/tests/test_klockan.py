@@ -272,3 +272,15 @@ async def test_omstart_samma_dag_fortsatter_rakna(monkeypatch):
 
     await main.Application._warm_klockan(Agent(), "gemini", takt_s=8.0)
     assert vantat[:2] == [8.0, "imorgon"]  # 59 already today: one more, then tomorrow
+
+
+@pytest.mark.asyncio
+async def test_bana_0_loggar_vad_tal_till_text_horde(comms, caplog):
+    """Live 2026-10-08: a clock question missed and the log did not say what was heard."""
+    import logging
+    caplog.set_level(logging.INFO)
+    comms.svar = httpx.Response(204)
+    server, port, _ = await _wyoming(_transcript("vad är klockan"))
+    async with server:
+        await _klocktur(port, FakeService(), [], lambda t: None)
+    assert any("bana0: heard 'vad är klockan'" in r.getMessage() for r in caplog.records)
