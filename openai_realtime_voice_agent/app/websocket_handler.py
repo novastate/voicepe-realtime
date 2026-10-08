@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import os
 import time
 import uuid
 from typing import Any, Optional, Callable, Awaitable, Dict
@@ -35,6 +36,7 @@ from app.session_state import SessionMaskin
 # The turn's audio may have grown by this much since the early speech-to-text started
 # (the last stretch of quiet, ~0.3 s at 16 kHz PCM16 mono) and still be the same words.
 SPEC_STT_SLACK_BYTES = 16000 * 2 * 6 // 10
+SPEC_STT_KONTROLL = os.environ.get("SPEC_STT_KONTROLL", "1") != "0"  # 0 = off
 
 # US-018: well under EARLY_ACK_SILENCE_MS (1500 default, 2000 on core), counted
 # from the same moment, so the honest line wins the slot over "Ett ögonblick."
@@ -1734,12 +1736,27 @@ class WebSocketHandler:
                     spec["task"] = asyncio.get_running_loop().create_task(
                         bana0.transkribera(pcm, host, port, timeout_stt))
 
+            async def _kontrollera(tidig, pcm, t):
+                """Live 2026-10-08: two clock questions missed after the early text was used.
+                Read the whole turn again, after the fact, and say if it differs."""
+                try:
+                    sen = await bana0.transkribera(pcm, host, port, max(t, 5.0))
+                    if (sen or "").strip() != (tidig or "").strip():
+                        logger.warning(f"⚠️ bana0: early speech-to-text {tidig!r} differs from the whole turn {sen!r}")
+                    else:
+                        logger.info("⚡ bana0: the early speech-to-text matches the whole turn")
+                except Exception as e:
+                    logger.debug(f"bana0: the check failed ({e!r})")
+
             async def _stt(pcm, t):
                 task, n = spec.pop("task", None), spec.pop("n", 0)
                 if task is not None and 0 <= len(pcm) - n <= SPEC_STT_SLACK_BYTES:
                     try:
                         logger.info(f"⚡ bana0: using the early speech-to-text (turn grew {len(pcm) - n} B since)")
-                        return await asyncio.wait_for(task, t)
+                        tidig = await asyncio.wait_for(task, t)
+                        if SPEC_STT_KONTROLL:  # off the critical path: does the whole turn read the same?
+                            asyncio.get_running_loop().create_task(_kontrollera(tidig, pcm, t))
+                        return tidig
                     except Exception as e:  # a failed early try is not the turn's answer
                         logger.debug(f"bana0: early speech-to-text unusable ({e!r}), asking again")
                 elif task is not None:
