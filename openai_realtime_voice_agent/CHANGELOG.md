@@ -6,8 +6,9 @@ All notable changes to this add-on. Newest first.
 
 - **Bana 0:s ljudlängd mot motorns, och fasen vid turstart (raawr US-032, A:s granskning av #27).**
   Bana 0:s ljud hoppar över fasen replying men motorn får det ändå, så en fråga kan stympas.
-  Vid turslut jämförs bana 0:s ljudlängd med vad motorn håller; mer än 0,3 s skillnad ger en
-  varning. Fasen loggas vid turstart. Kontrolluppgiftens referens hålls nu (kan inte städas
+  Vid turslut loggas bana 0:s ljudlängd och motorns varje tur; varning bara när motorn håller
+  mer än 0,3 s mer än bana 0 (normalt har bana 0 ~0,3 s mer, förrullen 0,8 mot 0,5 s). Emitterns
+  fas (den som styr hoppet i serialiseraren) loggas vid turstart. Kontrolluppgiftens referens hålls nu (kan inte städas
   bort mitt i).
 
 ## 0.27.18 (fork)

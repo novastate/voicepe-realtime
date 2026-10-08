@@ -1773,10 +1773,14 @@ class WebSocketHandler:
             async def _on_user_turn_end():
                 pcm = serializer.take_turn_audio()
                 motorns = getattr(openai_service, "held_seconds", lambda: None)()
-                if motorns is not None and abs(len(pcm) / 32000 - motorns) > SPEC_LANGD_SKILLNAD_S:
-                    logger.warning(
-                        f"⚠️ bana0: the turn audio is {len(pcm) / 32000:.2f} s but the engine holds "
-                        f"{motorns:.2f} s — a question may have been cut")
+                if motorns is not None:
+                    # Normally bana 0 holds ~0.3 s MORE (pre-roll 0.8 s against the engine's 0.5 s).
+                    # Only the engine holding more than that is wrong: a question cut short.
+                    lage = f"bana0: turn audio {len(pcm) / 32000:.2f} s, the engine holds {motorns:.2f} s"
+                    if motorns - len(pcm) / 32000 > SPEC_LANGD_SKILLNAD_S:
+                        logger.warning(f"⚠️ {lage} — the engine has more, a question may have been cut")
+                    else:
+                        logger.info(f"⚡ {lage}")
                 bana = await bana0.tur(
                     pcm,
                     stt=_stt,
@@ -1794,7 +1798,7 @@ class WebSocketHandler:
             openai_service.on_user_turn_end = _on_user_turn_end
             def _tur_borjar():
                 _spec_rensa()
-                logger.info(f"⚡ bana0: turn audio starts in {getattr(getattr(connection, 'maskin', None), 'state', '?')}")
+                logger.info(f"⚡ bana0: turn audio starts, phase {getattr(connection.phase_emitter, 'phase', '?')}")
                 serializer.start_turn_audio()
 
             openai_service.on_user_turn_start = _tur_borjar
