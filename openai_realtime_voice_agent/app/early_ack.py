@@ -86,6 +86,9 @@ GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts"
 CLIP_RATE = 24000  # what the device lane plays: 24 kHz mono PCM16 (EnrollmentConductor)
 CACHE_DIR = "/data/enroll_prompts"
 READ_ALOUD = "Läs upp på svenska, lugnt och avslappnat: "
+# For a streamed Core answer: closer to the Live voice (measured 2026-10-09, tools/rostjamforelse.py)
+READ_ALOUD_LEVANDE = ("Läs upp följande på svenska med levande, naturlig intonation och varierad betoning, "
+                      "som en vän som pratar avslappnat vid köksbordet: ")
 
 
 def to_clip_rate(pcm: bytes, mime: str) -> bytes:
@@ -105,7 +108,8 @@ def to_clip_rate(pcm: bytes, mime: str) -> bytes:
     return out.astype(np.int16).tobytes()
 
 
-async def gemini_tts(text: str, api_key: str, voice: str, model: str = "", cache: bool = True) -> bytes:
+async def gemini_tts(text: str, api_key: str, voice: str, model: str = "", cache: bool = True,
+                     ram: str = "") -> bytes:
     """`text` in a Gemini prebuilt voice, as 24 kHz PCM16, cached on disk (`cache=False`: never
     read or written, for what is private: a streamed Core answer)."""
     import hashlib
@@ -135,7 +139,7 @@ async def gemini_tts(text: str, api_key: str, voice: str, model: str = "", cache
     # read aloud it is spoken, and the frame is not (checked with STT).
     for _ in range(2):
         response = await client.aio.models.generate_content(
-            model=model, contents=READ_ALOUD + text, config=config
+            model=model, contents=(ram or READ_ALOUD) + text, config=config
         )
         content = response.candidates[0].content if response.candidates else None
         blob = content.parts[0].inline_data if content and content.parts else None

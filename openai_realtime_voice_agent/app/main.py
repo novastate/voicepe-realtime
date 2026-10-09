@@ -20,7 +20,7 @@ from app.klockan import klipp_paa as klockan_klipp_paa
 from app.mcp_service import HomeAssistantMCPService
 from app.phase_emitter import TurnLiveness
 from app.idag import Idag
-from app.early_ack import EARLY_ACK_PHRASES, ack_phrase, gemini_tts, paa as early_ack_paa, xai_tts
+from app.early_ack import EARLY_ACK_PHRASES, READ_ALOUD_LEVANDE, ack_phrase, gemini_tts, paa as early_ack_paa, xai_tts
 
 # How long a quiet ends the user's turn (Silero, locally; Gemini and xAI). 1200 ms
 # before 0.27.12. Measured with a pause inside a sentence (tools/paustest.py): 800 ms
@@ -1047,7 +1047,7 @@ class Application:
             if core_stream_tala_paa() and strom_url():
                 async def _say_mening(text, _c=connection):
                     # never cached (a private answer's voice) and never a fallback voice
-                    pcm = await self._ack_clip(_c.provider, text, fallback=False, cache=False)
+                    pcm = await self._ack_clip(_c.provider, text, fallback=False, cache=False, levande=True)
                     await self._guarded_say(text, _c.device_id, pace=False, pcm=pcm)
 
                 register_fraga_core(service, _say_mening, ha_api.headers)
@@ -1213,7 +1213,8 @@ class Application:
         logger.info(f"⏱ early ack: {text}")
         await self._guarded_say(text, connection.device_id, pace=False, pcm=pcm)
 
-    async def _ack_clip(self, provider, text, fallback: bool = True, cache: bool = True) -> bytes:
+    async def _ack_clip(self, provider, text, fallback: bool = True, cache: bool = True,
+                        levande: bool = False) -> bytes:
         """The ack in the voice of the engine that answers (0.23.3).
 
         Gemini: its own TTS with the session's prebuilt voice (Charon).
@@ -1232,7 +1233,8 @@ class Application:
             return clips[(provider, text)]
         try:
             if provider == GEMINI:
-                pcm = await gemini_tts(text, self.gemini_api_key, self.gemini_voice or "Charon", cache=cache)
+                pcm = await gemini_tts(text, self.gemini_api_key, self.gemini_voice or "Charon", cache=cache,
+                                       ram=READ_ALOUD_LEVANDE if levande else "")
             elif provider == XAI:
                 pcm = await xai_tts(text, self.xai_api_key, self.xai_voice, cache=cache)
             else:

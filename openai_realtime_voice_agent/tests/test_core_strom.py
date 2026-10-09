@@ -110,8 +110,8 @@ async def test_ack_clip_utan_cache_laser_och_skriver_inget(monkeypatch):
 
     anrop = []
 
-    async def gemini_tts(text, key, voice, model="", cache=True):
-        anrop.append(cache)
+    async def gemini_tts(text, key, voice, model="", cache=True, ram=""):
+        anrop.append((cache, ram))
         return b"pcm"
 
     monkeypatch.setattr(main, "gemini_tts", gemini_tts)
@@ -122,7 +122,9 @@ async def test_ack_clip_utan_cache_laser_och_skriver_inget(monkeypatch):
     a = Agent()
     await main.Application._ack_clip(a, "gemini", "Ett privat svar.", fallback=False, cache=False)
     await main.Application._ack_clip(a, "gemini", "Ett privat svar.", fallback=False, cache=False)
-    assert anrop == [False, False] and a._ack_clips == {}  # rendered twice, remembered never
+    assert anrop == [(False, ""), (False, "")] and a._ack_clips == {}  # rendered twice, remembered never
+    await main.Application._ack_clip(a, "gemini", "Ett annat privat svar.", fallback=False, cache=False, levande=True)
+    assert anrop[-1][0] is False and "levande" in anrop[-1][1]  # the livelier frame for a streamed answer
 
 
 def test_adressen_harleds_ur_rummets_comms_adress(monkeypatch):
@@ -134,3 +136,19 @@ def test_adressen_harleds_ur_rummets_comms_adress(monkeypatch):
     monkeypatch.delenv("CORE_STROM_URL")
     monkeypatch.delenv("HA_API_URL")
     assert core_strom.strom_url() == ""
+
+
+def test_roststyrka_drag_hittar_tonhojden_i_en_ren_ton():
+    import importlib.util
+    import pathlib
+
+    import numpy as np
+
+    spec = importlib.util.spec_from_file_location(
+        "rostjamforelse", pathlib.Path(__file__).parent.parent / "tools" / "rostjamforelse.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    t = np.arange(mod.RATE) / mod.RATE
+    pcm = (0.3 * np.sin(2 * np.pi * 150 * t) * 32767).astype(np.int16).tobytes()
+    d = mod.drag(pcm)
+    assert d["sekunder"] == 1.0 and abs(d["f0_median"] - 150) < 5

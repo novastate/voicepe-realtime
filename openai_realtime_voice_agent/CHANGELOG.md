@@ -9,7 +9,8 @@ All notable changes to this add-on. Newest first.
   direkt 'kollar' och i bakgrunden läser röstagenten Cores SSE-ström (`start`, `token`, `deferred`,
   `done`, `error`), delar tokens i meningar och talar varje mening så fort den är hel, i samtalets
   röst (Gemini: Charon, xAI: xAI-rösten), via samma väg som övriga utsändningar. `deferred` talar Cores
-  egen rad; fel talar en fast rad, aldrig felets text. Meningarna sparas aldrig på disk (nytt
+  egen rad; fel talar en fast rad, aldrig felets text. Meningarna läses med en livligare ram (`READ_ALOUD_LEVANDE`) än klippen: mätt mot Live-rösten
+  (`tools/rostjamforelse.py`) ligger tonhöjd, ljushet och längd då närmare. Meningarna sparas aldrig på disk (nytt
   `cache=False` i TTS-vägen): ett Core-svar kan vara privat. Vägen är Comms `POST <rum>/fraga` (US-050, spår A: rummets egen nyckel,
   `Accept: text/event-stream`, kropp `{"text": …}` högst 2000 tecken); adressen härleds ur `HA_API_URL`,
   `CORE_STROM_URL` åsidosätter. Köket har ingen egen nyckel än och är utanför. Modellen hör inte
