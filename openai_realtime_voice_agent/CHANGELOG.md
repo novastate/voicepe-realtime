@@ -2,6 +2,17 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.35 (fork)
+
+- **Parallellt spår: snabbspåret och Live lyssnar båda, bakom BANA0_PING (av) (raawr US-047, Henriks idé).** Vid en träff i
+  bana 0 (lampor) utför Home Assistant det direkt som förut, men Gemini-modellen får nu också ljudet, efter en rad
+  "[huset] Snabbspåret hörde "…" och gjorde det redan … Gör inte om det med verktygen. Hör du något annat, rätta det."
+  (`bana0.ping_text`, `ResilientGeminiLiveService.ping_and_answer`). Björn svarar personligt i stället för det inbyggda
+  "Klart.". Mätt mot riktiga Live (`tools/live_ping_prov.py`, syntetisk röst): utan rad anropar modellen verktyget igen;
+  med raden gör den det inte (första ljud ca 1,6 s efter sista indata) och när snabbspåret hörde fel rättar den själv
+  från ljudet (ca 2,4 s). Spärr i verktygslagret (`Atgardslogg`, `skydda_verktyg`): samma verb och plats inom 10 s som en
+  träff = "redan gjort", annat verb går igenom. Bara Gemini; OpenAI/xAI oförändrade.
+
 ## 0.27.34 (fork)
 
 - **En omkoppling dödar inte längre en tur som modellen inte börjat svara på (köksprovet 2026-10-09).** När enhetens
