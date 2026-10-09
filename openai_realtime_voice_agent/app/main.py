@@ -23,6 +23,14 @@ from app.phase_emitter import TurnLiveness
 from app.idag import Idag
 from app.early_ack import EARLY_ACK_PHRASES, ack_phrase, gemini_tts, paa as early_ack_paa, xai_tts
 
+# The answer is always Swedish. Kitchen 2026-10-09 20:56: music and room noise before the wake word was heard
+# as Italian ("Ronzio a terra"), and the answer began in Italian (also "Bonjour du" before). The instruction
+# pins the answer language whatever the start of the audio sounds like. (Not a per-tool instruction.)
+SPRAKLAS = (
+    "\n\nSPRÅK: Svara ALLTID på svenska, från första ordet. Det du hör kan vara brus, musik eller ett annat "
+    "språk före det riktiga talet; det ändrar aldrig svarsspråket. Börja aldrig ett svar på ett annat språk."
+)
+
 # How long a quiet ends the user's turn (Silero, locally; Gemini and xAI). 1200 ms
 # before 0.27.12. Measured with a pause inside a sentence (tools/paustest.py): 800 ms
 # lets a pause of up to 0.8 s through, 700 ms cuts at 0.8 s. A cut turn can be undone
@@ -810,7 +818,7 @@ class Application:
         # No EARLY_ACK_INSTRUCTION: Grok said "Jag kollar." before every answer,
         # jokes included (owner 2026-10-02 23:07). The slow tools' descriptions
         # carry it instead (early_ack.with_ack_hint, 0.25.6).
-        return self.instructions + memory_instructions() + self.idag.block()
+        return self.instructions + SPRAKLAS + memory_instructions() + self.idag.block()
 
     async def _idag_loop(self) -> None:
         """Keep the Idag block fresh: refetch, then let Gemini reconnect when quiet.
