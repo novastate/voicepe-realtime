@@ -433,6 +433,23 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             await self._send_pcm(frame, frame.audio)
         await self._end_activity()
 
+    async def answer_turn_text(self, text: str) -> None:
+        """Bana 0 missed and the local speech-to-text has the words: give Google THOSE
+        instead of the held audio (LOCAL_TEXT_TO_MODEL, raawr US-032 experiment).
+        Live 2026-10-09: Gemini heard 'Kan du ta den på toalettet kanske?' where the
+        local STT, on the same audio, got 'Kan du tända kontoret kanske?'. The reply
+        is still audio; only the model's ears change."""
+        held, self._held = getattr(self, "_held", None), None
+        if not held:
+            logger.warning("⚠️ bana0: the locally heard text had no held turn to answer; nothing was sent")
+            return
+        # Variant B (2026-10-09 10:30): text on its own, no activity signals. Variant A
+        # (activityStart, text, activityEnd) made Google close the socket: 1007 'Precondition
+        # check failed'.
+        await self._send_activity(text=text)
+        self._reply_awaited_at = time.monotonic()
+        self.arm_silence_ack()
+
     async def drop_turn(self) -> None:
         """Forget the current turn: held audio, or an activity already open.
 

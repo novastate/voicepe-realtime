@@ -1789,6 +1789,7 @@ class WebSocketHandler:
                     skicka_svar_till_modellen=lambda text: bana0_hit(provider, openai_service, text),
                     efter_traff=_efter_traff,
                     skapa_svar=lambda: bana0_miss(provider, openai_service),
+                    skapa_svar_med_text=(lambda t: bana0_miss(provider, openai_service, t)) if bana0.text_till_modell_paa() else None,
                     efter_miss=_efter_miss,
                     klockan=_klockan if klockan.klipp_paa() else None,
                 )
