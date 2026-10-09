@@ -2,6 +2,18 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.28 (fork)
+
+- **Core-svar som talas medan de skrivs, bakom flagga (raawr US-047 AC-4, US-036).** Med
+  `CORE_STREAM_TALA=1` (AV) och `CORE_STROM_URL` får modellen verktyget `fraga_core`: det svarar
+  direkt 'kollar' och i bakgrunden läser röstagenten Cores SSE-ström (`start`, `token`, `deferred`,
+  `done`, `error`), delar tokens i meningar och talar varje mening så fort den är hel, i samtalets
+  röst (Gemini: Charon, xAI: xAI-rösten), via samma väg som övriga utsändningar. `deferred` talar Cores
+  egen rad; fel talar en fast rad, aldrig felets text. Meningarna sparas aldrig på disk (nytt
+  `cache=False` i TTS-vägen): ett Core-svar kan vara privat. Vägen framför Core (Comms som skickar
+  vidare strömmen) är spår A:s, tills dess pekar `CORE_STROM_URL` dit den finns. Modellen hör inte
+  det som talas (det går vid sidan av dess tur).
+
 ## 0.27.27 (fork)
 
 - **Tidsraden per tur (raawr US-047 AC-1).** En rad i journalen per tur, utan ord:

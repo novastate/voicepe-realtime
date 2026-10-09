@@ -10,6 +10,12 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
 from app import ha_api, tool_selection
+from app.core_strom import (
+    core_stream_tala_paa,
+    get_fraga_core_definition,
+    register_fraga_core,
+    strom_url,
+)
 from app.klockan import klipp_paa as klockan_klipp_paa
 from app.mcp_service import HomeAssistantMCPService
 from app.phase_emitter import TurnLiveness
@@ -924,6 +930,8 @@ class Application:
             # Direct OpenClaw escalation (fork): with OPENCLAW_URL set the tool
             # is native (no HA-MCP 60s cap); the same-named MCP tool is skipped
             # below so the model sees exactly one ask_openclaw.
+            if core_stream_tala_paa() and strom_url():
+                all_tools.append(get_fraga_core_definition())
             if openclaw_url():
                 all_tools.append(get_openclaw_tool_definition())
                 all_tools.append(get_recall_tool_definition())
@@ -1036,6 +1044,14 @@ class Application:
             )
             register_timer_tools(service, self.timer_registry, connection.device_id)
             register_memory_tools(service, _current_speaker_name)
+            if core_stream_tala_paa() and strom_url():
+                async def _say_mening(text, _c=connection):
+                    # never cached (a private answer's voice) and never a fallback voice
+                    pcm = await self._ack_clip(_c.provider, text, fallback=False, cache=False)
+                    await self._guarded_say(text, _c.device_id, pace=False, pcm=pcm)
+
+                register_fraga_core(service, _say_mening, ha_api.headers)
+                logger.info("✅ Registered fraga_core (Core answers spoken as they are written)")
             if openclaw_url():
                 register_openclaw_tool(service)
                 logger.info("✅ Registered DIRECT ask_openclaw tool (bypassing HA MCP 60s cap)")
@@ -1197,7 +1213,7 @@ class Application:
         logger.info(f"⏱ early ack: {text}")
         await self._guarded_say(text, connection.device_id, pace=False, pcm=pcm)
 
-    async def _ack_clip(self, provider, text, fallback: bool = True) -> bytes:
+    async def _ack_clip(self, provider, text, fallback: bool = True, cache: bool = True) -> bytes:
         """The ack in the voice of the engine that answers (0.23.3).
 
         Gemini: its own TTS with the session's prebuilt voice (Charon).
@@ -1212,13 +1228,13 @@ class Application:
         if provider not in (GEMINI, XAI):
             provider = GEMINI if self.gemini_api_key else XAI if self.xai_api_key else provider
         clips = self._ack_clips
-        if (provider, text) in clips:
+        if cache and (provider, text) in clips:
             return clips[(provider, text)]
         try:
             if provider == GEMINI:
-                pcm = await gemini_tts(text, self.gemini_api_key, self.gemini_voice or "Charon")
+                pcm = await gemini_tts(text, self.gemini_api_key, self.gemini_voice or "Charon", cache=cache)
             elif provider == XAI:
-                pcm = await xai_tts(text, self.xai_api_key, self.xai_voice)
+                pcm = await xai_tts(text, self.xai_api_key, self.xai_voice, cache=cache)
             else:
                 pcm = await self.enrollment_conductor._tts(text, voice=self.voice)
         except Exception as e:
@@ -1229,7 +1245,8 @@ class Application:
                 f"({e!r}) — using the old clip"
             )
             pcm = await self.enrollment_conductor._tts(text)
-        clips[(provider, text)] = pcm
+        if cache:
+            clips[(provider, text)] = pcm
         return pcm
 
     async def _warm_early_acks(self) -> None:

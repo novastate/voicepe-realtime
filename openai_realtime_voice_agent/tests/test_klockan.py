@@ -227,7 +227,7 @@ async def test_en_openai_session_far_geminis_klipp():
 
     gjorda = []
 
-    async def gemini_tts(text, key, voice):
+    async def gemini_tts(text, key, voice, cache=True):
         gjorda.append(("gemini", text))
         return b"g"
 
