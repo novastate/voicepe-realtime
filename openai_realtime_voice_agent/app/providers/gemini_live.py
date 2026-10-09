@@ -573,6 +573,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         self._turn_rescue = None
         self._activity_open = False
         self._preroll = bytearray()
+        self._transkr_start, self._transkr_kollad = "", False  # a dropped turn must not mute the next one's check
         self.cancel_silence_ack()
         if self._turns is not None:
             self._turns.reset()

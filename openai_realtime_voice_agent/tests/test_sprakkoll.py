@@ -48,3 +48,13 @@ async def test_tjansten_loggar_bara_de_forsta_orden_en_gang_per_tur(caplog):
         assert "vad tycker du" not in rader[0].getMessage()  # only the first words
     finally:
         gemini_live.GeminiLiveLLMService._handle_msg_input_transcription = orig
+
+
+@pytest.mark.asyncio
+async def test_en_avbruten_tur_tystar_inte_nasta_turs_kontroll():
+    from app.providers.gemini_live import ResilientGeminiLiveService as S
+
+    ns = SimpleNamespace(_transkr_start="Ronzio a terra hej", _transkr_kollad=True, _activity_open=False, _held=None,
+                         _turn_rescue=None, _preroll=bytearray(), cancel_silence_ack=lambda: None, _turns=None)
+    await S.drop_turn(ns)
+    assert (ns._transkr_start, ns._transkr_kollad) == ("", False)
