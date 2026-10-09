@@ -5,7 +5,7 @@ import logging
 import os
 import time
 import uuid
-from typing import Any, Optional, Callable, Awaitable, Dict
+from typing import Any, Optional, Callable, Awaitable, Dict, Set, Tuple
 
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -1183,6 +1183,10 @@ class WebSocketHandler:
         # DeviceConnection, because sharing one of each is precisely what forced
         # a second device to displace the first.
         self.devices = DeviceRegistry()
+        # Turns the model never began to answer when their link dropped, per device:
+        # (frames, time). The device's next connection answers them (see _lamna_raddad_tur).
+        self._raddade: Dict[str, Tuple[list, float]] = {}
+        self._bakgrund: Set[asyncio.Task] = set()
         # Builds a fresh OpenAI service for a connection. Set by main.py, which
         # owns the model/tool configuration. Takes the DeviceConnection so
         # per-device tools (e.g. disconnect_client) can bind to that device's
@@ -2243,6 +2247,10 @@ class WebSocketHandler:
             if on_client_connected:
                 await on_client_connected(device_id)
 
+            rescue_task = asyncio.get_running_loop().create_task(self._lamna_raddad_tur(connection))
+            self._bakgrund.add(rescue_task)
+            rescue_task.add_done_callback(self._bakgrund.discard)
+
             # Blocks until the device disconnects (or the pipeline ends).
             await runner.run(task)
         except asyncio.CancelledError:
@@ -2272,6 +2280,42 @@ class WebSocketHandler:
             await self._teardown(connection)
             logger.info(f"🔌 device {device_id} disconnected ({len(self.devices)} remaining)")
 
+    RADDAD_TUR_MAX_ALDER_S = 20.0
+
+    async def _lamna_raddad_tur(self, connection: DeviceConnection) -> None:
+        """A turn the previous connection never began to answer goes to this one's engine.
+
+        Kitchen 2026-10-09: the device's socket write failed, it reconnected within a second, and the
+        turn that was being thought about died with the old pipeline. Not when someone has begun
+        to talk again (the phase is not idle), and never a turn the model had acted on or begun to
+        answer (the service clears it then)."""
+        stash = self._raddade.pop(connection.device_id, None)
+        if stash is None:
+            return
+        frames, t0 = stash
+        if time.monotonic() - t0 > self.RADDAD_TUR_MAX_ALDER_S:
+            return
+        service = connection.openai_service
+        try:
+            for _ in range(80):  # the new engine needs a moment: up to 8 s
+                if connection.openai_service is None:
+                    return
+                if getattr(service, "_session", None) is not None or getattr(service, "sover", False):
+                    break
+                await asyncio.sleep(0.1)
+            phase = getattr(connection.phase_emitter, "phase", None)
+            if phase not in (None, "idle") or getattr(service, "_held", None):
+                logger.info(f"♻️ {connection.device_id}: a new turn has begun; the kept turn is dropped")
+                return
+            service._held = frames
+            logger.info(f"♻️ {connection.device_id}: answering the turn that was kept across the reconnect "
+                        f"({time.monotonic() - t0:.1f}s old)")
+            await service.answer_turn()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"⚠️ {connection.device_id}: could not answer the kept turn: {e!r}")
+
     async def _teardown(self, connection: DeviceConnection) -> None:
         """Release one connection's pipeline and OpenAI session.
 
@@ -2289,6 +2333,11 @@ class WebSocketHandler:
         if connection.ha_tools_task is not None:
             connection.ha_tools_task.cancel()
             connection.ha_tools_task = None
+        take = getattr(connection.openai_service, "take_rescue", None)
+        frames = take() if take is not None else None
+        if frames:
+            self._raddade[connection.device_id] = (frames, time.monotonic())
+            logger.info(f"♻️ {connection.device_id}: link lost mid-turn, the unanswered turn is kept for the next connection")
         recovery = connection.recovery
         if recovery is not None:
             await recovery.close()

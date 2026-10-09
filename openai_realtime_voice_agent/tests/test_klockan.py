@@ -492,3 +492,105 @@ async def test_en_tur_som_inte_kan_vackas_varnar_och_skickar_inget(caplog):
     with caplog.at_level("WARNING"):
         await S.answer_turn_text(ns, "tänd kontoret")
     assert skickat == [] and "would not wake" in caplog.text
+
+
+def test_en_hallen_tur_overlever_inte_forsta_ljudet_eller_ett_verktyg():
+    """Bara en tur som modellen varken börjat svara på eller agerat på får svaras om efter en omkoppling."""
+    import time as _t
+    from types import SimpleNamespace
+
+    from pipecat.frames.frames import OutputAudioRawFrame
+
+    from app.providers.gemini_live import ResilientGeminiLiveService as S
+
+    ns = SimpleNamespace(_turn_rescue=([1, 2], _t.monotonic()), TURN_RESCUE_MAX_AGE_S=S.TURN_RESCUE_MAX_AGE_S)
+    assert S.take_rescue(ns) == [1, 2] and ns._turn_rescue is None  # once
+    ns._turn_rescue = ([1], _t.monotonic() - S.TURN_RESCUE_MAX_AGE_S - 1)
+    assert S.take_rescue(ns) is None  # stale
+
+
+@pytest.mark.asyncio
+async def test_svarar_modellen_eller_agerar_den_rensas_den_hallna_turen():
+    import time as _t
+    from types import SimpleNamespace
+
+    from pipecat.frames.frames import OutputAudioRawFrame
+
+    from app.providers import gemini_live
+    from app.providers.gemini_live import ResilientGeminiLiveService as S
+
+    class Bas:
+        async def push_frame(self, *a, **k):
+            pass
+
+    # first sound clears it
+    ns = S.__new__(S)
+    ns._turn_rescue, ns.ljud_s, ns._forsta_ljud, ns.tider = ([1], _t.monotonic()), 0.0, None, None
+    frame = OutputAudioRawFrame(audio=b"\0\0" * 10, sample_rate=24000, num_channels=1)
+    orig = gemini_live.GeminiLiveLLMService.push_frame
+    gemini_live.GeminiLiveLLMService.push_frame = Bas.push_frame
+    try:
+        await ns.push_frame(frame)
+    finally:
+        gemini_live.GeminiLiveLLMService.push_frame = orig
+    assert ns._turn_rescue is None
+
+    # a drop clears it
+    ns = SimpleNamespace(_turn_rescue=([1], _t.monotonic()), _activity_open=False, _held=None, _preroll=bytearray(),
+                         cancel_silence_ack=lambda: None, _turns=None)
+    await S.drop_turn(ns)
+    assert ns._turn_rescue is None
+
+
+@pytest.mark.asyncio
+async def test_en_tur_som_overlevde_lanken_svaras_pa_av_nasta_anslutning():
+    import time as _t
+    from types import SimpleNamespace
+
+    from app.websocket_handler import WebSocketHandler
+
+    svarade = []
+
+    async def answer_turn():
+        svarade.append(list(h._held))
+
+    h = SimpleNamespace(_session=object(), sover=False, _held=None, answer_turn=answer_turn)
+    conn = SimpleNamespace(device_id="koket", openai_service=h, phase_emitter=SimpleNamespace(phase="idle"))
+    hw = SimpleNamespace(_raddade={"koket": ([b"a", b"b"], _t.monotonic())}, RADDAD_TUR_MAX_ALDER_S=20.0)
+    await WebSocketHandler._lamna_raddad_tur(hw, conn)
+    assert svarade == [[b"a", b"b"]] and "koket" not in hw._raddade
+
+    # someone has begun to talk again: the kept turn is dropped, not answered over them
+    h._held, svarade[:] = None, []
+    conn.phase_emitter.phase = "listening"
+    hw._raddade["koket"] = ([b"x"], _t.monotonic())
+    await WebSocketHandler._lamna_raddad_tur(hw, conn)
+    assert svarade == []
+
+    # too old: dropped
+    conn.phase_emitter.phase = "idle"
+    hw._raddade["koket"] = ([b"x"], _t.monotonic() - 21)
+    await WebSocketHandler._lamna_raddad_tur(hw, conn)
+    assert svarade == []
+
+
+@pytest.mark.asyncio
+async def test_nedmonteringen_sparar_den_obesvarade_turen_for_nasta_anslutning():
+    import time as _t
+    from types import SimpleNamespace
+
+    from app.websocket_handler import WebSocketHandler
+
+    tjanst = SimpleNamespace(sover=True, take_rescue=lambda: [b"a"])
+    conn = SimpleNamespace(device_id="koket", openai_service=tjanst, task=None, ha_tools_task=None, recovery=None,
+                           phase_emitter=None, maskin=None, pipeline=None, runner=None)
+    hw = SimpleNamespace(_raddade={})
+    await WebSocketHandler._teardown(hw, conn)
+    assert hw._raddade["koket"][0] == [b"a"]
+
+    # nothing kept when the model had begun to answer (take_rescue gives None)
+    tjanst2 = SimpleNamespace(sover=True, take_rescue=lambda: None)
+    conn2 = SimpleNamespace(device_id="kontoret", openai_service=tjanst2, task=None, ha_tools_task=None, recovery=None,
+                            phase_emitter=None, maskin=None, pipeline=None, runner=None)
+    await WebSocketHandler._teardown(hw, conn2)
+    assert "kontoret" not in hw._raddade

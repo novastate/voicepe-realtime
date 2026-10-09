@@ -276,6 +276,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
 
     async def _handle_msg_tool_call(self, message) -> None:
         self._answer_after_tool = True
+        self._turn_rescue = None  # a tool may have acted already: the turn is no longer safe to replay
         await super()._handle_msg_tool_call(message)
 
     async def _handle_msg_turn_complete(self, message) -> None:
@@ -433,6 +434,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
     async def push_frame(self, frame, *args, **kwargs):
         """Tell the turn's timing line when the model's first audio leaves for the device."""
         if isinstance(frame, OutputAudioRawFrame):
+            self._turn_rescue = None  # the model has begun to answer
             self.ljud_s += len(frame.audio) / (2 * (frame.sample_rate or 24000))
             if self._forsta_ljud is not None:
                 self._forsta_ljud.set()
@@ -480,10 +482,25 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             return
         if not await self._vaken_for_tur():
             return
+        self._turn_rescue = (list(held), time.monotonic())
         await self._send_activity(activity_start=ActivityStart())
         for frame in held:
             await self._send_pcm(frame, frame.audio)
         await self._end_activity()
+
+    # The audio of the turn the model was last asked to answer, until it has begun to answer (first
+    # sound), acted (a tool call) or finished. If the device's link drops in between, the handler
+    # hands it to the next connection so the turn is answered instead of dying (a reconnect must
+    # never kill a turn, kitchen 2026-10-09).
+    _turn_rescue: Optional[tuple] = None
+    TURN_RESCUE_MAX_AGE_S = 20.0
+
+    def take_rescue(self) -> Optional[list]:
+        """The frames of a turn the model never began to answer, once; None if there is none or it is stale."""
+        rescue, self._turn_rescue = self._turn_rescue, None
+        if rescue is None or time.monotonic() - rescue[1] > self.TURN_RESCUE_MAX_AGE_S:
+            return None
+        return rescue[0]
 
     async def answer_turn_text(self, text: str) -> None:
         """Bana 0 missed and the local speech-to-text has the words: give Google THOSE
@@ -517,6 +534,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         if self._activity_open:
             logger.info("🧽 open Gemini activity abandoned (device dropped the input)")
         self._held = None
+        self._turn_rescue = None
         self._activity_open = False
         self._preroll = bytearray()
         self.cancel_silence_ack()

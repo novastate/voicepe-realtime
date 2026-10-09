@@ -2,6 +2,15 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.34 (fork)
+
+- **En omkoppling dödar inte längre en tur som modellen inte börjat svara på (köksprovet 2026-10-09).** När enhetens
+  socket föll mitt i en tur (väckning under THINKING) revs pipelinen och turen försvann. Nu sparar tjänsten ljudet
+  för den tur modellen senast fick (`answer_turn`) tills första ljud, ett verktygsanrop eller turslut; om länken
+  tappas hamnar det i handlerns `_raddade`, och enhetens nästa anslutning svarar på det (`_lamna_raddad_tur`):
+  inom 20 s, bara om ingen börjat tala igen, och aldrig en tur som modellen agerat på (annars skulle ett verktyg
+  köras två gånger). Gäller ljudläget (inte LOCAL_TEXT_TO_MODEL, som är av).
+
 ## 0.27.33 (fork)
 
 - **En tur till en sovande motor väcker den först (köksprovet 2026-10-09).** 16:51:16 kom en följdfråga efter att molnet
