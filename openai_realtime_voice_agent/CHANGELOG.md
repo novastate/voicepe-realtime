@@ -2,6 +2,15 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.20 (fork)
+
+- **Mätkommandot (raawr US-032 AC-10).** `journalctl -u raawr-rostagent --since today | python tools/matvarden.py`
+  ger per rum: sessioner, uppkopplade minuter, tid till första ljud och reflex som P50/P95,
+  avbrott (SPEAKING -> LISTENING) och stängningsorsaker. Läser bara tider, lägen och kodens egna
+  orsaker; det som sades (raderna `heard`/`hit`) kopieras aldrig. Reflexen är tiden från
+  THINKING till bana 0:s träff, och en träffrad har inget rum, så den läggs på rummet som
+  senast blev THINKING.
+
 ## 0.27.19 (fork)
 
 - **Bana 0:s ljudlängd mot motorns, och fasen vid turstart (raawr US-032, A:s granskning av #27).**
