@@ -1029,6 +1029,7 @@ class Application:
                 connection.device_id,
                 tur_text=getattr(service, "tur_text", None),
                 hort=lambda: connection.bana0_heard,
+                tur_nr=lambda: getattr(service, "turer_klara", 0),
             ))
             logger.info("✅ Registered play_media tool handler")
             

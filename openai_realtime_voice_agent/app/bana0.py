@@ -279,7 +279,7 @@ async def prova(text: str, timeout: float) -> Optional[str]:
 # Whisper invents these on noise and music (kitchen 2026-10-09 21:17: "Ett tack till mina supporters via Patreon!").
 # A phrase from subtitle credits is never a command; the turn then goes to the model with the audio as if STT heard nothing.
 _PAHITT = ("patreon", "tack för att ni tittade", "tack för att du tittade", "tack för att ni tittat", "tack för att du tittat",
-           "undertexter", "amara.org", "prenumerera", "thanks for watching", "subtitles by")
+           "amara.org", "thanks for watching", "subtitles by")  # not "undertexter"/"prenumerera": real requests
 
 
 def brus(text: Optional[str]) -> bool:

@@ -283,6 +283,7 @@ def create_play_media_tool_handler(
     device_id: str = "",
     tur_text=None,
     hort=None,
+    tur_nr=None,
 ) -> Callable[["FunctionCallParams"], Awaitable[None]]:
     """Create the play_media handler.
 
@@ -295,7 +296,7 @@ def create_play_media_tool_handler(
     if re.fullmatch(r"[0-9a-fA-F.:]+|unknown", device_id):  # no ?device_id=: the id is the client's IP, not a room
         device_id = ""
     default_player = device_id or os.environ.get("INSTANCE_NAME", "").strip()
-    tillfragad: Dict[str, float] = {}  # query -> when it was asked about; a repeat within _FRAGA_IGEN_S plays
+    tillfragad: Dict[str, tuple] = {}  # query -> (when, turn number) it was asked about; a repeat in a LATER turn plays
 
     async def play_media_tool_handler(params: "FunctionCallParams") -> None:
         args = params.arguments or {}
@@ -312,8 +313,11 @@ def create_play_media_tool_handler(
             return
         skal = osaker(query, tur_text() if tur_text else "", hort() if hort else "")
         nyckel = _fold(query)
-        if skal and time.monotonic() - tillfragad.get(nyckel, -1e9) > _FRAGA_IGEN_S:
-            tillfragad[nyckel] = time.monotonic()
+        nr = tur_nr() if tur_nr else 0
+        tid, fragad_nr = tillfragad.get(nyckel, (-1e9, nr))
+        igen = time.monotonic() - tid <= _FRAGA_IGEN_S and nr > fragad_nr  # the user answered: a new turn since the question
+        if skal and not igen:
+            tillfragad[nyckel] = (time.monotonic(), nr)
             logger.info(f"🎵 play_media: not played, asking first ({skal})")
             await params.result_callback(
                 f"Nothing was played: you may have misheard ({skal}). Ask the user once, in Swedish, what they want "

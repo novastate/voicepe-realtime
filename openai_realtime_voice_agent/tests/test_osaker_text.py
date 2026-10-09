@@ -13,7 +13,7 @@ def test_kanda_pahitt_och_tomt_ar_brus(text):
     assert bana0.brus(text)
 
 
-@pytest.mark.parametrize("text", ["Tänd köket", "Vad är klockan", "ja", "Spela P3", "Tack"])
+@pytest.mark.parametrize("text", ["Sätt på undertexter", "Jag vill prenumerera på P3", "Tänd köket", "Vad är klockan", "ja", "Spela P3", "Tack"])
 def test_riktiga_kommandon_ar_inte_brus(text):
     assert not bana0.brus(text)
 
@@ -68,7 +68,10 @@ def _korr(tur_text, hort, query="Game of Tips"):
     async def cb(text):
         sagt.append(text)
 
-    h = play_media_tool.create_play_media_tool_handler("koket", tur_text=lambda: tur_text, hort=lambda: hort)
+    nr = {"n": 0}
+    h = play_media_tool.create_play_media_tool_handler("koket", tur_text=lambda: tur_text, hort=lambda: hort,
+                                                       tur_nr=lambda: nr["n"])
+    h.nr = nr
     return h, SimpleNamespace(arguments={"query": query}, result_callback=cb), spelade, sagt, handler
 
 
@@ -84,7 +87,10 @@ async def _kor(monkeypatch, tur_text, hort, query="Game of Tips", gor_om=False):
     real = httpx.AsyncClient
     monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: real(*a, **{**k, "transport": httpx.MockTransport(mock)}))
     await h(params)
-    if gor_om:
+    if gor_om == "samma tur":
+        await h(params)
+    elif gor_om:
+        h.nr["n"] += 1  # the user answered: a new turn
         await h(params)
     return spelade, sagt
 
@@ -111,3 +117,9 @@ async def test_samma_onskan_igen_spelas(monkeypatch):
 async def test_klar_svensk_begaran_spelas_direkt(monkeypatch):
     spelade, sagt = await _kor(monkeypatch, "Spela Game of Tips", "Spela game of tips")
     assert spelade == [1] and sagt[0].startswith("Playing")
+
+
+@pytest.mark.asyncio
+async def test_modellen_kan_inte_ringa_om_i_samma_tur(monkeypatch):
+    spelade, sagt = await _kor(monkeypatch, "Play Game of Tips", "Du kan välja med tips?", gor_om="samma tur")
+    assert spelade == [] and all("Ask the user once" in t for t in sagt)
