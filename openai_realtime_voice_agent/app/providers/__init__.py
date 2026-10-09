@@ -4,8 +4,11 @@ Everything that differs between OpenAI Realtime and Gemini Live lives behind
 this module. No code outside it may know which engine is running -- except the
 router, which only ever handles names.
 """
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 # The engine names used in the add-on config, in logs and by the router.
 OPENAI = "openai"
@@ -165,11 +168,17 @@ async def bana0_hit(provider: str, service, text: str) -> None:
         await service.drop_turn()
 
 
-async def bana0_miss(provider: str, service) -> None:
-    """Bana 0 missed: let the model answer the turn."""
+async def bana0_miss(provider: str, service, text: str = "") -> None:
+    """Bana 0 missed: let the model answer the turn.
+
+    With LOCAL_TEXT_TO_MODEL=1 and the words in hand, an engine that can take them
+    (Gemini) gets the words in place of the held audio."""
     from app import bana0
 
-    if supports_client_events(provider):
+    if text and bana0.text_till_modell_paa() and hasattr(service, "answer_turn_text"):
+        logger.info("⚡ bana0: the locally heard text goes to the model instead of the audio")
+        await service.answer_turn_text(text)
+    elif supports_client_events(provider):
         await bana0.be_om_svar(service)
         service.arm_silence_ack()
     else:

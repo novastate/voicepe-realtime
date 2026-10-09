@@ -383,3 +383,49 @@ def test_websocket_handler_ger_inget_klockhandtag_nar_flaggan_ar_av():
     import pathlib
     kalla = (pathlib.Path(__file__).parent.parent / "app" / "websocket_handler.py").read_text()
     assert "klockan=_klockan if klockan.klipp_paa() else None" in kalla
+
+
+# --- LOCAL_TEXT_TO_MODEL (raawr US-032 experiment, off by default) ---------------
+
+@pytest.mark.asyncio
+async def test_miss_ger_modellen_den_lokalt_hordda_texten_bara_med_flaggan(comms, monkeypatch):
+    from app.providers import GEMINI, bana0_miss
+
+    anrop = []
+
+    class Gemini:
+        async def answer_turn_text(self, text):
+            anrop.append(("text", text))
+
+        async def answer_turn(self):
+            anrop.append(("ljud", None))
+
+    monkeypatch.delenv("LOCAL_TEXT_TO_MODEL", raising=False)
+    await bana0_miss(GEMINI, Gemini(), "Kan du tända kontoret kanske?")
+    monkeypatch.setenv("LOCAL_TEXT_TO_MODEL", "1")
+    await bana0_miss(GEMINI, Gemini(), "Kan du tända kontoret kanske?")
+    await bana0_miss(GEMINI, Gemini(), "")  # no words: the audio, as before
+    assert anrop == [("ljud", None), ("text", "Kan du tända kontoret kanske?"), ("ljud", None)]
+
+
+@pytest.mark.asyncio
+async def test_tur_skickar_texten_till_skapa_svar_med_text_nar_den_finns(comms):
+    comms.svar = httpx.Response(204)
+    server, port, _ = await _wyoming(_transcript("kan du tända kontoret kanske"))
+    service, said = FakeService(), []
+    fick = []
+
+    async def stt(pcm, timeout):
+        return await bana0.transkribera(pcm, "127.0.0.1", port, timeout)
+
+    async def med_text(t):
+        fick.append(t)
+
+    async with server:
+        bana = await bana0.tur(
+            b"\x00" * 3200, stt=stt, timeout_stt=1.0, timeout_comms=4.0,
+            skicka_svar_till_modellen=lambda t: bana0.be_om_bekraftelse(service, t),
+            skapa_svar=lambda: bana0.be_om_svar(service),
+            efter_miss=lambda: said.append("miss"), skapa_svar_med_text=med_text)
+    assert bana == "modell" and fick == ["kan du tända kontoret kanske"] and said == ["miss"]
+    assert service.typer() == []  # the audio path (response.create) was not used

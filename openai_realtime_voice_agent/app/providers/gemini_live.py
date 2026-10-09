@@ -433,6 +433,19 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             await self._send_pcm(frame, frame.audio)
         await self._end_activity()
 
+    async def answer_turn_text(self, text: str) -> None:
+        """Bana 0 missed and the local speech-to-text has the words: give Google THOSE
+        instead of the held audio (LOCAL_TEXT_TO_MODEL, raawr US-032 experiment).
+        Live 2026-10-09: Gemini heard 'Kan du ta den på toalettet kanske?' where the
+        local STT, on the same audio, got 'Kan du tända kontoret kanske?'. The reply
+        is still audio; only the model's ears change."""
+        held, self._held = getattr(self, "_held", None), None
+        if not held:
+            return
+        await self._send_activity(activity_start=ActivityStart())
+        await self._send_activity(text=text)
+        await self._end_activity()
+
     async def drop_turn(self) -> None:
         """Forget the current turn: held audio, or an activity already open.
 

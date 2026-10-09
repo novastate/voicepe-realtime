@@ -14,6 +14,7 @@ import asyncio
 import inspect
 import json
 import logging
+import os
 import random
 from typing import Awaitable, Callable, Optional
 
@@ -42,6 +43,12 @@ OFFLINE_VARIANTER = (
 )
 OK_FALLBACK, OFFLINE_LINE = OK_VARIANTER[0], OFFLINE_VARIANTER[0]
 LOKALA_REPLIKER = OK_VARIANTER + OFFLINE_VARIANTER
+def text_till_modell_paa() -> bool:
+    """Experiment (raawr US-032): on a miss, the model gets the locally heard words
+    instead of the audio. OFF by default. LOCAL_TEXT_TO_MODEL=1 turns it on."""
+    return os.environ.get("LOCAL_TEXT_TO_MODEL", "0") == "1"
+
+
 _PASAR: dict = {}  # a shuffled bag per line: every variant once before any twice
 _SENAST: dict = {}
 
@@ -162,6 +169,7 @@ async def tur(
     efter_miss: Optional[Callable[[], None]] = None,
     efter_traff: Optional[Callable[[], None]] = None,
     klockan: Optional[Callable[[str], Awaitable[None]]] = None,
+    skapa_svar_med_text: Optional[Callable[[str], Awaitable[None]]] = None,
 ) -> str:
     """One finished user turn. Returns 'klockan', 'bana0' on a hit, 'modell' otherwise.
 
@@ -191,7 +199,10 @@ async def tur(
         svar = None
     if not svar:
         try:
-            await skapa_svar()
+            if skapa_svar_med_text is not None and text:
+                await skapa_svar_med_text(text)
+            else:
+                await skapa_svar()
         except Exception as e:  # no model socket: efter_miss says why
             logger.warning(f"bana0: asking the model failed: {e!r}")
         if efter_miss is not None:
