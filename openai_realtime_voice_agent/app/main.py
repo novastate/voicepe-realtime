@@ -20,7 +20,7 @@ from app.klockan import klipp_paa as klockan_klipp_paa
 from app.mcp_service import HomeAssistantMCPService
 from app.phase_emitter import TurnLiveness
 from app.idag import Idag
-from app.early_ack import EARLY_ACK_PHRASES, READ_ALOUD_LEVANDE, ack_phrase, gemini_tts, paa as early_ack_paa, xai_tts
+from app.early_ack import EARLY_ACK_PHRASES, READ_ALOUD_LEVANDE, ack_phrase, daempa, gemini_tts, paa as early_ack_paa, xai_tts
 
 # How long a quiet ends the user's turn (Silero, locally; Gemini and xAI). 1200 ms
 # before 0.27.12. Measured with a pause inside a sentence (tools/paustest.py): 800 ms
@@ -1057,6 +1057,8 @@ class Application:
                         sista_tts[0] = time.monotonic()
                     # never cached (a private answer's voice) and never a fallback voice
                     pcm = await self._ack_clip(_c.provider, text, fallback=False, cache=False, levande=True)
+                    if _c.provider == GEMINI:
+                        pcm = daempa(pcm)  # measured 2.3 dB louder than the Live voice
                     await self._guarded_say(text, _c.device_id, pace=False, pcm=pcm)
 
                 connection.avbryt_core = register_fraga_core(service, _say_mening, ha_api.headers)

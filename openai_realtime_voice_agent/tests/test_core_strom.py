@@ -271,3 +271,16 @@ async def test_avbryt_stoppar_ett_pagaende_svar_mitt_i(monkeypatch):
     avbryt()
     await asyncio.sleep(0.05)
     assert all(t.done() for t in taken_innan) and talat == ["Första meningen är hel nu och klar."]
+
+
+def test_daempa_sanker_niva_med_2_3_db_och_klipper_inte():
+    import numpy as np
+
+    from app.early_ack import STROM_NIVA_DB, daempa
+
+    x = (np.sin(np.arange(24000) / 10) * 12000).astype(np.int16)
+    ut = np.frombuffer(daempa(x.tobytes()), dtype=np.int16).astype(np.float32)
+    db = 20 * np.log10(np.sqrt(np.mean(ut ** 2)) / np.sqrt(np.mean(x.astype(np.float32) ** 2)))
+    assert abs(db - STROM_NIVA_DB) < 0.05 and len(ut) == len(x)
+    hog = daempa((np.full(100, 32767, dtype=np.int16)).tobytes(), db=6)  # up 6 dB: clipped, not wrapped
+    assert set(np.frombuffer(hog, dtype=np.int16).tolist()) == {32767}
