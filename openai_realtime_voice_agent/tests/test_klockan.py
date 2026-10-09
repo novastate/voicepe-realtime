@@ -32,6 +32,11 @@ def test_klockfragor_kanns_igen(text):
     "tänd lampan i kontoret",
     "vad är klockan i New York", "sätt en timer på tio minuter",
     "ställ klockan", "väck mig klockan", "när är klockan sju", "tänd lampan klockan", "Vai då kan?",
+    # A's list of orders whose time Whisper dropped (review of #29): they go to the model
+    "larma mig klockan", "larma klockan", "vakna klockan", "ring mig klockan", "påminna mig klockan",
+    "starta ugnen klockan", "spela musik klockan", "stoppa musiken klockan", "pausa musiken klockan",
+    "kör roboten klockan", "öppna garaget klockan", "schemalägg städning klockan", "alarm klockan",
+    "väckarklocka klockan", "byt klockan", "ändra klockan", "glöm inte klockan", "vi ses klockan",
 ])
 def test_annat_ar_ingen_klockfraga(text):
     assert not klockan.ar_klockfraga(text)

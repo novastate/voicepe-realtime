@@ -2,6 +2,15 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.22 (fork)
+
+- **Klockmatchningen släpper inte igenom order (A:s granskning av #29).** Den garblade klassen
+  ('Böda klockan') tas bara som exakt två ord eller efter ett frågeord (vad, var, va, hur, vet, har,
+  säg, kan, e, är). Allt annat kort som slutar på 'klockan' går till modellen, och fler orderord
+  stoppar matchen (larma, vakna, ring, påminna, starta, stoppa, pausa, spela, kör, öppna, stäng,
+  byt, ändra, alarm, väckarklocka, schemalägg, mig, oss). 26 av 42 order A prövade fångades förut;
+  de ligger nu som test.
+
 ## 0.27.21 (fork)
 
 - **Bredare klockmatchning och längre tal-till-text-tid (raawr US-032).** Live 2026-10-09 hörde
