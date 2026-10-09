@@ -604,3 +604,35 @@ async def test_gemini_tappad_tur_sags_hogt():
         await asyncio.sleep(0)
     assert said == [(TURN_LOST_LINE, "kontoret")]
     assert idle == ["turn-lost"]
+
+
+@pytest.mark.asyncio
+async def test_fraga_over_hans_eget_svar_tappar_inte_borjan():
+    """Live 2026-10-09 12:09: he spoke while the phase still said "replying"; bana 0's audio
+    lacked the first 0.8 s the engine had ('a question may have been cut')."""
+    from app.raw_audio_serializer import TURN_PCM_PREROLL, RawAudioSerializer
+
+    ser = RawAudioSerializer("koket", input_sample_rate=16000)
+    ser.is_replying = lambda: True
+    bit = b"\x01\x00" * 1600  # 100 ms
+    for _ in range(12):  # his own reply, then he starts to speak over it
+        await ser.deserialize(bit)
+    assert ser.start_turn_audio() is True  # the local VAD says he is speaking; the phase has not moved; the ring was used
+    for _ in range(8):
+        await ser.deserialize(bit)
+    pcm = ser.take_turn_audio()
+    assert len(pcm) == TURN_PCM_PREROLL + 8 * len(bit)  # pre-roll + everything since
+    # Without the change, nothing was collected while "replying" and the turn was empty.
+
+
+@pytest.mark.asyncio
+async def test_vackning_over_svaret_samlar_traffen_aven_om_fasen_inte_flyttat_sig():
+    from app.raw_audio_serializer import RawAudioSerializer
+
+    ser = RawAudioSerializer("koket", input_sample_rate=16000)
+    ser.is_replying = lambda: True
+    await ser.deserialize(json.dumps({"type": "wake"}))
+    await ser.deserialize(PCM)
+    assert ser.take_turn_audio() == PCM
+    await ser.deserialize(PCM)  # next turn, still replying and no new start: his own voice is not collected
+    assert ser.take_turn_audio() == b""
