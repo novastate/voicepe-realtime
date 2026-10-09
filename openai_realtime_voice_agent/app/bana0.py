@@ -276,6 +276,18 @@ async def prova(text: str, timeout: float) -> Optional[str]:
         return None
 
 
+# Whisper invents these on noise and music (kitchen 2026-10-09 21:17: "Ett tack till mina supporters via Patreon!").
+# A phrase from subtitle credits is never a command; the turn then goes to the model with the audio as if STT heard nothing.
+_PAHITT = ("patreon", "tack för att ni tittade", "tack för att du tittade", "tack för att ni tittat", "tack för att du tittat",
+           "amara.org", "thanks for watching", "subtitles by")  # not "undertexter"/"prenumerera": real requests
+
+
+def brus(text: Optional[str]) -> bool:
+    """True when the text is a known Whisper invention or too short to be a request (empty, one letter)."""
+    t = " ".join((text or "").lower().split())
+    return len(re.sub(r"[\W\d_]+", "", t)) < 2 or any(f in t for f in _PAHITT)
+
+
 async def tur(
     pcm: bytes,
     *,
@@ -306,6 +318,9 @@ async def tur(
     try:
         text = await stt(pcm, timeout_stt) if pcm else None
         logger.info(f"bana0: heard {text!r}")
+        if text and brus(text):
+            logger.info(f"bana0: {text!r} is noise (a known invention or too short), treated as nothing heard")
+            text = None
         if tider is not None:
             tider.mark("stt")
         if klockan is not None and klocka.ar_klockfraga(text):

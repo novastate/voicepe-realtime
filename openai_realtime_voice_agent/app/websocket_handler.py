@@ -1785,6 +1785,11 @@ class WebSocketHandler:
                         task.cancel()
                 return await bana0.transkribera(pcm, host, port, t)
 
+            async def _stt_noterad(pcm, t):
+                text = await _stt(pcm, t)
+                connection.bana0_heard = "" if bana0.brus(text) else (text or "")
+                return text
+
             tider = TurnTider(client_id)
             connection.tider = tider
             serializer.tider = tider
@@ -1818,7 +1823,7 @@ class WebSocketHandler:
                         logger.info(f"⚡ {lage}")
                 bana = await bana0.tur(
                     pcm,
-                    stt=_stt,
+                    stt=_stt_noterad,
                     timeout_stt=timeout_stt,
                     timeout_comms=timeout_comms,
                     skicka_svar_till_modellen=lambda text: bana0_hit(provider, openai_service, text),
