@@ -351,7 +351,7 @@ class Application:
             logger.warning("⚠️ bana0_stt needs turn_detection_type semantic_vad — bana 0 off")
             self.bana0_stt = None
         bana0_timeouts = (
-            int(os.environ.get("BANA0_STT_TIMEOUT_MS", "600") or 600) / 1000,
+            int(os.environ.get("BANA0_STT_TIMEOUT_MS", "1500") or 1500) / 1000,
             int(os.environ.get("BANA0_COMMS_TIMEOUT_MS", "4000") or 4000) / 1000,
         )
         # Expose the `disconnect_client` tool to the model. DEFAULT FALSE: on the

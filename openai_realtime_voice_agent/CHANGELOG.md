@@ -2,6 +2,33 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.22 (fork)
+
+- **Klockmatchningen släpper inte igenom order (A:s granskning av #29).** Den garblade klassen
+  ('Böda klockan') tas bara som exakt två ord eller efter ett frågeord (vad, var, va, hur, vet, har,
+  säg, kan, e, är). Allt annat kort som slutar på 'klockan' går till modellen, och fler orderord
+  stoppar matchen (larma, vakna, ring, påminna, starta, stoppa, pausa, spela, kör, öppna, stäng,
+  byt, ändra, alarm, väckarklocka, schemalägg, mig, oss). 26 av 42 order A prövade fångades förut;
+  de ligger nu som test.
+
+## 0.27.21 (fork)
+
+- **Bredare klockmatchning och längre tal-till-text-tid (raawr US-032).** Live 2026-10-09 hörde
+  tal-till-text Henrik som 'Böda klockan', 'Vad är det klockan?', 'Hur mycket klockan.' och
+  matcharen tog ingen av dem. Nu är en kort fras (2-5 ord) som SLUTAR på 'klockan' en klockfråga,
+  om den inte börjar som en order (ställ, väck, sätt, timer, tänd ...) eller har en tid efter sig.
+  `BANA0_STT_TIMEOUT_MS` går från 600 till 1500 ms: en tal-till-text som tog längre än 0,6 s gav
+  TimeoutError och turen gick till modellen. Normalt tar den 0,13 s, så ingen väntar längre.
+
+## 0.27.20 (fork)
+
+- **Mätkommandot (raawr US-032 AC-10).** `journalctl -u raawr-rostagent --since today | python tools/matvarden.py`
+  ger per rum: sessioner, uppkopplade minuter, tid till första ljud och reflex som P50/P95,
+  avbrott (SPEAKING -> LISTENING) och stängningsorsaker. Läser bara tider, lägen och kodens egna
+  orsaker; det som sades (raderna `heard`/`hit`) kopieras aldrig. Reflexen är tiden från
+  THINKING till bana 0:s träff, och en träffrad har inget rum, så den läggs på rummet som
+  senast blev THINKING.
+
 ## 0.27.19 (fork)
 
 - **Bana 0:s ljudlängd mot motorns, och fasen vid turstart (raawr US-032, A:s granskning av #27).**

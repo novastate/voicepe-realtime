@@ -44,6 +44,29 @@ _FRAGA = re.compile(
     r")(?: just)?(?: nu)?(?: då)?(?: björn)?$"
 )
 
+# Whisper hears Henrik badly ("Böda klockan", "Börda klockan", "Hur mycket klockan",
+# live 2026-10-09). A short phrase that ENDS in "klockan" is the question when it is
+# exactly two words (a garbled first word + "klockan") or starts with a question word;
+# anything else short that ends there goes to the model as before ("larma mig klockan"
+# is an order whose time Whisper dropped), and so does any order word in it (A's review).
+_SLUT = {"nu", "då", "just", "björn", "snälla"}
+_FRAGEORD = {"vad", "var", "va", "hur", "vet", "har", "säg", "kan", "e", "är"}
+_ORDER = {"ställ", "ställa", "väck", "väcka", "väckarklocka", "sätt", "sätta", "timer", "larm", "larma",
+          "alarm", "vakna", "ring", "ringa", "påminn", "påminna", "boka", "starta", "stoppa", "pausa",
+          "spela", "kör", "öppna", "stäng", "byt", "ändra", "schemalägg", "tänd", "släck", "mig", "oss",
+          "på", "vid", "kl", "efter", "runt", "till", "från", "mellan", "klockan"}
+
+
+def _kort_klockfraga(ord_: list) -> bool:
+    while ord_ and ord_[-1] in _SLUT:
+        ord_ = ord_[:-1]
+    if ord_[:2] == ["hej", "björn"]:
+        ord_ = ord_[2:]
+    if not (2 <= len(ord_) <= 5 and ord_[-1] == "klockan") or set(ord_[:-1]) & _ORDER:
+        return False
+    return len(ord_) == 2 or ord_[0] in _FRAGEORD
+
+
 _sa_senast = {"kommentar": True}  # the last answer had a line; the next does not
 
 
@@ -51,7 +74,8 @@ def ar_klockfraga(text: Optional[str]) -> bool:
     if not text:
         return False
     ren = re.sub(r"[^\wåäö ]+", " ", text.lower())
-    return bool(_FRAGA.match(" ".join(ren.split())))
+    ord_ = ren.split()
+    return bool(_FRAGA.match(" ".join(ord_))) or _kort_klockfraga(ord_)
 
 
 def _lage(nu: datetime) -> tuple[int, int]:
