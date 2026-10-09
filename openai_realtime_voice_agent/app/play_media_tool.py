@@ -30,6 +30,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, TYPE_CHECKING
 import httpx
 
 from app import ha_api, sprakkoll
+from app.device_registry import rum_ur_enhet
 
 if TYPE_CHECKING:
     from pipecat.services.llm_service import FunctionCallParams
@@ -292,10 +293,7 @@ def create_play_media_tool_handler(
     start the office. One process serves several devices, so the process-wide
     INSTANCE_NAME option is only the fallback when no device is given.
     """
-    device_id = (device_id or "").strip()
-    if re.fullmatch(r"[0-9a-fA-F.:]+|unknown", device_id):  # no ?device_id=: the id is the client's IP, not a room
-        device_id = ""
-    default_player = device_id or os.environ.get("INSTANCE_NAME", "").strip()
+    default_player = rum_ur_enhet(device_id) or os.environ.get("INSTANCE_NAME", "").strip()
     tillfragad: Dict[str, tuple] = {}  # query -> (when, turn number) it was asked about; a repeat in a LATER turn plays
 
     async def play_media_tool_handler(params: "FunctionCallParams") -> None:
