@@ -48,6 +48,7 @@ from app.raw_audio_serializer import RawAudioSerializer
 from app.session_manager import SessionManager
 from app.audio_recording_service import AudioRecordingService
 from app.phase_emitter import PhaseEmitter
+from app.turn_tider import TurnTider
 from app.output_lead_buffer import OutputLeadBuffer
 from app.transcript_logger import TranscriptLogger
 
@@ -1770,6 +1771,11 @@ class WebSocketHandler:
                         task.cancel()
                 return await bana0.transkribera(pcm, host, port, t)
 
+            tider = TurnTider(client_id)
+            connection.tider = tider
+            serializer.tider = tider
+            openai_service.tider = tider
+
             async def _on_user_turn_end():
                 pcm = serializer.take_turn_audio()
                 motorns = getattr(openai_service, "held_seconds", lambda: None)()
@@ -1792,6 +1798,7 @@ class WebSocketHandler:
                     skapa_svar_med_text=(lambda t: bana0_miss(provider, openai_service, t)) if bana0.text_till_modell_paa() else None,
                     efter_miss=_efter_miss,
                     klockan=_klockan if klockan.klipp_paa() else None,
+                    tider=tider,
                 )
                 if bana in ("bana0", "klockan"):
                     await phase_emitter.force_idle(bana)
@@ -1980,6 +1987,8 @@ class WebSocketHandler:
             return False
         try:
             await client.send(data)
+            if getattr(connection, "tider", None) is not None:
+                connection.tider.mark("enhet")  # bana 0's own clips and the receipts go this way (B, #34)
             return True
         except Exception as e:
             logger.warning(f"⚠️ send_bytes_to {connection.device_id} failed: {e!r}")

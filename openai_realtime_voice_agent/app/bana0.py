@@ -170,6 +170,7 @@ async def tur(
     efter_traff: Optional[Callable[[], None]] = None,
     klockan: Optional[Callable[[str], Awaitable[None]]] = None,
     skapa_svar_med_text: Optional[Callable[[str], Awaitable[None]]] = None,
+    tider=None,
 ) -> str:
     """One finished user turn. Returns 'klockan', 'bana0' on a hit, 'modell' otherwise.
 
@@ -186,6 +187,8 @@ async def tur(
     try:
         text = await stt(pcm, timeout_stt) if pcm else None
         logger.info(f"bana0: heard {text!r}")
+        if tider is not None:
+            tider.mark("stt")
         if klockan is not None and klocka.ar_klockfraga(text):
             try:
                 await klockan(text)
@@ -194,6 +197,8 @@ async def tur(
             except Exception as e:
                 logger.warning(f"bana0: the clock failed, the turn goes on: {e!r}")
         svar = await prova(text, timeout_comms) if text else None
+        if tider is not None and text:
+            tider.mark("comms")
     except Exception as e:
         logger.warning(f"bana0: turn failed, model answers: {e!r}")
         svar = None

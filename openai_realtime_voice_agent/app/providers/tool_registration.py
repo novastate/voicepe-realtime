@@ -231,6 +231,8 @@ class ToolRegistrationMixin:
             started = time.monotonic()
             logged = False
             ack_speaking = False
+            if getattr(self, "tider", None) is not None:
+                self.tider.mark("verktyg")
 
             def log_timing(status: str) -> None:
                 nonlocal logged

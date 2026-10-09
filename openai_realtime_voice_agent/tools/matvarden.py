@@ -2,7 +2,7 @@
 
     journalctl -u raawr-rostagent --since today --no-pager | python tools/matvarden.py [--json]
 
-Per room: sessions, time to first sound (THINKING -> SPEAKING) and reflex
+Per room: sessions, time from the end of speech to sound (`⏱ tider` lines, US-047; tool turns apart), time to first sound (THINKING -> SPEAKING) and reflex
 (THINKING -> a bana 0 hit) as P50/P95, connected minutes (WAKE -> back to IDLE),
 interruptions (SPEAKING -> LISTENING) and close reasons.
 
@@ -17,6 +17,7 @@ from collections import Counter, defaultdict
 from datetime import datetime
 
 LINE = re.compile(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d[,.]\d{3}) - \S+ - \w+ - (.*)")
+TIDER = re.compile(r"⏱ tider (\S+) ((?:\w+=\d+ ?)+)(utan_ljud)?")  # US-047 AC-1: ms after the end of speech
 KEDJA = re.compile(r"🧭 (\S+): (\w+) -> (\w+) \((\w+): (.*)\)$")
 
 
@@ -34,13 +35,19 @@ def pct(v, p):
 
 def mat(rader):
     rum = defaultdict(lambda: {"sessioner": 0, "forsta_ljud": [], "reflex": [], "minuter": 0.0,
-                               "avbrott": 0, "stangning": Counter()})
+                               "avbrott": 0, "stangning": Counter(), "efter_tal": [], "efter_tal_verktyg": []})
     vak, tank, senast_tank = {}, {}, None
     for rad in rader:
         m = LINE.match(rad.strip().split(" env[", 1)[-1].split("]: ", 1)[-1])
         if not m:
             continue
         t, text = tid(m.group(1)), m.group(2)
+        tm = TIDER.match(text)
+        if tm and not tm.group(3):  # a turn with sound; the steps are ms after the end of speech
+            steg = dict(x.split("=") for x in tm.group(2).split())
+            if "enhet" in steg:
+                rum[tm.group(1)]["efter_tal_verktyg" if "verktyg" in steg else "efter_tal"].append(int(steg["enhet"]) / 1000)
+            continue
         if text.startswith("bana0: hit "):  # the text after the prefix is never read
             if senast_tank and senast_tank in tank:
                 rum[senast_tank]["reflex"].append(t - tank[senast_tank])
@@ -68,6 +75,8 @@ def mat(rader):
     return {r: {"sessioner": d["sessioner"], "uppkopplade_minuter": round(d["minuter"], 1),
                 "forsta_ljud_s": {"p50": pct(d["forsta_ljud"], 50), "p95": pct(d["forsta_ljud"], 95), "n": len(d["forsta_ljud"])},
                 "reflex_s": {"p50": pct(d["reflex"], 50), "p95": pct(d["reflex"], 95), "n": len(d["reflex"])},
+                "efter_talets_slut_s": {"p50": pct(d["efter_tal"], 50), "p95": pct(d["efter_tal"], 95), "n": len(d["efter_tal"]),
+                                        "med_verktyg_p50": pct(d["efter_tal_verktyg"], 50), "med_verktyg_n": len(d["efter_tal_verktyg"])},
                 "avbrott": d["avbrott"], "stangningsorsaker": dict(d["stangning"])}
             for r, d in sorted(rum.items())}
 
@@ -81,4 +90,5 @@ if __name__ == "__main__":
             print(f"{r}: {d['sessioner']} sessioner, {d['uppkopplade_minuter']} min uppkopplad, "
                   f"första ljud P50/P95 {d['forsta_ljud_s']['p50']}/{d['forsta_ljud_s']['p95']} s (n={d['forsta_ljud_s']['n']}), "
                   f"reflex P50/P95 {d['reflex_s']['p50']}/{d['reflex_s']['p95']} s (n={d['reflex_s']['n']}), "
+                  f"efter talets slut (utan verktyg) P50/P95 {d['efter_talets_slut_s']['p50']}/{d['efter_talets_slut_s']['p95']} s (n={d['efter_talets_slut_s']['n']}), "
                   f"{d['avbrott']} avbrott, stängning: {d['stangningsorsaker']}")

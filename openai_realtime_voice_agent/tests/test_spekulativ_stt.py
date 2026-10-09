@@ -193,3 +193,20 @@ async def test_motorn_med_mindre_ljud_an_banan_ar_normalt_och_ger_bara_info(ha_s
         await asyncio.sleep(0.05)
     rader = [r for r in caplog.records if "the engine holds 0.00 s" in r.getMessage()]
     assert rader and all(r.levelno == logging.INFO for r in rader)
+
+
+@pytest.mark.asyncio
+async def test_turens_tider_fylls_av_motorn_och_bana_0(ha_svarar, monkeypatch):
+    """US-047 AC-1: the turn end, the speech-to-text and the Comms answer are marked on the
+    connection's TurnTider; the line itself is written when sound reaches the device."""
+    ha_svarar.append("Släckte i kontoret")
+    server, port, seen = await _wyoming(_transcript("släck kontoret"))
+    connection, service, google, said, idle = _gemini_koppling(
+        ("127.0.0.1", port), [None, "start", "preend", None, "end"])
+    async with server:
+        await _speak(connection, service, 5)
+        await service._turn_end_task
+        await asyncio.sleep(0.05)
+    t = service.tider.t
+    assert t is not None and {"talets_slut", "turslut", "stt", "comms"} <= set(t)
+    assert t["talets_slut"] < t["turslut"] <= t["stt"] <= t["comms"]

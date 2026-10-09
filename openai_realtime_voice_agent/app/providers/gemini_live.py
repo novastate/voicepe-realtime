@@ -24,7 +24,7 @@ from google.genai.types import (
     StartSensitivity,
     ThinkingConfig,
 )
-from pipecat.frames.frames import UserStartedSpeakingFrame, UserStoppedSpeakingFrame
+from pipecat.frames.frames import OutputAudioRawFrame, UserStartedSpeakingFrame, UserStoppedSpeakingFrame
 from pipecat.services.google.gemini_live.llm import (
     GeminiLiveLLMService,
     GeminiModalities,
@@ -366,6 +366,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             if event == "preend" and self.on_user_turn_pre_end is not None:
                 self.on_user_turn_pre_end()
             if event == "end":
+                self._tider_start()
                 await self.push_frame(UserStoppedSpeakingFrame())
                 self._decide_turn()
             return
@@ -391,6 +392,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             await self._send_pcm(frame, preroll)
         await super()._send_user_audio(frame)
         if event == "end":
+            self._tider_start()
             await self.push_frame(UserStoppedSpeakingFrame())
             await self._end_activity()
 
@@ -401,6 +403,18 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         logger.debug("🎙️ local VAD: silence → activityEnd")
         await self._send_activity(activity_end=ActivityEnd())
         self.arm_silence_ack()
+
+    tider = None  # the connection's TurnTider (app/turn_tider.py), set by the handler
+
+    def _tider_start(self) -> None:
+        if self.tider is not None and self._turns is not None:
+            self.tider.start(getattr(self._turns, "silence_s", 0.8))
+
+    async def push_frame(self, frame, *args, **kwargs):
+        """Tell the turn's timing line when the model's first audio leaves for the device."""
+        if self.tider is not None and isinstance(frame, OutputAudioRawFrame):
+            self.tider.mark("modell")
+        return await super().push_frame(frame, *args, **kwargs)
 
     def held_seconds(self) -> Optional[float]:
         """Seconds of mic audio held back for bana 0 (what the model would be given on a

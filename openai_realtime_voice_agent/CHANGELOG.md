@@ -2,6 +2,18 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.27 (fork)
+
+- **Tidsraden per tur (raawr US-047 AC-1).** En rad i journalen per tur, utan ord:
+  `⏱ tider kontoret turslut=812 stt=1002 comms=1150 verktyg=1900 modell=2310 enhet=2360`, i
+  millisekunder efter talets slut (turslutet minus den tystnad den lokala detektorn väntar på,
+  en uppskattning på några tiotals ms). Stegen som inte hände en tur utelämnas; raden skrivs när
+  första ljudet når enheten (`enhet`), en tur utan ljud skrivs vid nästa tur med `utan_ljud`.
+  `tools/matvarden.py` ger P50/P95 efter talets slut per rum, turer med verktyg för sig.
+  `enhet` märks också när bana 0:s egna klipp och kvittona går direkt till enheten
+  (`send_bytes_to`), så bana 0-turer får sin rad och inte `utan_ljud` (B:s granskning av #34).
+  Ingen ändring av vad agenten gör.
+
 ## 0.27.25 (fork)
 
 - **Experiment: lokalt hörd text till modellen (raawr US-032, Hemma ja 2026-10-09).** Live
