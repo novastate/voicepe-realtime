@@ -82,7 +82,7 @@ async def las_ramar(chunks: AsyncIterator[bytes]) -> AsyncIterator[Tuple[str, Di
 
 
 FEL_REPLIK = "Jag fick inget svar från huset just nu."
-TAK_REPLIK = "Det finns mer, fråga om du vill höra resten."
+TAK_REPLIK = "Det finns mer, men det här fick räcka."
 
 
 MAX_MENINGAR = 8  # one answer never talks on and on; the rest stays unsaid
@@ -162,12 +162,18 @@ class LiveMatare:
         self.turer0 = self.motor.turer_klara
 
     async def _skicka(self, text: str) -> bool:
-        await self.motor.mata_text(RAMA.format(text=text))
+        forsta = self.skickade == 0
+        # Core's text cannot close the quote: no triple quote survives inside it (US-026 is what keeps
+        # the door locked, not this frame)
+        await self.motor.mata_text(RAMA.format(text=text.replace('"' * 3, "'" * 3)))
         self.skickade += 1
-        ljud = await self.motor.vanta_forsta_ljud(FORSTA_LJUD_TIMEOUT_S)
-        if ljud:
-            self.berakat_slut = self.klocka() + len(text) / CHARS_PER_S
-        return ljud
+        # Only the first sentence waits for sound: later ones queue behind the one still being read,
+        # so the previous sentence's sound says nothing about this one.
+        if forsta and not await self.motor.vanta_forsta_ljud(FORSTA_LJUD_TIMEOUT_S):
+            return False
+        # Cumulative end: a queued sentence starts when the one before it ends, not when it was sent.
+        self.berakat_slut = max(self.klocka(), self.berakat_slut or 0.0) + len(text) / CHARS_PER_S
+        return True
 
     async def _vanta_till_forskottet(self) -> None:
         if self.berakat_slut is not None:
@@ -196,7 +202,7 @@ class LiveMatare:
             await self.sov(0.1)
         klart = self.motor.turer_klara - self.turer0
         return {"live_s": round(self.motor.ljud_s - self.ljud0, 1), "matade": self.skickade, "turer_klara": klart,
-                "klippt": klart < self.skickade, "block": self.block}
+                "mojligen_klippt": klart < self.skickade, "block": self.block}
 
 
 def get_fraga_core_definition() -> dict:

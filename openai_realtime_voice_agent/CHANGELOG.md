@@ -10,7 +10,9 @@ All notable changes to this add-on. Newest first.
   inramad som ett citat att läsa upp, aldrig som en order (Core-text kan citera webben). Nästa
   mening går in `CORE_STROM_FORSKOTT_S` (1,5 s, en gissning) före slutet på den förra, räknat på 12
   tecken/s; ger en mening inget ljud inom 8 s går resten som ett block. Loggraden `core-ström`
-  har nu `live_s` (sekunder tal per svar, för dygnstaket), `matade`, `turer_klara`, `klippt`.
+  har nu `live_s` (sekunder tal per svar, för dygnstaket), `matade`, `turer_klara`, `mojligen_klippt`.
+  Försprånget är kumulativt (B på #38): varje mening går in 1,5 s före den förras verkliga slut, och
+  bara första meningen väntar på ljud. `"""` i Cores text byts ut så citatet inte kan stängas.
   Borta: TTS-vägen (`_say_mening`, 6,5 s-bromsen, `levande`/`cache` i `_ack_clip`/`gemini_tts`/`xai_tts`,
   `READ_ALOUD_LEVANDE`) och #37:s nivåkod (`niva_db`, `normalisera`), samt `tools/rostjamforelse.py`.
   Nytt: `tools/live_strom_prov.py` (mätkörning mot Live: seriell/tidsatt/kö/hel/försprång).
