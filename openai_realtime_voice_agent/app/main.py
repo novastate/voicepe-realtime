@@ -1359,13 +1359,13 @@ class Application:
         except Exception as e:
             logger.debug(f"HA tools still unavailable for {connection.device_id}: {e}")
             return
-        await self._ladda_ha_verktyg(service, schema)
+        await self._ladda_ha_verktyg(service, schema, connection.device_id)
         self._markera_ha_verktyg(connection, schema)
         logger.info(
             f"✅ HA tools on wake for {connection.device_id}: {self._bast_ha_verktyg}"
         )
 
-    async def _ladda_ha_verktyg(self, service, schema) -> None:
+    async def _ladda_ha_verktyg(self, service, schema, device_id: str = "") -> None:
         """Add HA's tools to the service object. The next connect sends them."""
         from app.early_ack import with_ack_hint
         from app.providers.gemini_live import to_gemini_tools
@@ -1390,7 +1390,7 @@ class Application:
                 slot["function_declarations"].extend(
                     d for d in decls if d.get("name") not in have
                 )
-        await self._register_ha_handlers(service, schema, connection.device_id)
+        await self._register_ha_handlers(service, schema, device_id)
 
     def _preseed_context(self, service) -> None:
         """Stop pipecat speaking spontaneously on a brand-new session.
