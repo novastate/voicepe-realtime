@@ -86,44 +86,6 @@ GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts"
 CLIP_RATE = 24000  # what the device lane plays: 24 kHz mono PCM16 (EnrollmentConductor)
 CACHE_DIR = "/data/enroll_prompts"
 READ_ALOUD = "Läs upp på svenska, lugnt och avslappnat: "
-# For a streamed Core answer: closer to the Live voice (measured 2026-10-09, tools/rostjamforelse.py)
-READ_ALOUD_LEVANDE = ("Läs upp följande på svenska med levande, naturlig intonation och varierad betoning, "
-                      "som en vän som pratar avslappnat vid köksbordet: ")
-
-
-STROM_MAL_DB = -21.1  # the Live voice's mean level over 8 sentences (tools/rostjamforelse.py, 2026-10-09)
-
-
-def niva_db(pcm: bytes) -> float:
-    """Mean level (dB) of the active 40 ms Hann-windowed frames of 24 kHz PCM16: exactly the measure
-    tools/rostjamforelse.py reports as `ljudstyrka_db` (the Live target below was measured with it)."""
-    import numpy as np
-
-    x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
-    ram = RAW_RATE * 40 // 1000
-    if len(x) <= ram:  # shorter than one frame: nothing to measure, so normalisera leaves it alone
-        return STROM_MAL_DB
-    fonster = np.hanning(ram)
-    tak = np.sqrt(np.mean(x ** 2) + 1e-12)
-    db = []
-    for i in range(0, len(x) - ram, RAW_RATE // 100):
-        rms = np.sqrt(np.mean((x[i:i + ram] * fonster) ** 2) + 1e-12)
-        if rms >= 0.3 * tak:  # silence between words does not count
-            db.append(20 * np.log10(rms))
-    return float(np.mean(db)) if db else -60.0
-
-
-def normalisera(pcm: bytes, mal_db: float = STROM_MAL_DB, max_db: float = 6.0) -> bytes:
-    """`pcm` brought to `mal_db`, by at most `max_db` either way, clipped at full scale. A fixed gain was
-    wrong: a rendered sentence varies by +-2 dB from one to the next (measured), so each is levelled."""
-    import numpy as np
-
-    steg = max(-max_db, min(max_db, mal_db - niva_db(pcm)))
-    x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) * (10 ** (steg / 20))
-    return np.clip(x, -32768, 32767).astype(np.int16).tobytes()
-
-
-RAW_RATE = 24000
 
 
 def to_clip_rate(pcm: bytes, mime: str) -> bytes:
@@ -143,10 +105,8 @@ def to_clip_rate(pcm: bytes, mime: str) -> bytes:
     return out.astype(np.int16).tobytes()
 
 
-async def gemini_tts(text: str, api_key: str, voice: str, model: str = "", cache: bool = True,
-                     ram: str = "") -> bytes:
-    """`text` in a Gemini prebuilt voice, as 24 kHz PCM16, cached on disk (`cache=False`: never
-    read or written, for what is private: a streamed Core answer)."""
+async def gemini_tts(text: str, api_key: str, voice: str, model: str = "") -> bytes:
+    """`text` in a Gemini prebuilt voice, as 24 kHz PCM16, cached on disk."""
     import hashlib
 
     from google import genai
@@ -156,7 +116,7 @@ async def gemini_tts(text: str, api_key: str, voice: str, model: str = "", cache
     path = os.path.join(
         CACHE_DIR, "gemini_" + hashlib.md5(f"{model}:{voice}:{text}".encode()).hexdigest() + ".pcm"
     )
-    if cache and os.path.exists(path) and os.path.getsize(path) > 0:
+    if os.path.exists(path) and os.path.getsize(path) > 0:
         with open(path, "rb") as f:
             return f.read()
     client = genai.Client(api_key=api_key)
@@ -174,7 +134,7 @@ async def gemini_tts(text: str, api_key: str, voice: str, model: str = "", cache
     # read aloud it is spoken, and the frame is not (checked with STT).
     for _ in range(2):
         response = await client.aio.models.generate_content(
-            model=model, contents=(ram or READ_ALOUD) + text, config=config
+            model=model, contents=READ_ALOUD + text, config=config
         )
         content = response.candidates[0].content if response.candidates else None
         blob = content.parts[0].inline_data if content and content.parts else None
@@ -183,8 +143,6 @@ async def gemini_tts(text: str, api_key: str, voice: str, model: str = "", cache
             break
     if not pcm:
         raise ValueError("Gemini TTS returned no audio")
-    if not cache:
-        return pcm
     try:
         os.makedirs(CACHE_DIR, exist_ok=True)
         with open(path, "wb") as f:
@@ -197,7 +155,7 @@ async def gemini_tts(text: str, api_key: str, voice: str, model: str = "", cache
 XAI_TTS_URL = "https://api.x.ai/v1/tts"
 
 
-async def xai_tts(text: str, api_key: str, voice: str, cache: bool = True) -> bytes:
+async def xai_tts(text: str, api_key: str, voice: str) -> bytes:
     """`text` in an xAI voice, as 24 kHz PCM16, cached on disk (0.25.0).
 
     The ack on the xai engine comes in the session's own voice, like Charon
@@ -210,7 +168,7 @@ async def xai_tts(text: str, api_key: str, voice: str, cache: bool = True) -> by
 
     text = os.environ.get("XAI_ACK_PREFIX", "") + text
     path = os.path.join(CACHE_DIR, "xai_" + hashlib.md5(f"{voice}:{text}".encode()).hexdigest() + ".pcm")
-    if cache and os.path.exists(path) and os.path.getsize(path) > 0:
+    if os.path.exists(path) and os.path.getsize(path) > 0:
         with open(path, "rb") as f:
             return f.read()
     async with httpx.AsyncClient(timeout=15) as client:
@@ -223,8 +181,6 @@ async def xai_tts(text: str, api_key: str, voice: str, cache: bool = True) -> by
     r.raise_for_status()
     if not r.content:
         raise ValueError("xAI TTS returned no audio")
-    if not cache:
-        return r.content
     try:
         os.makedirs(CACHE_DIR, exist_ok=True)
         with open(path, "wb") as f:

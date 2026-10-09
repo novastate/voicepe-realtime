@@ -2,6 +2,19 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.31 (fork)
+
+- **Core-svar läses av Live själv, inte av en annan röst (raawr US-047 AC-4). Flaggan CORE_STREAM_TALA är fortfarande av.**
+  Henrik 2026-10-09: TTS-rösten för Core-svar är nej ("låter som en annan röst"). `fraga_core`
+  matar nu varje mening som text in i den anslutna Live-sessionen (`LiveMatare`, `mata_text`),
+  inramad som ett citat att läsa upp, aldrig som en order (Core-text kan citera webben). Nästa
+  mening går in `CORE_STROM_FORSKOTT_S` (1,5 s, en gissning) före slutet på den förra, räknat på 12
+  tecken/s; ger en mening inget ljud inom 8 s går resten som ett block. Loggraden `core-ström`
+  har nu `live_s` (sekunder tal per svar, för dygnstaket), `matade`, `turer_klara`, `klippt`.
+  Borta: TTS-vägen (`_say_mening`, 6,5 s-bromsen, `levande`/`cache` i `_ack_clip`/`gemini_tts`/`xai_tts`,
+  `READ_ALOUD_LEVANDE`) och #37:s nivåkod (`niva_db`, `normalisera`), samt `tools/rostjamforelse.py`.
+  Nytt: `tools/live_strom_prov.py` (mätkörning mot Live: seriell/tidsatt/kö/hel/försprång).
+
 ## 0.27.30 (fork)
 
 - **Nivån på strömmade Core-meningar jämnas per mening, inte med fast dämpning (raawr US-047 AC-4).**
