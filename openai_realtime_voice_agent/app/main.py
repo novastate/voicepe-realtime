@@ -10,6 +10,7 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
 from app import ha_api, tool_selection
+from app.klockan import klipp_paa as klockan_klipp_paa
 from app.mcp_service import HomeAssistantMCPService
 from app.phase_emitter import TurnLiveness
 from app.idag import Idag
@@ -1247,7 +1248,8 @@ class Application:
                     logger.warning(f"⚠️ early ack clip not cached: {e!r}")
                     break  # this engine; the others and the clock still warm
         # Side by side: each engine has its own TTS quota (G's review of PR #18).
-        await asyncio.gather(*(self._warm_klockan(p) for p in engines))
+        if klockan_klipp_paa():  # off since 2026-10-09 (Henrik): no clock clips are rendered
+            await asyncio.gather(*(self._warm_klockan(p) for p in engines))
 
     async def _warm_klockan(self, provider, takt_s: float = KLOCK_TAKT_S) -> None:
         """The clock's clips in the engine's own voice (US-032 AC-7), soonest first.

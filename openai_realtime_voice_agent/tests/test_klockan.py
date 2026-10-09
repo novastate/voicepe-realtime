@@ -199,9 +199,11 @@ async def test_uppvarmningen_haller_googles_takt(monkeypatch, fel, pa_disk, per_
 
 
 @pytest.mark.asyncio
-async def test_klockan_varms_for_gemini_och_xai_aldrig_openai():
+async def test_klockan_varms_for_gemini_och_xai_aldrig_openai(monkeypatch):
     """OpenAI's key is Live-only: TTS answers 403 (owner 2026-10-07), so it is no clip source."""
     import app.main as main
+
+    monkeypatch.setenv("KLOCKA_KLIPP", "1")
 
     klockor = []
 
@@ -349,3 +351,35 @@ async def test_en_variant_som_saknas_ger_en_annan_aldrig_tystnad():
 
     with pytest.raises(RuntimeError):
         await bana0.saga(ingen, bana0.OK_VARIANTER)
+
+
+@pytest.mark.asyncio
+async def test_klocksvaret_ur_klipp_ar_av_som_standard_och_inga_klipp_renderas(monkeypatch):
+    """Henrik 2026-10-09: fast but static, not Björn. Off: no clip is warmed, and the
+    turn gets no clock handler (a clock question goes to the model). KLOCKA_KLIPP=1 = on."""
+    import app.main as main
+
+    monkeypatch.delenv("KLOCKA_KLIPP", raising=False)
+    assert klockan.klipp_paa() is False
+    monkeypatch.setenv("KLOCKA_KLIPP", "1")
+    assert klockan.klipp_paa() is True
+    monkeypatch.delenv("KLOCKA_KLIPP")
+    klockor = []
+
+    class Agent:
+        gemini_api_key, openai_api_key, xai_api_key = "g", "", "x"
+
+        async def _ack_clip(self, provider, text, fallback=True):
+            return b"pcm"
+
+        async def _warm_klockan(self, provider):
+            klockor.append(provider)
+
+    await main.Application._warm_early_acks(Agent())
+    assert klockor == []
+
+
+def test_websocket_handler_ger_inget_klockhandtag_nar_flaggan_ar_av():
+    import pathlib
+    kalla = (pathlib.Path(__file__).parent.parent / "app" / "websocket_handler.py").read_text()
+    assert "klockan=_klockan if klockan.klipp_paa() else None" in kalla

@@ -366,6 +366,7 @@ async def test_speech_stopped_med_traff_ber_modellen_bekrafta_utan_verktyg(comms
 
 @pytest.mark.asyncio
 async def test_openai_klockan_besvaras_lokalt_och_modellen_svarar_inte_igen(comms, monkeypatch):
+    monkeypatch.setenv("KLOCKA_KLIPP", "1")  # off by default since 2026-10-09; these test the code behind the flag
     """US-032 AC-7 on OpenAI: the clips speak, comms is not asked, no response is
     created, and the model is told the question is answered (no double answer)."""
     from app import klockan
@@ -539,6 +540,7 @@ async def test_gemini_traff_google_hor_aldrig_ordern(ha_svarar):
 
 @pytest.mark.asyncio
 async def test_gemini_klockan_google_hor_aldrig_fragan(ha_svarar, monkeypatch):
+    monkeypatch.setenv("KLOCKA_KLIPP", "1")  # off by default since 2026-10-09; these test the code behind the flag
     """US-032 AC-7: "vad är klockan" on Gemini is said from the cached clips;
     neither comms nor Google hears it, so it works offline."""
     from app import klockan
