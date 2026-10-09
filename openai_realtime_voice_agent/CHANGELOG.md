@@ -2,6 +2,15 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.24 (fork)
+
+- **En fråga över Björns eget svar tappar inte början (raawr US-032, live 2026-10-09 12:09).**
+  Bana 0:s ljud samlades inte medan fasen sade `replying`, så en väckning eller ett tal över svaret
+  gav en tur där de första 0,8 s saknades (varningen 'a question may have been cut', 5,63 mot
+  6,12 s). Nu samlas turen från väckningen eller från att lokala VAD säger tal, och förrullen
+  hämtas ur en löpande 0,8 s-buffert. Följden: bana 0 och motorn hör samma början. Björns eget
+  svar samlas fortfarande inte i turen innan tal börjar.
+
 ## 0.27.23 (fork)
 
 - **Förinspelade klocksvar är av (raawr US-032, PO-beslut Henrik 2026-10-09).** Klippen gav snabbt

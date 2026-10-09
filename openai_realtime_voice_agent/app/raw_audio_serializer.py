@@ -75,6 +75,12 @@ class RawAudioSerializer(FrameSerializer):
         # (16 kHz PCM16 mono), for the local STT. Reset on wake, taken at end
         # of turn.
         self.turn_pcm = bytearray()
+        # The last TURN_PCM_PREROLL of mic audio whatever the phase, and whether this
+        # turn is being collected even though the phase still says "replying": a wake
+        # word or speech during Björn's reply starts a turn before the phase moves
+        # (live 2026-10-09 12:09: 0.8 s of a question was missing from bana 0's audio).
+        self._ring = bytearray()
+        self._samla_tur = False
         # True while the assistant is speaking (set by build_pipeline from the
         # phase): its own voice must never become a turn's audio.
         self.is_replying = lambda: False
@@ -270,6 +276,7 @@ class RawAudioSerializer(FrameSerializer):
                 if self._speaker_probe is not None:
                     self._speaker_probe.start_capture()
                 self.turn_pcm.clear()
+                self._samla_tur = True  # the wake word is a turn start, whatever the phase says
                 if self._on_wake is not None:
                     try:
                         await self._on_wake()
@@ -307,7 +314,9 @@ class RawAudioSerializer(FrameSerializer):
         # wake armed it; classification runs in a thread, never blocks here).
         if self._speaker_probe is not None:
             self._speaker_probe.feed(message)
-        if not self.is_replying():
+        self._ring += message
+        del self._ring[:-TURN_PCM_PREROLL]
+        if self._samla_tur or not self.is_replying():
             self.turn_pcm += message
         if len(self.turn_pcm) > TURN_PCM_CAP:
             del self.turn_pcm[:-TURN_PCM_CAP]  # keep the latest 30 s
@@ -340,6 +349,9 @@ class RawAudioSerializer(FrameSerializer):
         A follow-up turn has no wake, so without this the turn would carry
         everything since the last one -- silence and the reply's echo.
         """
+        if self.is_replying() and not self._samla_tur:  # speech over his own reply: the pre-roll was not collected
+            self.turn_pcm = bytearray(self._ring)
+        self._samla_tur = True
         del self.turn_pcm[:-TURN_PCM_PREROLL]
 
     def peek_turn_audio(self) -> bytes:
@@ -350,6 +362,7 @@ class RawAudioSerializer(FrameSerializer):
         """The turn's mic audio so far, and start a new one."""
         pcm = bytes(self.turn_pcm)
         self.turn_pcm.clear()
+        self._samla_tur = False
         return pcm
 
     async def serialize(self, frame: Frame) -> bytes:
