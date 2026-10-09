@@ -98,3 +98,51 @@ def test_rank_leaves_out_what_does_not_match():
     from app.play_media_tool import _rank
     ordered = _rank({"radio": [P3_TUNEIN, BABY_STATION]}, "P3", "radio")
     assert [item["name"] for item in ordered] == ["P3"]
+
+
+# One add-on process serves several devices. With no room named, music goes to the room of the device that
+# asked -- not to the process-wide INSTANCE_NAME (kitchen asked 2026-10-09 21:17 and the office played).
+import httpx
+import pytest
+from types import SimpleNamespace
+
+from app import play_media_tool
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("device,speaker", [("koket", "media_player.kok"), ("kontoret", "media_player.kontor"),
+                                            ("10.0.3.9", "media_player.kontor"), ("unknown", "media_player.kontor")])
+async def test_no_room_named_plays_on_the_asking_device(monkeypatch, device, speaker):
+    monkeypatch.setenv("HA_API_URL", "http://comms/")
+    monkeypatch.setenv("COMMS_NYCKEL", "k")
+    monkeypatch.setenv("INSTANCE_NAME", "kontor")  # the process-wide value that used to win
+    monkeypatch.setattr(play_media_tool, "_config_entry_id", None, raising=False)
+    played = []
+
+    def handler(request):
+        path = request.url.path
+        if path.endswith("/states"):
+            return httpx.Response(200, json=[
+                {"entity_id": e, "state": "idle",
+                 "attributes": {"friendly_name": n, "mass_player_type": "player"}}
+                for e, n in (("media_player.kok", "Kök"), ("media_player.kontor", "Kontor"))])
+        if path.endswith("/config_entries/entry"):
+            return httpx.Response(200, json=[{"entry_id": "ma1"}])
+        if path.endswith("/music_assistant/search"):
+            return httpx.Response(200, json={"service_response": {
+                "radio": [{"name": "Sveriges Radio P3", "uri": "library://radio/4", "favorite": True}]}})
+        if path.endswith("/music_assistant/play_media"):
+            played.append(request.read().decode())
+        return httpx.Response(200, json=[])
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient",
+                        lambda *a, **k: real(*a, **{**k, "transport": httpx.MockTransport(handler)}))
+    said = []
+
+    async def result_callback(text):
+        said.append(text)
+
+    params = SimpleNamespace(arguments={"query": "P3", "media_type": "radio"}, result_callback=result_callback)
+    await play_media_tool.create_play_media_tool_handler(device)(params)
+    assert len(played) == 1 and speaker in played[0], (played, said)

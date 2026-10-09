@@ -1025,7 +1025,7 @@ class Application:
             service.register_function("search_home", create_search_home_tool_handler())
             logger.info("✅ Registered search_home tool handler")
 
-            service.register_function("play_media", create_play_media_tool_handler())
+            service.register_function("play_media", create_play_media_tool_handler(connection.device_id))
             logger.info("✅ Registered play_media tool handler")
             
             # Register voice enrollment tool handler (fork). The speaker-name
