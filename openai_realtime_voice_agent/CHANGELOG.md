@@ -2,6 +2,14 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.30 (fork)
+
+- **Nivån på strömmade Core-meningar jämnas per mening, inte med fast dämpning (raawr US-047 AC-4).**
+  0.27.29 sänkte alla 2,3 dB efter fem meningar; tre till visade att en renderad mening varierar
+  ±2 dB från nästa, så det blev 2,3 dB för tyst (-23,3 mot Live -21,0). Nu mäts varje mening
+  (`early_ack.niva_db`) och sätts på Live-rösten medelnivå (`STROM_MAL_DB` -21,1 dB, högst ±6 dB,
+  klipper inte). `daempa` är borta.
+
 ## 0.27.29 (fork)
 
 - **Nivån på strömmade Core-meningar (raawr US-047 AC-4).** TTS mättes 2,3 dB högre än Live-rösten
