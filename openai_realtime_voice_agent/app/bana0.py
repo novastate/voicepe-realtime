@@ -57,28 +57,41 @@ def ping_paa() -> bool:
     return os.environ.get("BANA0_PING", "0") == "1"
 
 
+def _rensa(text: str) -> str:
+    """Words that go into the model's line: no quotes, no control characters or line breaks (G on #42: a
+    line break in the heard words could start a new [huset] line)."""
+    return re.sub(r"[\x00-\x1f\x7f\u2028\u2029]+", " ", (text or "").replace('"', "'")).strip()
+
+
 def ping_text(hort: str, svar: str) -> str:
     """The line Live gets before the audio. What bana 0 HEARD is in it (not only what it did), so Live
     can tell when it hears something else; measured 2026-10-09 (tools/live_ping_prov.py): with the line
     Live does not repeat the tool call, and a misheard order is corrected from the audio."""
-    hort = (hort or "").replace('"', "'")[:200]
-    svar = (svar or "").replace('"', "'")[:120]
+    hort = _rensa(hort)[:200]
+    svar = _rensa(svar)[:120]
     return (f"[huset] Snabbspåret hörde \"{hort}\" och gjorde det redan (Home Assistant svarade \"{svar}\"). "
             "Gör inte om det med verktygen. Svara personligt i en mening. "
             "Hör du i ljudet något annat än det snabbspåret hörde, rätta det.")
 
 
+_INTE_LAMPA = re.compile(r"timer|nedräkning|musik|spela|volym|radio|väder|påminn|alarm|larm|termostat|temperatur", re.I)
 _AV = re.compile(r"\b(släck\w*|stäng(?:er)? av|slå av|sätt av|stäng)\b|\bav\b", re.I)
 _PA = re.compile(r"\b(tänd\w*|slå på|sätt på|starta)\b|\bpå\b", re.I)
 
 
 def verb_ur(text: str) -> Optional[str]:
-    """'Off' or 'On' for a plain light order, else None. Off wins ('släck' before 'på')."""
+    """'Off' or 'On' for a plain light order, else None. Off wins ('släck' before 'på'). Anything that
+    names a timer, music or the like is not a light order (the parallel track is for lights only)."""
+    if _INTE_LAMPA.search(text or ""):
+        return None
     if _AV.search(text or ""):
         return "Off"
     if _PA.search(text or ""):
         return "On"
     return None
+
+
+_GENERISKA = {"lampan", "lamporna", "lampor", "ljuset", "ljusen", "belysningen", "belysning", "taket", "allt", "alla"}
 
 
 class Atgardslogg:
@@ -101,31 +114,50 @@ class Atgardslogg:
 
     def redan(self, verktyg: str, argument: dict) -> bool:
         verb = "Off" if verktyg.endswith("TurnOff") else "On" if verktyg.endswith("TurnOn") else None
-        plats = str((argument or {}).get("area") or (argument or {}).get("name") or "").lower().strip()
-        if verb is None or len(plats) < 3:
+        argument = argument or {}
+        # Every word of area/name/floor counts ("lampan i kontoret" is the place "kontoret"); a word that
+        # only names the kind of thing says nothing about the place.
+        ord_ = [w for key in ("area", "name", "floor") for w in str(argument.get(key) or "").lower().split()
+                if len(w) >= 4 and w not in _GENERISKA]
+        if verb is None or not ord_:
             return False
         nu = self.klocka()
         self._poster = [p for p in self._poster if nu - p[2] <= self.TTL_S]
-        return any(v == verb and plats[:5] in h for v, h, _ in self._poster)
+        return any(v == verb and any(w[:5] in h for w in ord_) for v, h, _ in self._poster)
 
 
 def skydda_verktyg(service, logg: "Atgardslogg") -> int:
     """Wrap the service's HassTurnOn/Off handlers with the log's check. Returns how many were wrapped."""
-    antal = 0
-    for namn, post in list(getattr(service, "_functions", {}).items()):
-        if not isinstance(namn, str) or not namn.endswith(("HassTurnOn", "HassTurnOff")):
-            continue
-        orig = post.handler
+    def vakta(namn, orig):
+        if getattr(orig, "_bana0_vaktad", False):
+            return orig
 
-        async def vaktad(params, _orig=orig, _namn=namn):
-            if logg.redan(_namn, params.arguments or {}):
-                logger.info(f"⚡ bana0: {_namn} {params.arguments} skipped; the fast track did it a moment ago")
+        async def vaktad(params):
+            if logg.redan(namn, params.arguments or {}):
+                logger.info(f"⚡ bana0: {namn} {params.arguments} skipped; the fast track did it a moment ago")
                 await params.result_callback({"result": "Redan gjort av huset för ett ögonblick sedan. Gör inget mer."})
                 return
-            await _orig(params)
+            await orig(params)
 
-        post.handler = vaktad
-        antal += 1
+        vaktad._bana0_vaktad = True
+        return vaktad
+
+    antal = 0
+    for namn, post in list(getattr(service, "_functions", {}).items()):
+        if isinstance(namn, str) and namn.endswith(("HassTurnOn", "HassTurnOff")):
+            post.handler = vakta(namn, post.handler)
+            antal += 1
+
+    # The tools are fetched again at the wake (main._register_ha_handlers) and replace the handlers: the
+    # guard has to follow every later registration too (G on #42, fynd 7).
+    orig_register = service.register_function
+
+    def register_function(function_name, handler, *args, **kwargs):
+        if isinstance(function_name, str) and function_name.endswith(("HassTurnOn", "HassTurnOff")):
+            handler = vakta(function_name, handler)
+        return orig_register(function_name, handler, *args, **kwargs)
+
+    service.register_function = register_function
     return antal
 
 

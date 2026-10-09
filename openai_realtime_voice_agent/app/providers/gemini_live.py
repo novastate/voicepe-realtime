@@ -509,6 +509,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         if not getattr(self, "_held", None):
             return
         if not await self._vaken_for_tur():
+            await self.drop_turn()  # the audio is lost either way: do not let the miss path send it without the line
             return
         await self._send_activity(text=ping)
         await self.answer_turn()
