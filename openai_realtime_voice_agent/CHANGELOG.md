@@ -2,6 +2,14 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.36 (fork)
+
+- **Mätraden för personligt svar efter en bana 0-träff (raawr US-047, BANA0_PING).** `tools/matvarden.py` skriver per rum
+  `personligt svar P50/P95 … (n=…)` (tider-raden har `modell=`) och `kort svar` (bara `enhet=`, det inbyggda "Klart.") för turer
+  där en `bana0: hit`-rad kom efter rummets förra tider-rad; `--json` har `traff_personligt` och `traff_kort`. Inga ord ur
+  samtalet läses. Byggt av G (Grok), granskat och körts av C: på kärnans journal efter provet ger raden 2863/2889 ms (n=2),
+  samma som provets egna värden. Ingen ändring av agenten.
+
 ## 0.27.35 (fork)
 
 - **Parallellt spår: snabbspåret och Live lyssnar båda, bakom BANA0_PING (av) (raawr US-047, Henriks idé).** Vid en träff i
