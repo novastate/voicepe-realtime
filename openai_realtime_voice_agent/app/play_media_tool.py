@@ -258,14 +258,17 @@ async def _config_entry(client: httpx.AsyncClient) -> Optional[str]:
     return None
 
 
-def create_play_media_tool_handler() -> Callable[["FunctionCallParams"], Awaitable[None]]:
+def create_play_media_tool_handler(
+    device_id: str = "",
+) -> Callable[["FunctionCallParams"], Awaitable[None]]:
     """Create the play_media handler.
 
-    With no player named, playback goes to the room this add-on instance is in
-    (the INSTANCE_NAME option) -- "put on P3" in the office must not start the
-    kitchen.
+    With no player named, playback goes to the room of the device that asked
+    (its device id, "koket"/"kontoret") -- "put on P3" in the kitchen must not
+    start the office. One process serves several devices, so the process-wide
+    INSTANCE_NAME option is only the fallback when no device is given.
     """
-    default_player = os.environ.get("INSTANCE_NAME", "").strip()
+    default_player = (device_id or "").strip() or os.environ.get("INSTANCE_NAME", "").strip()
 
     async def play_media_tool_handler(params: "FunctionCallParams") -> None:
         args = params.arguments or {}
