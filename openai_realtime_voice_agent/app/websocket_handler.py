@@ -23,6 +23,7 @@ from pipecat.services.openai.realtime import events as openai_rt_events
 from app.device_registry import DeviceConnection, DeviceRegistry, device_id_from_websocket
 from app.multi_client_transport import MixedFastAPIWebsocketTransport
 from app.providers import (
+    GEMINI,
     OPENAI,
     bana0_hit,
     bana0_miss,
@@ -1706,7 +1707,8 @@ class WebSocketHandler:
                 asked = time.monotonic()
 
                 # Gemini never hears a hit, so no model confirmation is coming.
-                vanta = OK_VANTA_S if supports_client_events(provider) else 0.0
+                # With BANA0_PING the model speaks after a hit too: give it time before the cached "Klart."
+                vanta = OK_VANTA_S if (supports_client_events(provider) or atgardslogg is not None) else 0.0
                 task = asyncio.get_running_loop().create_task(bana0.vakta_bekraftelse(
                     vanta_s=vanta, claim=lambda: bana0.ingen_bekraftelse_an(liveness, asked),
                     say_ok=lambda: bana0.saga(_say, bana0.OK_VARIANTER),
@@ -1788,6 +1790,21 @@ class WebSocketHandler:
             serializer.tider = tider
             openai_service.tider = tider
 
+            # The parallel track (BANA0_PING, Gemini only): a hit also gives the model the audio and a line
+            # about what was done; the log stops it from doing the same tool call again.
+            atgardslogg = None
+            if provider == GEMINI and bana0.ping_paa() and hasattr(openai_service, "ping_and_answer"):
+                atgardslogg = bana0.Atgardslogg()
+                skyddade = bana0.skydda_verktyg(openai_service, atgardslogg)
+                logger.info(f"⚡ bana0: parallel track on, {skyddade} light tool(s) guarded against repeats")
+
+            async def _ping(hort, svar):
+                if bana0.verb_ur(hort) is None:  # not a plain light order: the model is only told, as before
+                    await bana0_hit(provider, openai_service, bana0.gjort(hort, svar))
+                    return
+                atgardslogg.skriv(hort, svar)
+                await openai_service.ping_and_answer(bana0.ping_text(hort, svar))
+
             async def _on_user_turn_end():
                 pcm = serializer.take_turn_audio()
                 motorns = getattr(openai_service, "held_seconds", lambda: None)()
@@ -1808,6 +1825,7 @@ class WebSocketHandler:
                     efter_traff=_efter_traff,
                     skapa_svar=lambda: bana0_miss(provider, openai_service),
                     skapa_svar_med_text=(lambda t: bana0_miss(provider, openai_service, t)) if bana0.text_till_modell_paa() else None,
+                    ping=_ping if atgardslogg is not None else None,
                     efter_miss=_efter_miss,
                     klockan=_klockan if klockan.klipp_paa() else None,
                     tider=tider,
