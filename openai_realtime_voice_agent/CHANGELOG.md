@@ -13,7 +13,9 @@ All notable changes to this add-on. Newest first.
   (`tools/rostjamforelse.py`) ligger tonhöjd, ljushet och längd då närmare. Meningarna sparas aldrig på disk (nytt
   `cache=False` i TTS-vägen): ett Core-svar kan vara privat. Vägen är Comms `POST <rum>/fraga` (US-050, spår A: rummets egen nyckel,
   `Accept: text/event-stream`, kropp `{"text": …}` högst 2000 tecken); adressen härleds ur `HA_API_URL`,
-  `CORE_STROM_URL` åsidosätter. Köket har ingen egen nyckel än och är utanför. Modellen hör inte
+  `CORE_STROM_URL` åsidosätter. Köket har ingen egen nyckel än och är utanför. Ett svar talas högst 8 meningar, en i taget, Geminis TTS-spärr (6,5 s mellan
+  renderingar) hålls, och ett svar stoppas när han börjar tala eller länken försvinner. Cores `done`
+  bär hela texten: den talas bara om inget annat sagts. Modellen hör inte
   det som talas (det går vid sidan av dess tur).
 
 ## 0.27.27 (fork)

@@ -10,6 +10,7 @@ own key, `Accept: text/event-stream`, body {"text": …}. CORE_STROM_URL overrid
 The model does not hear what is spoken (it is out of band): a follow-up that refers to it works
 only through what the owner remembers. That is the price of speaking before the answer is done.
 """
+import asyncio
 import json
 import logging
 import os
@@ -80,14 +81,20 @@ async def las_ramar(chunks: AsyncIterator[bytes]) -> AsyncIterator[Tuple[str, Di
 FEL_REPLIK = "Jag fick inget svar från huset just nu."
 
 
+MAX_MENINGAR = 8  # one answer never talks on and on; the rest stays unsaid
+
+
 async def tala_strom(chunks: AsyncIterator[bytes], say: Callable[[str], Awaitable[None]],
-                     klocka: Callable[[], float] = time.monotonic) -> Dict[str, Any]:
+                     klocka: Callable[[], float] = time.monotonic, max_meningar: int = MAX_MENINGAR) -> Dict[str, Any]:
     """Speak the stream's sentences with `say`. Returns the timing of the run (no words)."""
     t0 = klocka()
     delare = Meningsdelare()
     ut: Dict[str, Any] = {"meningar": 0, "forsta_token_s": None, "forsta_mening_s": None, "slut": None}
 
     async def tala(text: str) -> None:
+        if ut["meningar"] >= max_meningar:
+            ut["tak"] = True
+            return
         if ut["forsta_mening_s"] is None:
             ut["forsta_mening_s"] = round(klocka() - t0, 3)
         ut["meningar"] += 1
@@ -101,14 +108,13 @@ async def tala_strom(chunks: AsyncIterator[bytes], say: Callable[[str], Awaitabl
                 await tala(m)
         elif event == "done":
             resp = d.get("response") or {}
-            if resp.get("type") == "deferred":  # an agent works on it: Core's own line says so
-                if resp.get("text"):
-                    await tala(str(resp["text"]))
-                ut["slut"] = "deferred"
-            else:
-                for m in delare.flush():
-                    await tala(m)
-                ut["slut"] = "done"
+            # `done` carries ALL the text, also what was spoken already (B on #35): speak it only when
+            # nothing else was; otherwise just what is left in the buffer.
+            for m in delare.flush():
+                await tala(m)
+            if ut["meningar"] == 0 and resp.get("text"):
+                await tala(str(resp["text"]))
+            ut["slut"] = "deferred" if resp.get("type") == "deferred" else "done"
             return ut
         elif event == "deferred":
             ut["slut"] = "deferred"  # the `done` frame that follows carries the line to speak
@@ -152,8 +158,9 @@ def strom_url() -> str:
 
 
 def register_fraga_core(llm, say: Callable[[str], Awaitable[None]], headers: Callable[[], Dict[str, str]],
-                        timeout_s: float = 90.0) -> None:
-    """Register `fraga_core`: it returns "checking" and speaks the streamed answer in the background."""
+                        timeout_s: float = 90.0) -> Callable[[], None]:
+    """Register `fraga_core`: it returns "checking" and speaks the streamed answer in the background.
+    Returns `avbryt()`: stop the running answers (the owner starts to speak, or the link is gone)."""
     taken = set()
 
     async def kor(question: str) -> None:
@@ -169,7 +176,10 @@ def register_fraga_core(llm, say: Callable[[str], Awaitable[None]], headers: Cal
                         return
                     ut = await tala_strom(r.aiter_bytes(), say)
             logger.info(f"⏱ core-ström första_token={ut['forsta_token_s']} första_mening={ut['forsta_mening_s']} "
-                        f"meningar={ut['meningar']} slut={ut['slut']}")
+                        f"meningar={ut['meningar']} slut={ut['slut']}{' tak' if ut.get('tak') else ''}")
+        except asyncio.CancelledError:
+            logger.info("⏹ fraga_core: answer stopped (new turn or link gone)")
+            raise
         except Exception as e:
             logger.warning(f"⚠️ fraga_core failed: {type(e).__name__}")
             try:
@@ -178,14 +188,21 @@ def register_fraga_core(llm, say: Callable[[str], Awaitable[None]], headers: Cal
                 pass
 
     async def _fraga(params) -> None:
-        import asyncio
         question = ((params.arguments or {}).get("question") or "").strip()
         if not question or not strom_url():
             await params.result_callback({"error": "no question" if not question else "not available"})
             return
+        for gammal in list(taken):  # one answer at a time
+            gammal.cancel()
         task = asyncio.get_running_loop().create_task(kor(question))
         taken.add(task)
         task.add_done_callback(taken.discard)
         await params.result_callback({"status": "checking; the answer is spoken for you, say nothing more"})
 
     llm.register_function("fraga_core", _fraga)
+
+    def avbryt() -> None:
+        for t in list(taken):
+            t.cancel()
+
+    return avbryt

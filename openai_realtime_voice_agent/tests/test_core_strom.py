@@ -152,3 +152,52 @@ def test_roststyrka_drag_hittar_tonhojden_i_en_ren_ton():
     pcm = (0.3 * np.sin(2 * np.pi * 150 * t) * 32767).astype(np.int16).tobytes()
     d = mod.drag(pcm)
     assert d["sekunder"] == 1.0 and abs(d["f0_median"] - 150) < 5
+
+
+@pytest.mark.asyncio
+async def test_token_fore_deferred_talas_inte_en_gang_till_i_done(  ):
+    """B on #35: Core's `done` carries ALL the text, also what was spoken before `deferred`."""
+    talat = []
+
+    async def say(t):
+        talat.append(t)
+
+    async def chunks():
+        yield ram("token", {"text": "Jag ber Sixten titta på det här åt dig nu. "})
+        yield ram("deferred", {"agent": "sixten"})
+        yield ram("done", {"response": {"type": "deferred", "text": "Jag ber Sixten titta på det här åt dig nu."}})
+
+    ut = await tala_strom(chunks(), say)
+    assert talat == ["Jag ber Sixten titta på det här åt dig nu."] and ut["slut"] == "deferred"
+
+
+@pytest.mark.asyncio
+async def test_ett_svar_har_tak_pa_meningar():
+    talat = []
+
+    async def say(t):
+        talat.append(t)
+
+    async def chunks():
+        for i in range(12):
+            yield ram("token", {"text": f"Det här är mening nummer {i} i ett mycket långt svar. "})
+        yield ram("done", {"response": {"type": "speech", "text": "x"}})
+
+    ut = await tala_strom(chunks(), say, max_meningar=3)
+    assert len(talat) == 3 and ut["tak"] is True
+
+
+@pytest.mark.asyncio
+async def test_avbryt_stoppar_ett_pagaende_svar():
+    import asyncio
+
+    from app.core_strom import register_fraga_core
+
+    class Llm:
+        def register_function(self, namn, fn):
+            self.fn = fn
+
+    llm = Llm()
+    avbryt = register_fraga_core(llm, lambda t: asyncio.sleep(0), lambda: {})
+    assert callable(avbryt)
+    avbryt()  # nothing running: harmless

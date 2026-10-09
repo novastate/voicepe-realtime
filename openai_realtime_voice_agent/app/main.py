@@ -1045,12 +1045,21 @@ class Application:
             register_timer_tools(service, self.timer_registry, connection.device_id)
             register_memory_tools(service, _current_speaker_name)
             if core_stream_tala_paa() and strom_url():
+                sista_tts = [0.0]
+
                 async def _say_mening(text, _c=connection):
+                    # Gemini TTS takes 10 requests a minute: sentences of one answer are 6.5 s apart at most
+                    # as a floor between renders, the first one at once.
+                    if _c.provider == GEMINI:
+                        vanta = sista_tts[0] + 6.5 - time.monotonic()
+                        if vanta > 0:
+                            await asyncio.sleep(vanta)
+                        sista_tts[0] = time.monotonic()
                     # never cached (a private answer's voice) and never a fallback voice
                     pcm = await self._ack_clip(_c.provider, text, fallback=False, cache=False, levande=True)
                     await self._guarded_say(text, _c.device_id, pace=False, pcm=pcm)
 
-                register_fraga_core(service, _say_mening, ha_api.headers)
+                connection.avbryt_core = register_fraga_core(service, _say_mening, ha_api.headers)
                 logger.info("✅ Registered fraga_core (Core answers spoken as they are written)")
             if openclaw_url():
                 register_openclaw_tool(service)
