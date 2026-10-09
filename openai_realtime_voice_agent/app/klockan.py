@@ -10,6 +10,7 @@ to the nearest five minutes on a twelve-hour dial, now and then followed by a
 dry line for the time of day. Every clip is a whole phrase: Gemini TTS gives
 no audio for a bare number ("tjugo", "noll två", 2026-10-07).
 """
+import os
 import re
 from datetime import datetime
 from typing import Optional
@@ -65,6 +66,13 @@ def _kort_klockfraga(ord_: list) -> bool:
     if not (2 <= len(ord_) <= 5 and ord_[-1] == "klockan") or set(ord_[:-1]) & _ORDER:
         return False
     return len(ord_) == 2 or ord_[0] in _FRAGEORD
+
+
+def klipp_paa() -> bool:
+    """The pre-recorded clock answer (AC-7). OFF by default since Henrik's decision
+    2026-10-09: fast but static, "not Björn". KLOCKA_KLIPP=1 turns it on again.
+    Off: a clock question goes to the model like any other, and no clip is warmed."""
+    return os.environ.get("KLOCKA_KLIPP", "0") == "1"
 
 
 _sa_senast = {"kommentar": True}  # the last answer had a line; the next does not

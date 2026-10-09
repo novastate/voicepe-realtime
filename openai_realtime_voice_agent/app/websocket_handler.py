@@ -1790,7 +1790,7 @@ class WebSocketHandler:
                     efter_traff=_efter_traff,
                     skapa_svar=lambda: bana0_miss(provider, openai_service),
                     efter_miss=_efter_miss,
-                    klockan=_klockan,
+                    klockan=_klockan if klockan.klipp_paa() else None,
                 )
                 if bana in ("bana0", "klockan"):
                     await phase_emitter.force_idle(bana)

@@ -2,6 +2,13 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.23 (fork)
+
+- **Förinspelade klocksvar är av (raawr US-032, PO-beslut Henrik 2026-10-09).** Klippen gav snabbt
+  men statiskt svar och lät inte som Björn: hellre ett personligt svar efter ~1 s än ett statiskt
+  efter 0,5 s. En klockfråga går nu till modellen som alla andra, och inga klockklipp renderas
+  (ingen kvot går åt). Koden finns kvar bakom `KLOCKA_KLIPP=1` (av som standard).
+
 ## 0.27.22 (fork)
 
 - **Klockmatchningen släpper inte igenom order (A:s granskning av #29).** Den garblade klassen
