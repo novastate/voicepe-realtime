@@ -2,6 +2,14 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.32 (fork)
+
+- **En andra väckning kapar inte längre ett svar som pågår (köksprovet 2026-10-09).** Timern "wake without
+  speech for 5s" räknade en väckning under följdfönstret som en väckning ingen svarat på, fast frågan före den
+  redan tänktes på eller talades: 16:50:59 stängde den molnet 0,6 s in i svaret. `_vakning_utan_tal` gäller nu
+  inte i faserna thinking och replying (en svarsfas som verkligen fastnar är tänkvaktens och tystnadsregelns jobb).
+  Gäller ljudläget lika mycket som textläget.
+
 ## 0.27.31 (fork)
 
 - **Core-svar läses av Live själv, inte av en annan röst (raawr US-047 AC-4). Flaggan CORE_STREAM_TALA är fortfarande av.**

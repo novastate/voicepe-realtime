@@ -436,6 +436,24 @@ async def test_pagande_samtal_bryts_inte_av_vakningstaket():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fas", ["thinking", "replying"])
+async def test_en_andra_vakning_klipper_inte_ett_svar_som_pagar(fas):
+    """Kitchen 2026-10-09 16:50:59: the question was asked at 52.9, a second wake at 54.1 cleared the
+    speech flag, and 5 s later the timer shut the engine 0.6 s into the reply. A turn that is being
+    thought about or spoken is not 'a wake nobody answered'."""
+    s = Fake()
+    s.sover = False
+    r = _recovery(s, phase=fas)
+    r._phase_emitter._speech_since_wake = False
+    now = time.monotonic()
+    r._last_wake = now - (r.VAKNA_TIMEOUT_S + 1)
+    r._last_input_audio = now
+    assert r._vakning_utan_tal(now) is False
+    await _kor_sovloopen(r)
+    assert s.sover is False and s.calls == []
+
+
+@pytest.mark.asyncio
 async def test_foljdfonstret_som_stangs_ar_ingen_vakning_utan_tal():
     """Live 2026-10-07 (satellite stand-in on core): a question, a reply, and
     the follow-up window closing (device 'flush') put the engine to sleep 3 s

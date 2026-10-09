@@ -798,10 +798,18 @@ class ConnectionRecovery(FrameProcessor):
         return self._last_input_audio > self._last_wake
 
     def _vakning_utan_tal(self, now: float) -> bool:
-        """Wake nobody answered within VAKNA_TIMEOUT_S, whatever phase stuck."""
+        """Wake nobody answered within VAKNA_TIMEOUT_S, whatever phase stuck.
+
+        Not while a turn is being answered: a second wake during a follow-up window
+        clears the speech flag although the utterance before it is already being
+        thought about or spoken, and the timer then cut the reply 0.6 s into
+        SPEAKING (kitchen, 2026-10-09 16:50:59). A reply that really sticks is the
+        thinking watchdog's and the quiet rule's business."""
+        phase = getattr(self._phase_emitter, "phase", None) if self._phase_emitter is not None else None
         return (
             now - self._last_wake >= self.VAKNA_TIMEOUT_S
             and not self._tal_sedan_vakning()
+            and phase not in ("thinking", "replying")
         )
 
     def _tyst_nog(self, now: float) -> bool:
