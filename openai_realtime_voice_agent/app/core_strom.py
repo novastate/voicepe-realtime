@@ -4,8 +4,8 @@ Core streams the answer to a contract question as SSE frames (`start`, `token`*,
 `done` | `error`). This turns the tokens into sentences and speaks each one as soon as it is
 whole, in the engine's own voice, through the same path as every other out-of-band line
 (`say`). The model gets the tool `fraga_core`, which returns at once ("checking") while the answer
-is spoken here. OFF unless CORE_STREAM_TALA=1: the road in front of Core (Comms forwarding the
-stream) is spår A's, so the URL is CORE_STROM_URL until that exists.
+is spoken here. OFF unless CORE_STREAM_TALA=1. The road is Comms' `POST <room>/fraga` (US-050, spår A): the room's
+own key, `Accept: text/event-stream`, body {"text": …}. CORE_STROM_URL overrides the address.
 
 The model does not hear what is spoken (it is out of band): a follow-up that refers to it works
 only through what the owner remembers. That is the price of speaking before the answer is done.
@@ -15,7 +15,6 @@ import logging
 import os
 import re
 import time
-import uuid
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Tuple
 
 import httpx
@@ -141,7 +140,15 @@ def get_fraga_core_definition() -> dict:
 
 
 def strom_url() -> str:
-    return (os.environ.get("CORE_STROM_URL") or "").strip()
+    """Comms' question road for this room (US-050): `<room's comms address>/fraga`, with the same
+    key as every other call. CORE_STROM_URL overrides it (a test, another road)."""
+    egen = (os.environ.get("CORE_STROM_URL") or "").strip()
+    if egen:
+        return egen
+    from app import ha_api
+
+    bas = ha_api.base()
+    return (bas[:-4] if bas.endswith("/api") else bas) + "/fraga" if bas else ""
 
 
 def register_fraga_core(llm, say: Callable[[str], Awaitable[None]], headers: Callable[[], Dict[str, str]],
@@ -153,7 +160,7 @@ def register_fraga_core(llm, say: Callable[[str], Awaitable[None]], headers: Cal
         try:
             async with httpx.AsyncClient(timeout=timeout_s) as client:
                 async with client.stream(
-                    "POST", strom_url(), json={"text": question, "language": "sv", "request_id": uuid.uuid4().hex},
+                    "POST", strom_url(), json={"text": question[:2000]},
                     headers={**headers(), "Accept": "text/event-stream"},
                 ) as r:
                     if r.status_code != 200:

@@ -10,8 +10,9 @@ All notable changes to this add-on. Newest first.
   `done`, `error`), delar tokens i meningar och talar varje mening så fort den är hel, i samtalets
   röst (Gemini: Charon, xAI: xAI-rösten), via samma väg som övriga utsändningar. `deferred` talar Cores
   egen rad; fel talar en fast rad, aldrig felets text. Meningarna sparas aldrig på disk (nytt
-  `cache=False` i TTS-vägen): ett Core-svar kan vara privat. Vägen framför Core (Comms som skickar
-  vidare strömmen) är spår A:s, tills dess pekar `CORE_STROM_URL` dit den finns. Modellen hör inte
+  `cache=False` i TTS-vägen): ett Core-svar kan vara privat. Vägen är Comms `POST <rum>/fraga` (US-050, spår A: rummets egen nyckel,
+  `Accept: text/event-stream`, kropp `{"text": …}` högst 2000 tecken); adressen härleds ur `HA_API_URL`,
+  `CORE_STROM_URL` åsidosätter. Köket har ingen egen nyckel än och är utanför. Modellen hör inte
   det som talas (det går vid sidan av dess tur).
 
 ## 0.27.27 (fork)

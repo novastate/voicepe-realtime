@@ -123,3 +123,14 @@ async def test_ack_clip_utan_cache_laser_och_skriver_inget(monkeypatch):
     await main.Application._ack_clip(a, "gemini", "Ett privat svar.", fallback=False, cache=False)
     await main.Application._ack_clip(a, "gemini", "Ett privat svar.", fallback=False, cache=False)
     assert anrop == [False, False] and a._ack_clips == {}  # rendered twice, remembered never
+
+
+def test_adressen_harleds_ur_rummets_comms_adress(monkeypatch):
+    monkeypatch.delenv("CORE_STROM_URL", raising=False)
+    monkeypatch.setenv("HA_API_URL", "http://10.10.0.118:3500/kanal/rost/kontoret/api")
+    assert core_strom.strom_url() == "http://10.10.0.118:3500/kanal/rost/kontoret/fraga"
+    monkeypatch.setenv("CORE_STROM_URL", "http://x/y")
+    assert core_strom.strom_url() == "http://x/y"
+    monkeypatch.delenv("CORE_STROM_URL")
+    monkeypatch.delenv("HA_API_URL")
+    assert core_strom.strom_url() == ""
