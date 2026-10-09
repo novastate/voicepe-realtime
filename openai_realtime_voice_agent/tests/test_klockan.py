@@ -429,3 +429,15 @@ async def test_tur_skickar_texten_till_skapa_svar_med_text_nar_den_finns(comms):
             efter_miss=lambda: said.append("miss"), skapa_svar_med_text=med_text)
     assert bana == "modell" and fick == ["kan du tända kontoret kanske"] and said == ["miss"]
     assert service.typer() == []  # the audio path (response.create) was not used
+
+
+@pytest.mark.asyncio
+async def test_answer_turn_text_varnar_nar_det_inte_finns_nagon_hallen_tur(caplog):
+    import logging
+    from types import SimpleNamespace
+
+    from app.providers.gemini_live import ResilientGeminiLiveService
+
+    caplog.set_level(logging.WARNING)
+    await ResilientGeminiLiveService.answer_turn_text(SimpleNamespace(_held=None), "hej")
+    assert any("no held turn" in r.getMessage() for r in caplog.records)

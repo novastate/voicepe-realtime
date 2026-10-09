@@ -441,6 +441,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         is still audio; only the model's ears change."""
         held, self._held = getattr(self, "_held", None), None
         if not held:
+            logger.warning("⚠️ bana0: the locally heard text had no held turn to answer; nothing was sent")
             return
         # Variant B (2026-10-09 10:30): text on its own, no activity signals. Variant A
         # (activityStart, text, activityEnd) made Google close the socket: 1007 'Precondition

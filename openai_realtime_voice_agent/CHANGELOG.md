@@ -12,6 +12,10 @@ All notable changes to this add-on. Newest first.
   (attrappen på core 2026-10-09: 197 760 B ljud, första ljud 2,3 s efter frågan). Kvar att mäta: att enheten
   faktiskt talar (en extra not i samma tur gjorde den tyst tidigare), och att texten inte tappar
   vad rösten bar. Attrappen först, sedan Henrik i köket.
+  **Så sätts flaggan:** på core är det raden `LOCAL_TEXT_TO_MODEL="1"` i `/etc/raawr-rostagent.env`
+  (systemd-miljön för `raawr-rostagent`), sedan `systemctl restart raawr-rostagent`; ta bort raden för
+  att stänga av. Det är en miljövariabel, inget tilläggsalternativ. **Öppet:** mät att lokala STT inte
+  hör fel åt andra hållet (en text modellen annars hade hört rätt) innan fler rum slås på.
 ## 0.27.24 (fork)
 
 - **En fråga över Björns eget svar tappar inte början (raawr US-032, live 2026-10-09 12:09).**
