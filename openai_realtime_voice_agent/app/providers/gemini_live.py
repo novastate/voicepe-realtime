@@ -33,6 +33,7 @@ from pipecat.services.google.gemini_live.llm import (
 )
 from pipecat.transcriptions.language import Language
 
+from app import sprakkoll
 from app.providers.local_turns import PRE_END_MS, LocalTurns, LocalTurnsMixin
 from app.providers.sovlage import SovlageMixin
 from app.providers.tool_registration import ToolRegistrationMixin
@@ -274,6 +275,25 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
     # was spoken and let PhaseEmitter go idle after a spoken preamble.
     _answer_after_tool = False
 
+    _transkr_start: str = ""
+    _transkr_kollad: bool = False
+
+    async def _handle_msg_input_transcription(self, message) -> None:
+        """Pass it on, and log (once per turn) when the model's own transcription starts in another language
+        than Swedish: only the first words, no audio. Kitchen 2026-10-09: an answer began in Italian."""
+        try:
+            if not self._transkr_kollad:
+                self._transkr_start += message.server_content.input_transcription.text or ""
+                if len(sprakkoll.forsta_orden(self._transkr_start)) >= sprakkoll.FORSTA_ORD:
+                    self._transkr_kollad = True
+                    hit = sprakkoll.annat_sprak(self._transkr_start)
+                    if hit:
+                        logger.warning(f"🌐 Gemini's transcription starts in another language ({hit[0]}): "
+                                       f"'{' '.join(hit[1])}' (the answer language is pinned to Swedish)")
+        except Exception as e:  # logging must never touch the turn
+            logger.debug(f"transcription language check failed: {e!r}")
+        await super()._handle_msg_input_transcription(message)
+
     async def _handle_msg_tool_call(self, message) -> None:
         self._answer_after_tool = True
         self._turn_rescue = None  # a tool may have acted already: the turn is no longer safe to replay
@@ -293,6 +313,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             logger.info("⏳ empty turn_complete after a tool call — the answer comes in a new turn")
             return
         self._reply_awaited_at = None
+        self._transkr_start, self._transkr_kollad = "", False  # next turn: look again
         self._turn_rescue = None  # answered (also as text without sound): never replay it
         self.turer_klara += 1
         await super()._handle_msg_turn_complete(message)
@@ -552,6 +573,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         self._turn_rescue = None
         self._activity_open = False
         self._preroll = bytearray()
+        self._transkr_start, self._transkr_kollad = "", False  # a dropped turn must not mute the next one's check
         self.cancel_silence_ack()
         if self._turns is not None:
             self._turns.reset()
