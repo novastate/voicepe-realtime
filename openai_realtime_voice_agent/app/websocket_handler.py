@@ -1772,6 +1772,7 @@ class WebSocketHandler:
                 return await bana0.transkribera(pcm, host, port, t)
 
             tider = TurnTider(client_id)
+            connection.tider = tider
             serializer.tider = tider
             openai_service.tider = tider
 
@@ -1986,6 +1987,8 @@ class WebSocketHandler:
             return False
         try:
             await client.send(data)
+            if getattr(connection, "tider", None) is not None:
+                connection.tider.mark("enhet")  # bana 0's own clips and the receipts go this way (B, #34)
             return True
         except Exception as e:
             logger.warning(f"⚠️ send_bytes_to {connection.device_id} failed: {e!r}")

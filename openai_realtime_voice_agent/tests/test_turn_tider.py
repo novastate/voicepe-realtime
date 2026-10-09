@@ -54,3 +54,36 @@ def test_en_tur_utan_ljud_skrivs_vid_nasta_tur_och_raden_har_ingen_text(caplog):
     assert r[0].endswith("utan_ljud") and "enhet" not in r[0]
     assert all("hemligt" not in x for x in r)
     assert t.t is None
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.asyncio
+async def test_bana_0_klipp_som_gar_direkt_till_enheten_markerar_enhet_utan_utan_ljud(caplog):
+    """B on #34: bana 0's own clips and the receipts do not pass the serializer."""
+    from types import SimpleNamespace
+
+    from app.websocket_handler import WebSocketHandler
+
+    caplog.set_level(logging.INFO)
+    skickat = []
+
+    async def send(data):
+        skickat.append(data)
+
+    handler = WebSocketHandler()
+    connection = SimpleNamespace(device_id="kontoret", transport=SimpleNamespace(client=SimpleNamespace(send=send)))
+    k = Klocka()
+    connection.tider = TurnTider("kontoret", k)
+    handler.resolve_device = lambda device_id=None: connection
+    connection.tider.start(0.8)  # a bana 0 turn: the speech-to-text is done, the clip goes out
+    k.t += 0.3
+    connection.tider.mark("stt")
+    k.t += 0.2
+    assert await handler.send_bytes_to(b"\x00\x00" * 100, "kontoret") is True
+    k.t += 0.1
+    await handler.send_bytes_to(b"\x00\x00" * 100, "kontoret")  # the second chunk of the clip: not a new line
+    r = rader(caplog)
+    assert r == ["⏱ tider kontoret turslut=800 stt=1100 enhet=1300"]
+    assert not any("utan_ljud" in x for x in r) and len(skickat) == 2
