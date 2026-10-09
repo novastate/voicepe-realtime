@@ -23,12 +23,13 @@ search_home_tool reads states.
 import logging
 import os
 import re
+import time
 import unicodedata
 from typing import Any, Awaitable, Callable, Dict, List, Optional, TYPE_CHECKING
 
 import httpx
 
-from app import ha_api
+from app import ha_api, sprakkoll
 
 if TYPE_CHECKING:
     from pipecat.services.llm_service import FunctionCallParams
@@ -106,6 +107,25 @@ def _fold(text: str) -> str:
     """Lowercase and strip accents, so 'Kök' matches 'kok'."""
     decomposed = unicodedata.normalize("NFKD", (text or "").lower())
     return "".join(c for c in decomposed if not unicodedata.combining(c))
+
+
+_FRAGA_IGEN_S = 90.0  # the same query asked about twice within this long is played: the user said it again
+
+
+def osaker(query: str, tur_text: str, hort: str) -> str:
+    """Why the request should be asked about again instead of played, or "" when it can go ahead.
+
+    Kitchen 2026-10-09 21:17: music noise heard as "Du kan välja med tips?" (local STT) and "Play Game of Tips"
+    (the model) started a podcast nobody asked for. Two signs of that: the model's own transcription of the turn is
+    mostly another language than Swedish, or the local STT heard none of the query's longer words.
+    """
+    sprak = sprakkoll.mest_annat(tur_text)
+    if sprak:
+        return f"the turn was heard as {sprak}, not Swedish"
+    ord_ = [w for w in re.findall(r"[^\W_]+", _fold(query)) if len(w) > 3]
+    if hort and ord_ and not any(w in _fold(hort) for w in ord_):
+        return "the local speech-to-text heard something else than that"
+    return ""
 
 
 def _score_name(name: str, query: str) -> int:
@@ -261,6 +281,8 @@ async def _config_entry(client: httpx.AsyncClient) -> Optional[str]:
 
 def create_play_media_tool_handler(
     device_id: str = "",
+    tur_text=None,
+    hort=None,
 ) -> Callable[["FunctionCallParams"], Awaitable[None]]:
     """Create the play_media handler.
 
@@ -273,6 +295,7 @@ def create_play_media_tool_handler(
     if re.fullmatch(r"[0-9a-fA-F.:]+|unknown", device_id):  # no ?device_id=: the id is the client's IP, not a room
         device_id = ""
     default_player = device_id or os.environ.get("INSTANCE_NAME", "").strip()
+    tillfragad: Dict[str, float] = {}  # query -> when it was asked about; a repeat within _FRAGA_IGEN_S plays
 
     async def play_media_tool_handler(params: "FunctionCallParams") -> None:
         args = params.arguments or {}
@@ -286,6 +309,15 @@ def create_play_media_tool_handler(
 
         if not query:
             await params.result_callback("The user did not say what to play.")
+            return
+        skal = osaker(query, tur_text() if tur_text else "", hort() if hort else "")
+        nyckel = _fold(query)
+        if skal and time.monotonic() - tillfragad.get(nyckel, -1e9) > _FRAGA_IGEN_S:
+            tillfragad[nyckel] = time.monotonic()
+            logger.info(f"🎵 play_media: not played, asking first ({skal})")
+            await params.result_callback(
+                f"Nothing was played: you may have misheard ({skal}). Ask the user once, in Swedish, what they want "
+                "to hear. If they say the same again, call play_media again.")
             return
         if not ha_api.configured():
             logger.error("❌ play_media: HA_API_URL or COMMS_NYCKEL missing")

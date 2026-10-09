@@ -277,11 +277,16 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
 
     _transkr_start: str = ""
     _transkr_kollad: bool = False
+    _tur_text: str = ""  # everything the model has heard this turn, for gating tools on what it understood
+
+    def tur_text(self) -> str:
+        return self._tur_text
 
     async def _handle_msg_input_transcription(self, message) -> None:
         """Pass it on, and log (once per turn) when the model's own transcription starts in another language
         than Swedish: only the first words, no audio. Kitchen 2026-10-09: an answer began in Italian."""
         try:
+            self._tur_text += message.server_content.input_transcription.text or ""
             if not self._transkr_kollad:
                 self._transkr_start += message.server_content.input_transcription.text or ""
                 if len(sprakkoll.forsta_orden(self._transkr_start)) >= sprakkoll.FORSTA_ORD:
@@ -313,7 +318,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             logger.info("⏳ empty turn_complete after a tool call — the answer comes in a new turn")
             return
         self._reply_awaited_at = None
-        self._transkr_start, self._transkr_kollad = "", False  # next turn: look again
+        self._transkr_start, self._transkr_kollad, self._tur_text = "", False, ""  # next turn: look again
         self._turn_rescue = None  # answered (also as text without sound): never replay it
         self.turer_klara += 1
         await super()._handle_msg_turn_complete(message)
@@ -573,7 +578,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         self._turn_rescue = None
         self._activity_open = False
         self._preroll = bytearray()
-        self._transkr_start, self._transkr_kollad = "", False  # a dropped turn must not mute the next one's check
+        self._transkr_start, self._transkr_kollad, self._tur_text = "", False, ""  # a dropped turn must not mute the next one's check
         self.cancel_silence_ack()
         if self._turns is not None:
             self._turns.reset()

@@ -2,6 +2,16 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.40 (fork)
+
+- **Brus som lät som tal startar ingen musik (kontoret 2026-10-09 21:17).** Musikbrus hördes som "Du kan välja med tips?" (lokal STT) och
+  "Play Game of Tips" (Gemini), och en podcast startade. Tre skydd: (1) bana 0 släpper kända Whisper-påhitt ("Patreon", "tack för att ni
+  tittade", "undertexter", "thanks for watching") och texter under två bokstäver (`bana0.brus`): ingen fråga till Comms, tur går till
+  modellen med ljudet som vid tom text. (2) `play_media` spelar inget om Geminis egen avskrift av turen mest är ett annat språk än svenska
+  och börjar på det (`sprakkoll.mest_annat`, `GeminiLive.tur_text`), eller om lokala STT inte hörde något av frågans längre ord. (3) Då
+  säger verktyget åt modellen att fråga en gång vad användaren vill höra; säger hen samma sak igen inom 90 s spelas det. Ej byggt:
+  uttryckligt villkor för följdfönstret (spärren gäller alla turer).
+
 ## 0.27.39 (fork)
 
 - **play_media utan nämnt rum spelar i rummet där någon frågade (köksprovet 2026-10-09 21:17).** Köket bad om musik och det spelade i
