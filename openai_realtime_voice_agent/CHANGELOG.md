@@ -2,6 +2,13 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.38 (fork)
+
+- **Loggar när Geminis egen transkription börjar på ett annat språk än svenska (köksprovet 2026-10-09).** När svaret började på
+  italienska fanns inget spår av vad Gemini hört. Nu loggas, en gång per tur och som varning, de första orden (högst fyra) om något
+  av de två första orden hör till italienska, franska, engelska, tyska eller spanska vanliga ord och inte är svenskt
+  (`app/sprakkoll.py`, `_handle_msg_input_transcription`). Ingen ljudfil sparas och inget annat än de orden loggas; turen påverkas inte.
+
 ## 0.27.37 (fork)
 
 - **Svaret är alltid på svenska, oavsett vad ljudet före talet låter som (köksprovet 2026-10-09).** Musik och rumsbrus före väckordet
