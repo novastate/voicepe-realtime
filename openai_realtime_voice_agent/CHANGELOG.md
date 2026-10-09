@@ -2,6 +2,14 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.37 (fork)
+
+- **Svaret är alltid på svenska, oavsett vad ljudet före talet låter som (köksprovet 2026-10-09).** Musik och rumsbrus före väckordet
+  hördes som italienska ("Ronzio a terra") och svaret började på italienska (tidigare också "Bonjour du"). Instruktionen får ett fast
+  språklås sist före minnet och tidsblocket (`SPRAKLAS` i `main.py`): svara på svenska från första ordet, brus och andra språk ändrar
+  aldrig svarsspråket. Mätt mot riktiga Live med italienskt brus före svenskt tal: 4 av 4 svenska med och utan låset, så felet gick inte att
+  återskapa syntetiskt; låset är försiktighetsåtgärd, inte bevisad bot. Förrullen (0,8 s) är orörd: ingen åtgärd utan en reproduktion.
+
 ## 0.27.36 (fork)
 
 - **Mätraden för personligt svar efter en bana 0-träff (raawr US-047, BANA0_PING).** `tools/matvarden.py` skriver per rum
