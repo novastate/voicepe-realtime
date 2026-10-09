@@ -184,7 +184,7 @@ async def test_ett_svar_har_tak_pa_meningar():
         yield ram("done", {"response": {"type": "speech", "text": "x"}})
 
     ut = await tala_strom(chunks(), say, max_meningar=3)
-    assert len(talat) == 3 and ut["tak"] is True
+    assert len(talat) == 4 and talat[-1] == core_strom.TAK_REPLIK and ut["tak"] is True  # 3 sentences, then a word that there is more
 
 
 @pytest.mark.asyncio
@@ -201,3 +201,73 @@ async def test_avbryt_stoppar_ett_pagaende_svar():
     avbryt = register_fraga_core(llm, lambda t: asyncio.sleep(0), lambda: {})
     assert callable(avbryt)
     avbryt()  # nothing running: harmless
+
+
+@pytest.mark.asyncio
+async def test_avbryt_stoppar_ett_pagaende_svar_mitt_i(monkeypatch):
+    """B on #35: a running answer is cancelled, not just an empty avbryt()."""
+    import asyncio
+
+    from app.core_strom import register_fraga_core
+
+    talat, fastnat = [], asyncio.Event()
+
+    class Svar:
+        status_code = 200
+
+        async def aiter_bytes(self):
+            yield ram("token", {"text": "Första meningen är hel nu och klar. "})
+            yield ram("token", {"text": "Sedan börjar nästa"})  # the next word shows the first sentence is whole
+            fastnat.set()
+            await asyncio.Event().wait()  # the rest is never written
+            yield ram("done", {"response": {"type": "speech", "text": "x"}})
+
+    class Ström:
+        async def __aenter__(self):
+            return Svar()
+
+        async def __aexit__(self, *a):
+            return False
+
+    class Klient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        def stream(self, *a, **k):
+            return Ström()
+
+    monkeypatch.setattr(core_strom.httpx, "AsyncClient", Klient)
+    monkeypatch.setenv("CORE_STROM_URL", "http://x/fraga")
+
+    class Llm:
+        def register_function(self, namn, fn):
+            self.fn = fn
+
+    class Params:
+        arguments = {"question": "vad vet du om mig?"}
+
+        async def result_callback(self, r):
+            self.svar = r
+
+    async def say(t):
+        talat.append(t)
+
+    llm = Llm()
+    avbryt = register_fraga_core(llm, say, lambda: {})
+    p = Params()
+    await llm.fn(p)
+    assert "checking" in p.svar["status"]
+    await asyncio.wait_for(fastnat.wait(), 5)
+    await asyncio.sleep(0.05)
+    assert talat == ["Första meningen är hel nu och klar."]
+    taken_innan = [t for t in asyncio.all_tasks() if "kor" in repr(t)]
+    assert taken_innan
+    avbryt()
+    await asyncio.sleep(0.05)
+    assert all(t.done() for t in taken_innan) and talat == ["Första meningen är hel nu och klar."]

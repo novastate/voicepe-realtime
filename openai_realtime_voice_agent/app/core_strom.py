@@ -79,6 +79,7 @@ async def las_ramar(chunks: AsyncIterator[bytes]) -> AsyncIterator[Tuple[str, Di
 
 
 FEL_REPLIK = "Jag fick inget svar från huset just nu."
+TAK_REPLIK = "Det finns mer, fråga om du vill höra resten."
 
 
 MAX_MENINGAR = 8  # one answer never talks on and on; the rest stays unsaid
@@ -93,7 +94,9 @@ async def tala_strom(chunks: AsyncIterator[bytes], say: Callable[[str], Awaitabl
 
     async def tala(text: str) -> None:
         if ut["meningar"] >= max_meningar:
-            ut["tak"] = True
+            if not ut.get("tak"):
+                ut["tak"] = True
+                await say(TAK_REPLIK)  # not silence: say there is more
             return
         if ut["forsta_mening_s"] is None:
             ut["forsta_mening_s"] = round(klocka() - t0, 3)
