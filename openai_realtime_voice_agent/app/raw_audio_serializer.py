@@ -343,16 +343,18 @@ class RawAudioSerializer(FrameSerializer):
 
         return frame
     
-    def start_turn_audio(self) -> None:
+    def start_turn_audio(self) -> bool:
         """The user started speaking: drop all but the pre-roll.
 
         A follow-up turn has no wake, so without this the turn would carry
         everything since the last one -- silence and the reply's echo.
         """
-        if self.is_replying() and not self._samla_tur:  # speech over his own reply: the pre-roll was not collected
+        ringen = self.is_replying() and not self._samla_tur  # speech over his own reply: the pre-roll was not collected
+        if ringen:
             self.turn_pcm = bytearray(self._ring)
         self._samla_tur = True
         del self.turn_pcm[:-TURN_PCM_PREROLL]
+        return ringen  # True when the pre-roll came from the ring (logged by the caller)
 
     def peek_turn_audio(self) -> bytes:
         """The turn's mic audio so far, left in place (bana 0's early speech-to-text)."""

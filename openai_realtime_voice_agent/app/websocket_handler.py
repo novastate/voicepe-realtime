@@ -1798,8 +1798,9 @@ class WebSocketHandler:
             openai_service.on_user_turn_end = _on_user_turn_end
             def _tur_borjar():
                 _spec_rensa()
-                logger.info(f"⚡ bana0: turn audio starts, phase {getattr(connection.phase_emitter, 'phase', '?')}")
-                serializer.start_turn_audio()
+                ringen = serializer.start_turn_audio()
+                logger.info(f"⚡ bana0: turn audio starts, phase {getattr(connection.phase_emitter, 'phase', '?')}, "
+                            f"pre-roll from the ring: {ringen}")
 
             openai_service.on_user_turn_start = _tur_borjar
             if hasattr(openai_service, "on_user_turn_pre_end"):

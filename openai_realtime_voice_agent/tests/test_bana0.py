@@ -617,7 +617,7 @@ async def test_fraga_over_hans_eget_svar_tappar_inte_borjan():
     bit = b"\x01\x00" * 1600  # 100 ms
     for _ in range(12):  # his own reply, then he starts to speak over it
         await ser.deserialize(bit)
-    ser.start_turn_audio()  # the local VAD says he is speaking; the phase has not moved
+    assert ser.start_turn_audio() is True  # the local VAD says he is speaking; the phase has not moved; the ring was used
     for _ in range(8):
         await ser.deserialize(bit)
     pcm = ser.take_turn_audio()
