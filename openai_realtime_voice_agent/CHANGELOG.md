@@ -8,7 +8,8 @@ All notable changes to this add-on. Newest first.
   köket 2026-10-09: Gemini hörde 'Kan du ta den på toalettet kanske?' där lokala STT, på samma
   ljud, fick 'Kan du tända kontoret kanske?'. Med `LOCAL_TEXT_TO_MODEL=1` (AV som standard) får
   Gemini vid en miss de lokalt hörda orden i stället för det hållna ljudet (`answer_turn_text`:
-  activityStart, text, activityEnd). Svaret är fortfarande tal. Kvar att mäta: att enheten
+  bara texten, utan activityStart/End; med dem stänger Google socketen, 1007). Svaret är fortfarande tal
+  (attrappen på core 2026-10-09: 197 760 B ljud, första ljud 2,3 s efter frågan). Kvar att mäta: att enheten
   faktiskt talar (en extra not i samma tur gjorde den tyst tidigare), och att texten inte tappar
   vad rösten bar. Attrappen först, sedan Henrik i köket.
 ## 0.27.24 (fork)

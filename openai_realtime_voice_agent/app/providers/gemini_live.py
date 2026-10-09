@@ -442,9 +442,12 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         held, self._held = getattr(self, "_held", None), None
         if not held:
             return
-        await self._send_activity(activity_start=ActivityStart())
+        # Variant B (2026-10-09 10:30): text on its own, no activity signals. Variant A
+        # (activityStart, text, activityEnd) made Google close the socket: 1007 'Precondition
+        # check failed'.
         await self._send_activity(text=text)
-        await self._end_activity()
+        self._reply_awaited_at = time.monotonic()
+        self.arm_silence_ack()
 
     async def drop_turn(self) -> None:
         """Forget the current turn: held audio, or an activity already open.
