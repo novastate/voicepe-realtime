@@ -84,6 +84,7 @@ class RawAudioSerializer(FrameSerializer):
         # True while the assistant is speaking (set by build_pipeline from the
         # phase): its own voice must never become a turn's audio.
         self.is_replying = lambda: False
+        self.tider = None  # the connection's TurnTider; marks the first audio sent to the device
         self._last_button_mono = 0.0
         # Set on wake; cleared when we ack the first mic frame back to the
         # device (cancels its no-speech watchdog — audio is flowing).
@@ -370,6 +371,8 @@ class RawAudioSerializer(FrameSerializer):
     async def serialize(self, frame: Frame) -> bytes:
         if isinstance(frame, OutputAudioRawFrame):
             self._reply_audio_since_wake = True
+            if self.tider is not None:
+                self.tider.mark("enhet")
         """Serialize frame to binary message.
         
         For output audio frames, we just return the raw audio bytes.

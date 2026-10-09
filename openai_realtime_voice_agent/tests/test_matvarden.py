@@ -53,3 +53,15 @@ def test_percentiler_med_narmaste_rang():
     assert matvarden.pct([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 50) == 5
     assert matvarden.pct([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 95) == 10
     assert matvarden.pct([], 50) is None
+
+
+def test_tider_raderna_ger_p50_p95_efter_talets_slut_och_verktygsturer_for_sig():
+    logg = [
+        rad("10:00:00,000", "⏱ tider kontoret turslut=800 stt=990 enhet=1500", "app.turn_tider"),
+        rad("10:00:10,000", "⏱ tider kontoret turslut=800 stt=990 enhet=2500", "app.turn_tider"),
+        rad("10:00:20,000", "⏱ tider kontoret turslut=800 verktyg=1300 enhet=5000", "app.turn_tider"),
+        rad("10:00:30,000", "⏱ tider kontoret turslut=800 utan_ljud", "app.turn_tider"),
+    ]
+    e = matvarden.mat(logg)["kontoret"]["efter_talets_slut_s"]
+    assert e["n"] == 2 and e["p50"] == 1.5 and e["p95"] == 2.5
+    assert e["med_verktyg_n"] == 1 and e["med_verktyg_p50"] == 5.0

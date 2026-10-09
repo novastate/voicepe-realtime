@@ -38,6 +38,7 @@ class LocalTurns:
         self._rate = sample_rate
         self._speaking = False
         self._quiet_samples = 0
+        self.silence_s = 0.8  # set by create(): the silence the turn waits for
 
     @classmethod
     def create(cls, silence_ms: int, sample_rate: int = 16000, pre_ms: int = 0) -> Optional["LocalTurns"]:
@@ -68,7 +69,9 @@ class LocalTurns:
         except Exception as e:
             logger.error(f"❌ no local turn detection ({e!r}) — the engine keeps its own")
             return None
-        return cls(vad, sample_rate, pre)
+        turns = cls(vad, sample_rate, pre)
+        turns.silence_s = silence_ms / 1000
+        return turns
 
     def feed(self, pcm16: bytes, sample_rate: Optional[int] = None) -> Optional[str]:
         """Feed mic audio (PCM16 mono). Returns "start", "preend", "end" or None.
