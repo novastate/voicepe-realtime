@@ -188,3 +188,12 @@ async def test_ping_and_answer_slapper_turen_om_motorn_inte_vill_vakna():
     ns = SimpleNamespace(_held=[object()], _vaken_for_tur=inte_vaken, drop_turn=slapp, _send_activity=skicka)
     await S.ping_and_answer(ns, "x")
     assert handelser == ["drop"]
+
+
+def test_tre_forsta_bokstaverna_racker_inte_for_att_tva_rum_ska_vara_samma():
+    """G on #42 omgång 3: 'bada' (to bathe) is not the room 'Badrummet'."""
+    logg = bana0.Atgardslogg()
+    logg.skriv("Släck i köket, jag ska bada.", "Släckte")
+    assert logg.redan("intent__HassTurnOff", {"area": "Badrummet"}) is False
+    assert logg.redan("intent__HassTurnOff", {"area": "Sovrummet"}) is False
+    assert logg.redan("intent__HassTurnOff", {"area": "Kök"}) is True  # the kitchen is still the kitchen

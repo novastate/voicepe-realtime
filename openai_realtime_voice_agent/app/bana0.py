@@ -125,7 +125,7 @@ class Atgardslogg:
         nu = self.klocka()
         self._poster = [p for p in self._poster if nu - p[2] <= self.TTL_S]
         # a word names the place when it and a heard word start the same way ('Kök' against 'köket')
-        return any((ljusinstallning or v == verb) and any(w[:5] in h or any(x.startswith(w[:3]) and w.startswith(x[:3]) for x in h.split()) for w in ord_)
+        return any((ljusinstallning or v == verb) and any(w[:5] in h or any(len(x) >= 3 and (x.startswith(w) or w.startswith(x)) for x in h.split()) for w in ord_)
                    for v, h, _ in self._poster)
 
 
