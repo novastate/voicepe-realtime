@@ -20,6 +20,8 @@ FEM_SATT = [
 @pytest.mark.parametrize("text", FEM_SATT + [
     "vad e klockan", "Vad är klockan just nu?", "Vad är klockan nu då?", "Björn, vad är klockan?",
     "Vad är klockan, Björn?", "Vad är tiden?",
+    # how Whisper heard Henrik live, 2026-10-09
+    "Böda klockan.", "Börda klockan.", "Vad är det klockan?", "Hur mycket klockan.",
 ])
 def test_klockfragor_kanns_igen(text):
     assert klockan.ar_klockfraga(text)
@@ -29,6 +31,7 @@ def test_klockfragor_kanns_igen(text):
     None, "", "Klockan.", "klockan sju", "ställ klockan på sju", "väck mig klockan sex",
     "tänd lampan i kontoret",
     "vad är klockan i New York", "sätt en timer på tio minuter",
+    "ställ klockan", "väck mig klockan", "när är klockan sju", "tänd lampan klockan", "Vai då kan?",
 ])
 def test_annat_ar_ingen_klockfraga(text):
     assert not klockan.ar_klockfraga(text)

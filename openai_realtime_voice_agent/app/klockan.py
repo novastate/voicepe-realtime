@@ -44,6 +44,23 @@ _FRAGA = re.compile(
     r")(?: just)?(?: nu)?(?: då)?(?: björn)?$"
 )
 
+# Whisper hears Henrik badly ("Böda klockan", "Börda klockan", "Hur mycket klockan",
+# live 2026-10-09): a short phrase that ENDS in "klockan" is the question unless it
+# starts like an order or names a time after it ("klockan sju" does not end there).
+_SLUT = {"nu", "då", "just", "björn", "snälla"}
+_ORDER = {"ställ", "ställa", "väck", "väcka", "sätt", "sätta", "timer", "larm", "påminn", "boka",
+          "tänd", "släck", "stäng", "på", "vid", "kl", "efter", "runt", "till", "från", "mellan",
+          "klockan"}
+
+
+def _kort_klockfraga(ord_: list) -> bool:
+    while ord_ and ord_[-1] in _SLUT:
+        ord_ = ord_[:-1]
+    if ord_[:2] == ["hej", "björn"]:
+        ord_ = ord_[2:]
+    return 2 <= len(ord_) <= 5 and ord_[-1] == "klockan" and not set(ord_[:-1]) & _ORDER
+
+
 _sa_senast = {"kommentar": True}  # the last answer had a line; the next does not
 
 
@@ -51,7 +68,8 @@ def ar_klockfraga(text: Optional[str]) -> bool:
     if not text:
         return False
     ren = re.sub(r"[^\wåäö ]+", " ", text.lower())
-    return bool(_FRAGA.match(" ".join(ren.split())))
+    ord_ = ren.split()
+    return bool(_FRAGA.match(" ".join(ord_))) or _kort_klockfraga(ord_)
 
 
 def _lage(nu: datetime) -> tuple[int, int]:

@@ -2,6 +2,15 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.21 (fork)
+
+- **Bredare klockmatchning och längre tal-till-text-tid (raawr US-032).** Live 2026-10-09 hörde
+  tal-till-text Henrik som 'Böda klockan', 'Vad är det klockan?', 'Hur mycket klockan.' och
+  matcharen tog ingen av dem. Nu är en kort fras (2-5 ord) som SLUTAR på 'klockan' en klockfråga,
+  om den inte börjar som en order (ställ, väck, sätt, timer, tänd ...) eller har en tid efter sig.
+  `BANA0_STT_TIMEOUT_MS` går från 600 till 1500 ms: en tal-till-text som tog längre än 0,6 s gav
+  TimeoutError och turen gick till modellen. Normalt tar den 0,13 s, så ingen väntar längre.
+
 ## 0.27.20 (fork)
 
 - **Mätkommandot (raawr US-032 AC-10).** `journalctl -u raawr-rostagent --since today | python tools/matvarden.py`
