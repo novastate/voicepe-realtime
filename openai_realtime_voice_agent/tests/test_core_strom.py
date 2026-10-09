@@ -286,3 +286,12 @@ def test_normalisera_jamnar_ut_varje_mening_till_livenivan_och_klipper_inte():
     assert int(np.frombuffer(hog, dtype=np.int16).min()) > 0
     stilla = (np.sin(np.arange(48000) / 7) * 40).astype(np.int16).tobytes()
     assert niva_db(normalisera(stilla)) - niva_db(stilla) <= 6.05  # at most 6 dB either way
+
+
+def test_normalisera_lamnar_ett_klipp_kortare_an_en_ram_orort():
+    import numpy as np
+
+    from app.early_ack import normalisera
+
+    kort = (np.ones(500, dtype=np.int16) * 3000).tobytes()  # 500 samples < one 960-sample frame
+    assert normalisera(kort) == kort

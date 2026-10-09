@@ -101,6 +101,8 @@ def niva_db(pcm: bytes) -> float:
 
     x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
     ram = RAW_RATE * 40 // 1000
+    if len(x) <= ram:  # shorter than one frame: nothing to measure, so normalisera leaves it alone
+        return STROM_MAL_DB
     fonster = np.hanning(ram)
     tak = np.sqrt(np.mean(x ** 2) + 1e-12)
     db = []
