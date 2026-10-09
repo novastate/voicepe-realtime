@@ -461,10 +461,24 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             if getattr(self, "_held", None):
                 await self.answer_turn()
 
+    async def _vaken_for_tur(self) -> bool:
+        """A turn is answered on an awake engine. Kitchen 2026-10-09 16:51:16: the follow-up
+        question came after the engine had been put to sleep, `_send_activity` returns quietly
+        when there is no session, and the device waited 15 s for a reply that could not come.
+        A sleeping engine is woken first; if it will not wake, say so in the log."""
+        if not getattr(self, "sover", False):
+            return True
+        if await self.vakna() or not getattr(self, "sover", False):
+            return True
+        logger.warning("⚠️ a turn arrived while the cloud engine sleeps and it would not wake; the turn is lost")
+        return False
+
     async def answer_turn(self) -> None:
         """Bana 0 missed: give Google the held turn and let the model answer."""
         held, self._held = getattr(self, "_held", None), None
         if not held:
+            return
+        if not await self._vaken_for_tur():
             return
         await self._send_activity(activity_start=ActivityStart())
         for frame in held:
@@ -480,6 +494,8 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         held, self._held = getattr(self, "_held", None), None
         if not held:
             logger.warning("⚠️ bana0: the locally heard text had no held turn to answer; nothing was sent")
+            return
+        if not await self._vaken_for_tur():
             return
         # Variant B (2026-10-09 10:30): text on its own, no activity signals. Variant A
         # (activityStart, text, activityEnd) made Google close the socket: 1007 'Precondition

@@ -348,6 +348,7 @@ def _silent_service(provider, monkeypatch, liveness=None):
     monkeypatch.setenv("EARLY_ACK_SILENCE_MS", "50")
     service = _acking_service(provider, monkeypatch, liveness)
     service.send_client_event = AsyncMock()
+    service.sover = False  # a turn is only answered on an awake engine (0.27.33)
     return service
 
 

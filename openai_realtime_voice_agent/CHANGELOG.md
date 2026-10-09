@@ -2,6 +2,13 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.33 (fork)
+
+- **En tur till en sovande motor väcker den först (köksprovet 2026-10-09).** 16:51:16 kom en följdfråga efter att molnet
+  sövts; `answer_turn_text` (och `answer_turn`) skickade till ingen session, `_send_activity` returnerar tyst, och enheten
+  väntade 15 s på ett svar som inte kunde komma. Nu väcks en sovande motor först (`vakna`); vill den inte vakna loggas det
+  som varning i stället för att turen försvinner tyst.
+
 ## 0.27.32 (fork)
 
 - **En andra väckning kapar inte längre ett svar som pågår (köksprovet 2026-10-09).** Timern "wake without

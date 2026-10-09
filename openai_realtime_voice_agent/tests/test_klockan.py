@@ -441,3 +441,54 @@ async def test_answer_turn_text_varnar_nar_det_inte_finns_nagon_hallen_tur(caplo
     caplog.set_level(logging.WARNING)
     await ResilientGeminiLiveService.answer_turn_text(SimpleNamespace(_held=None), "hej")
     assert any("no held turn" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metod", ["answer_turn", "answer_turn_text"])
+async def test_en_tur_till_en_sovande_motor_vacker_den_forst(metod):
+    """Köket 16:51:16: följdfrågan kom efter att molnet sövts; texten skickades till ingen session."""
+    from types import SimpleNamespace
+
+    from app.providers.gemini_live import ResilientGeminiLiveService as S
+
+    handelser = []
+
+    async def vakna():
+        handelser.append("vakna")
+        ns.sover = False
+        return True
+
+    async def skicka(**kw):
+        handelser.append("skicka")
+
+    frame = SimpleNamespace(audio=b"\0\0", sample_rate=16000)
+    ns = SimpleNamespace(sover=True, _held=[frame], vakna=vakna, _send_activity=skicka, arm_silence_ack=lambda: None,
+                         _vaken_for_tur=None, _send_pcm=lambda f, a: skicka(), _end_activity=lambda: skicka())
+    ns._vaken_for_tur = lambda: S._vaken_for_tur(ns)
+    if metod == "answer_turn_text":
+        await S.answer_turn_text(ns, "tänd kontoret")
+    else:
+        await S.answer_turn(ns)
+    assert handelser[0] == "vakna" and "skicka" in handelser
+
+
+@pytest.mark.asyncio
+async def test_en_tur_som_inte_kan_vackas_varnar_och_skickar_inget(caplog):
+    from types import SimpleNamespace
+
+    from app.providers.gemini_live import ResilientGeminiLiveService as S
+
+    skickat = []
+
+    async def vakna():
+        return False  # budget used, or the connect failed
+
+    async def skicka(**kw):
+        skickat.append(kw)
+
+    ns = SimpleNamespace(sover=True, _held=[SimpleNamespace(audio=b"", sample_rate=16000)], vakna=vakna,
+                         _send_activity=skicka, arm_silence_ack=lambda: None)
+    ns._vaken_for_tur = lambda: S._vaken_for_tur(ns)
+    with caplog.at_level("WARNING"):
+        await S.answer_turn_text(ns, "tänd kontoret")
+    assert skickat == [] and "would not wake" in caplog.text
