@@ -292,6 +292,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             logger.info("⏳ empty turn_complete after a tool call — the answer comes in a new turn")
             return
         self._reply_awaited_at = None
+        self.turer_klara += 1
         await super()._handle_msg_turn_complete(message)
         handler = getattr(self, "_on_turn_complete", None)
         if handler is None:
@@ -410,10 +411,33 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         if self.tider is not None and self._turns is not None:
             self.tider.start(getattr(self._turns, "silence_s", 0.8))
 
+    # Seconds of speech Live has given (the daily cap counts these), turns it has finished, and the
+    # event a fed text waits on for its first sound (core_strom.LiveMatare).
+    ljud_s = 0.0
+    turer_klara = 0
+    _forsta_ljud: Optional[asyncio.Event] = None
+
+    async def mata_text(self, text: str) -> None:
+        """Feed `text` to the connected session as a message to answer (a Core sentence to read aloud)."""
+        self._forsta_ljud = asyncio.Event()
+        await self._send_activity(text=text)
+
+    async def vanta_forsta_ljud(self, timeout: float) -> bool:
+        """True when sound came after the last `mata_text` within `timeout` seconds."""
+        try:
+            await asyncio.wait_for(self._forsta_ljud.wait(), timeout)
+            return True
+        except (asyncio.TimeoutError, AttributeError):
+            return False
+
     async def push_frame(self, frame, *args, **kwargs):
         """Tell the turn's timing line when the model's first audio leaves for the device."""
-        if self.tider is not None and isinstance(frame, OutputAudioRawFrame):
-            self.tider.mark("modell")
+        if isinstance(frame, OutputAudioRawFrame):
+            self.ljud_s += len(frame.audio) / (2 * (frame.sample_rate or 24000))
+            if self._forsta_ljud is not None:
+                self._forsta_ljud.set()
+            if self.tider is not None:
+                self.tider.mark("modell")
         return await super().push_frame(frame, *args, **kwargs)
 
     def held_seconds(self) -> Optional[float]:
