@@ -39,6 +39,13 @@ EJ_SV = {"the", "and", "you", "is", "what", "weiter", "und", "ich", "nicht", "de
 PROMPT = "Du är Björn, en röstassistent i ett hem i Sverige. Svara kort på svenska."
 
 
+def skrubba(text):
+    """An exception's text can carry the API key (a `key=` in the URL, or the key itself)."""
+    text = re.sub(r"(key=)[^&\s'\")]+", r"\1<dold>", str(text), flags=re.I)
+    nyckel = os.environ.get("GEMINI_API_KEY", "")
+    return text.replace(nyckel, "<dold>") if nyckel else text
+
+
 def ord_(t):
     return re.sub(r"[^\wåäö ]+", " ", (t or "").lower()).split()
 
@@ -128,7 +135,16 @@ async def main():
     ap.add_argument("dir")
     ap.add_argument("--modell", default=os.environ.get("GEMINI_MODEL", "models/gemini-3.8-live"))
     ap.add_argument("--lage", default="drift,google")
+    ap.add_argument("--radera", action="store_true", help="delete every saved turn in DIR and stop")
     a = ap.parse_args()
+    if a.radera:
+        n = 0
+        for f in glob.glob(os.path.join(a.dir, "*")):
+            if f.endswith((".wav", ".json", ".txt")):
+                os.remove(f)
+                n += 1
+        print(f"deleted {n} files in {a.dir}")
+        return
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
     sammanfattning = {}
     for lage in a.lage.split(","):
@@ -140,7 +156,7 @@ async def main():
                 hort, forsta = await tur(client, a.modell, lage, pcm, forrulle)
                 fel = None
             except Exception as e:  # a refused setup is a result, not a crash
-                hort, forsta, fel = "", None, repr(e)[:160]
+                hort, forsta, fel = "", None, skrubba(repr(e))[:160]
             r = {"lage": lage, "tur": os.path.basename(namn), "sant": sant, "hort": hort,
                  "wer": wer(sant, hort) if hort else None, "fel_sprak": fel_sprak(hort),
                  "forsta_ljud_s": round(forsta, 2) if forsta is not None else None, "fel": fel}

@@ -40,29 +40,47 @@ TUR_LJUD_DIR = os.environ.get("TUR_LJUD_DIR", "")  # a diagnostic: save each tur
 TUR_LJUD_MAX = 200
 
 
+TUR_LJUD_DAGAR = 7  # saved turns older than this are deleted at the next save
+
+
 def _spara_tur(device_id, pcm, forrulle_bytes, text):
     """Save one turn as <dir>/<time>-<device>.wav + .json (pre-roll bytes) + .txt (what the local
     speech-to-text heard, a stand-in for the truth). OFF unless TUR_LJUD_DIR is set. It is a voice
-    in a room: for a comparison, then deleted (raawr US-032, 2026-10-09)."""
+    in a room: owner-only files (0600 in a 0700 directory), deleted after TUR_LJUD_DAGAR days at the
+    next save, and `tools/gemini_jamforelse.py --radera DIR` removes the lot (raawr US-032)."""
     if not TUR_LJUD_DIR or not pcm:
         return
     try:
+        import re
         import wave
-        os.makedirs(TUR_LJUD_DIR, exist_ok=True)
+
+        os.makedirs(TUR_LJUD_DIR, mode=0o700, exist_ok=True)
+        os.chmod(TUR_LJUD_DIR, 0o700)
+        gammalt = time.time() - TUR_LJUD_DAGAR * 86400
+        for f in os.listdir(TUR_LJUD_DIR):
+            sokvag = os.path.join(TUR_LJUD_DIR, f)
+            if f.endswith((".wav", ".json", ".txt")) and os.path.getmtime(sokvag) < gammalt:
+                os.remove(sokvag)
         if len([f for f in os.listdir(TUR_LJUD_DIR) if f.endswith(".wav")]) >= TUR_LJUD_MAX:
             return
-        namn = os.path.join(TUR_LJUD_DIR, f"{time.strftime('%Y%m%d-%H%M%S')}-{device_id}")
-        with wave.open(namn + ".wav", "wb") as f:
-            f.setnchannels(1)
-            f.setsampwidth(2)
-            f.setframerate(16000)
-            f.writeframes(pcm)
-        with open(namn + ".json", "w") as f:
-            json.dump({"forrulle_bytes": int(forrulle_bytes)}, f)
-        with open(namn + ".txt", "w", encoding="utf-8") as f:
-            f.write(text or "")
+        rent = re.sub(r"[^A-Za-z0-9_-]", "_", str(device_id))[:40]
+        namn = os.path.join(TUR_LJUD_DIR, f"{time.strftime('%Y%m%d-%H%M%S')}-{rent}")
+
+        def oppna(suffix):
+            return os.fdopen(os.open(namn + suffix, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb")
+
+        with oppna(".wav") as raw:
+            with wave.open(raw, "wb") as f:
+                f.setnchannels(1)
+                f.setsampwidth(2)
+                f.setframerate(16000)
+                f.writeframes(pcm)
+        with oppna(".json") as f:
+            f.write(json.dumps({"forrulle_bytes": int(forrulle_bytes)}).encode())
+        with oppna(".txt") as f:
+            f.write((text or "").encode("utf-8"))
     except Exception as e:
-        logger.warning(f"⚠️ could not save the turn audio: {e!r}")
+        logger.warning(f"⚠️ could not save the turn audio: {type(e).__name__}")
 
 
 SPEC_LANGD_SKILLNAD_S = 0.3  # bana 0's turn audio vs what the engine holds
