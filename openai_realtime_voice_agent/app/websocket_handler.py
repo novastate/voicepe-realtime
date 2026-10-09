@@ -2249,6 +2249,7 @@ class WebSocketHandler:
 
             rescue_task = asyncio.get_running_loop().create_task(self._lamna_raddad_tur(connection))
             self._bakgrund.add(rescue_task)
+            connection.rescue_task = rescue_task
             rescue_task.add_done_callback(self._bakgrund.discard)
 
             # Blocks until the device disconnects (or the pipeline ends).
@@ -2325,6 +2326,9 @@ class WebSocketHandler:
         avbryt = getattr(connection, "avbryt_core", None)
         if avbryt is not None:
             avbryt()
+        rescue_task = getattr(connection, "rescue_task", None)
+        if rescue_task is not None and rescue_task is not asyncio.current_task():
+            rescue_task.cancel()
         if connection.task is not None:
             try:
                 await connection.task.cancel()

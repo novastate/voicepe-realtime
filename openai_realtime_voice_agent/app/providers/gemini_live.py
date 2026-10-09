@@ -293,6 +293,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             logger.info("⏳ empty turn_complete after a tool call — the answer comes in a new turn")
             return
         self._reply_awaited_at = None
+        self._turn_rescue = None  # answered (also as text without sound): never replay it
         self.turer_klara += 1
         await super()._handle_msg_turn_complete(message)
         handler = getattr(self, "_on_turn_complete", None)

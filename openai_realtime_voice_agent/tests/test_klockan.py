@@ -594,3 +594,29 @@ async def test_nedmonteringen_sparar_den_obesvarade_turen_for_nasta_anslutning()
                             phase_emitter=None, maskin=None, pipeline=None, runner=None)
     await WebSocketHandler._teardown(hw, conn2)
     assert "kontoret" not in hw._raddade
+
+
+@pytest.mark.asyncio
+async def test_ett_besvarat_svar_utan_ljud_lamnar_ingen_tur_att_spela_om():
+    """B på #41: ett svar som blir text utan ljud slutar i turn_complete; ett tapp efter det ska inte spela upp turen."""
+    import time as _t
+    from types import SimpleNamespace
+
+    from app.providers import gemini_live
+    from app.providers.gemini_live import ResilientGeminiLiveService as S
+
+    ns = S.__new__(S)
+    ns._answer_after_tool = False
+    ns._turn_rescue, ns._reply_awaited_at, ns.turer_klara = ([1], _t.monotonic()), 5.0, 0
+    ns._on_turn_complete = None
+
+    async def super_tc(self, message):
+        pass
+
+    orig = gemini_live.GeminiLiveLLMService._handle_msg_turn_complete
+    gemini_live.GeminiLiveLLMService._handle_msg_turn_complete = super_tc
+    try:
+        await ns._handle_msg_turn_complete(SimpleNamespace())
+    finally:
+        gemini_live.GeminiLiveLLMService._handle_msg_turn_complete = orig
+    assert ns._turn_rescue is None and ns.turer_klara == 1
