@@ -1806,6 +1806,9 @@ class WebSocketHandler:
             openai_service.on_user_turn_end = _on_user_turn_end
             def _tur_borjar():
                 _spec_rensa()
+                avbryt = getattr(connection, "avbryt_core", None)
+                if avbryt is not None:
+                    avbryt()  # he starts to speak: a Core answer still being spoken stops
                 ringen = serializer.start_turn_audio()
                 logger.info(f"⚡ bana0: turn audio starts, phase {getattr(connection.phase_emitter, 'phase', '?')}, "
                             f"pre-roll from the ring: {ringen}")
@@ -2267,6 +2270,9 @@ class WebSocketHandler:
         Args:
             connection: The connection to tear down.
         """
+        avbryt = getattr(connection, "avbryt_core", None)
+        if avbryt is not None:
+            avbryt()
         if connection.task is not None:
             try:
                 await connection.task.cancel()
