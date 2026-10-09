@@ -22,6 +22,8 @@ import os
 
 import httpx
 
+from app.device_registry import rum_ur_enhet
+
 logger = logging.getLogger(__name__)
 
 # Bridge agent turns are killed at 150s on the far side; stay just under so
@@ -99,7 +101,7 @@ def get_recall_tool_definition() -> dict:
     }
 
 
-def register_openclaw_tool(llm) -> None:
+def register_openclaw_tool(llm, device_id: str = "") -> None:
     async def _ask(params) -> None:
         question = ((params.arguments or {}).get("question") or "").strip()
         if not question:
@@ -107,7 +109,9 @@ def register_openclaw_tool(llm) -> None:
             return
         # room tells the bridge which device to announce late answers on when
         # a turn outlives the sync window (guaranteed report-back).
-        room = os.environ.get("INSTANCE_NAME", "").strip().lower()
+        # The room of the device that asked, not the process-wide INSTANCE_NAME: one process serves several devices
+        # (a kitchen question's late answer was announced in the office).
+        room = (rum_ur_enhet(device_id) or os.environ.get("INSTANCE_NAME", "").strip()).lower()
         try:
             async with httpx.AsyncClient(timeout=ASK_TIMEOUT_S) as client:
                 r = await client.post(openclaw_url(), json={"question": question, "room": room})

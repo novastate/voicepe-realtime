@@ -2,6 +2,13 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.41 (fork)
+
+- **Sena svar från `ask_openclaw` ropas ut i rummet där frågan ställdes.** Verktyget skickade processens `INSTANCE_NAME` ("kontor" på core) som
+  `room`, så ett sent svar på en fråga i köket kunde ropas ut i kontoret. Det skickar nu enhetens eget id (`koket`/`kontoret`,
+  `device_registry.rum_ur_enhet`, samma hjälpare som `play_media`); `INSTANCE_NAME` är reserv när id:t är en IP eller `unknown`.
+  Adaptern (raawr `Backend/Services/voice-realtime/adapter.mjs`) måste ta emot rummet och skicka `device_id` till `/announce`: egen PR i raawr.
+
 ## 0.27.40 (fork)
 
 - **Brus som lät som tal startar ingen musik (kontoret 2026-10-09 21:17).** Musikbrus hördes som "Du kan välja med tips?" (lokal STT) och

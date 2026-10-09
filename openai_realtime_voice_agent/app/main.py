@@ -1064,13 +1064,13 @@ class Application:
                                                              ny_svar=matare.ny_svar, slut=matare.slut)
                 logger.info("✅ Registered fraga_core (Core answers read by Live as they are written)")
             if openclaw_url():
-                register_openclaw_tool(service)
+                register_openclaw_tool(service, connection.device_id)
                 logger.info("✅ Registered DIRECT ask_openclaw tool (bypassing HA MCP 60s cap)")
             logger.info("✅ Registered timer + memory tools")
 
             # Register MCP tool handlers if available
             if self.mcp_client and mcp_tools_schema:
-                await self._register_ha_handlers(service, mcp_tools_schema)
+                await self._register_ha_handlers(service, mcp_tools_schema, connection.device_id)
             # A failed fetch is tried again on the next wake
             # (hamta_verktyg_vid_vakning). A list HA returned is kept, even
             # when it is shorter. The speaker stays connected: closing it
@@ -1145,7 +1145,7 @@ class Application:
             })
         return tools
 
-    async def _register_ha_handlers(self, service, mcp_tools_schema) -> None:
+    async def _register_ha_handlers(self, service, mcp_tools_schema, device_id: str = "") -> None:
         """Bind HA's MCP tools to `service`, then put the direct ask_openclaw back.
 
         register_function keys by name, so running this twice replaces the
@@ -1163,7 +1163,7 @@ class Application:
         # path and its 60s cap. Observed live 2026-07-13: "It failed. I
         # couldn't send the text" at exactly 60s — while the text sent fine.
         if openclaw_url():
-            register_openclaw_tool(service)
+            register_openclaw_tool(service, device_id)
             logger.info("✅ DIRECT ask_openclaw re-registered after MCP handlers (wins)")
 
     async def _guarded_say(self, text, device_id=None, pace=True, pcm=None):
@@ -1390,7 +1390,7 @@ class Application:
                 slot["function_declarations"].extend(
                     d for d in decls if d.get("name") not in have
                 )
-        await self._register_ha_handlers(service, schema)
+        await self._register_ha_handlers(service, schema, connection.device_id)
 
     def _preseed_context(self, service) -> None:
         """Stop pipecat speaking spontaneously on a brand-new session.

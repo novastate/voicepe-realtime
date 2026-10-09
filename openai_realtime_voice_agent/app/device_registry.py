@@ -7,6 +7,7 @@ connection is selected.
 import asyncio
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, Optional
@@ -33,6 +34,16 @@ def sanitize_device_id(raw: str) -> str:
     """
     cleaned = "".join(c for c in (raw or "").strip() if c in _SAFE_CHARS)
     return cleaned[:MAX_DEVICE_ID_LEN]
+
+
+def rum_ur_enhet(device_id: str) -> str:
+    """The room a device id names ("koket", "kontoret"), or "" when it is not a room name.
+
+    Without `?device_id=` the id falls back to the client's IP or "unknown" (see below); those name no room, and the
+    caller then uses the process-wide INSTANCE_NAME as before.
+    """
+    device_id = (device_id or "").strip()
+    return "" if re.fullmatch(r"[0-9a-fA-F.:]+|unknown", device_id) else device_id
 
 
 def device_id_from_websocket(websocket: Any) -> str:
