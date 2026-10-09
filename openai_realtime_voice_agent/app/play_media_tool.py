@@ -22,6 +22,7 @@ search_home_tool reads states.
 """
 import logging
 import os
+import re
 import unicodedata
 from typing import Any, Awaitable, Callable, Dict, List, Optional, TYPE_CHECKING
 
@@ -268,7 +269,10 @@ def create_play_media_tool_handler(
     start the office. One process serves several devices, so the process-wide
     INSTANCE_NAME option is only the fallback when no device is given.
     """
-    default_player = (device_id or "").strip() or os.environ.get("INSTANCE_NAME", "").strip()
+    device_id = (device_id or "").strip()
+    if re.fullmatch(r"[0-9a-fA-F.:]+|unknown", device_id):  # no ?device_id=: the id is the client's IP, not a room
+        device_id = ""
+    default_player = device_id or os.environ.get("INSTANCE_NAME", "").strip()
 
     async def play_media_tool_handler(params: "FunctionCallParams") -> None:
         args = params.arguments or {}

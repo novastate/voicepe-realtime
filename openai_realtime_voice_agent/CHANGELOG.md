@@ -6,7 +6,7 @@ All notable changes to this add-on. Newest first.
 
 - **play_media utan nämnt rum spelar i rummet där någon frågade (köksprovet 2026-10-09 21:17).** Köket bad om musik och det spelade i
   kontoret: standardspelaren var `INSTANCE_NAME`, ett värde för hela processen ("kontor" på core), fast en process nu bär flera enheter.
-  Handlern får nu enhetens eget id (`koket`/`kontoret`) vid registrering; `INSTANCE_NAME` är bara reserv utan enhet. Test per rum i
+  Handlern får nu enhetens eget id (`koket`/`kontoret`) vid registrering; `INSTANCE_NAME` är bara reserv utan enhet eller när id:t är en IP/`unknown` (ingen `?device_id=`). Kvar, ej lagat här: `ask_openclaw` (`openclaw_tool.py`) skickar också processens `INSTANCE_NAME` som rum, så ett sent svar från köket annonseras i kontoret. Test per rum i
   `tests/test_play_media.py`.
 ## 0.27.38 (fork)
 

@@ -110,7 +110,8 @@ from app import play_media_tool
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("device,speaker", [("koket", "media_player.kok"), ("kontoret", "media_player.kontor")])
+@pytest.mark.parametrize("device,speaker", [("koket", "media_player.kok"), ("kontoret", "media_player.kontor"),
+                                            ("10.0.3.9", "media_player.kontor"), ("unknown", "media_player.kontor")])
 async def test_no_room_named_plays_on_the_asking_device(monkeypatch, device, speaker):
     monkeypatch.setenv("HA_API_URL", "http://comms/")
     monkeypatch.setenv("COMMS_NYCKEL", "k")
