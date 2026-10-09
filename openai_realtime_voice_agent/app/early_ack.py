@@ -91,15 +91,39 @@ READ_ALOUD_LEVANDE = ("Läs upp följande på svenska med levande, naturlig into
                       "som en vän som pratar avslappnat vid köksbordet: ")
 
 
-STROM_NIVA_DB = -2.3  # a streamed Core sentence next to the Live voice: TTS measured 2.3 dB louder (2026-10-09)
+STROM_MAL_DB = -21.1  # the Live voice's mean level over 8 sentences (tools/rostjamforelse.py, 2026-10-09)
 
 
-def daempa(pcm: bytes, db: float = STROM_NIVA_DB) -> bytes:
-    """`pcm` (PCM16) turned `db` decibels down (negative) or up, clipped at full scale."""
+def niva_db(pcm: bytes) -> float:
+    """Mean level (dB) of the active 40 ms Hann-windowed frames of 24 kHz PCM16: exactly the measure
+    tools/rostjamforelse.py reports as `ljudstyrka_db` (the Live target below was measured with it)."""
     import numpy as np
 
-    x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) * (10 ** (db / 20))
+    x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+    ram = RAW_RATE * 40 // 1000
+    if len(x) <= ram:  # shorter than one frame: nothing to measure, so normalisera leaves it alone
+        return STROM_MAL_DB
+    fonster = np.hanning(ram)
+    tak = np.sqrt(np.mean(x ** 2) + 1e-12)
+    db = []
+    for i in range(0, len(x) - ram, RAW_RATE // 100):
+        rms = np.sqrt(np.mean((x[i:i + ram] * fonster) ** 2) + 1e-12)
+        if rms >= 0.3 * tak:  # silence between words does not count
+            db.append(20 * np.log10(rms))
+    return float(np.mean(db)) if db else -60.0
+
+
+def normalisera(pcm: bytes, mal_db: float = STROM_MAL_DB, max_db: float = 6.0) -> bytes:
+    """`pcm` brought to `mal_db`, by at most `max_db` either way, clipped at full scale. A fixed gain was
+    wrong: a rendered sentence varies by +-2 dB from one to the next (measured), so each is levelled."""
+    import numpy as np
+
+    steg = max(-max_db, min(max_db, mal_db - niva_db(pcm)))
+    x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) * (10 ** (steg / 20))
     return np.clip(x, -32768, 32767).astype(np.int16).tobytes()
+
+
+RAW_RATE = 24000
 
 
 def to_clip_rate(pcm: bytes, mime: str) -> bytes:

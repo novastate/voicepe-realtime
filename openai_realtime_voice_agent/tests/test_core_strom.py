@@ -273,14 +273,25 @@ async def test_avbryt_stoppar_ett_pagaende_svar_mitt_i(monkeypatch):
     assert all(t.done() for t in taken_innan) and talat == ["Första meningen är hel nu och klar."]
 
 
-def test_daempa_sanker_niva_med_2_3_db_och_klipper_inte():
+def test_normalisera_jamnar_ut_varje_mening_till_livenivan_och_klipper_inte():
     import numpy as np
 
-    from app.early_ack import STROM_NIVA_DB, daempa
+    from app.early_ack import STROM_MAL_DB, niva_db, normalisera
 
-    x = (np.sin(np.arange(24000) / 10) * 12000).astype(np.int16)
-    ut = np.frombuffer(daempa(x.tobytes()), dtype=np.int16).astype(np.float32)
-    db = 20 * np.log10(np.sqrt(np.mean(ut ** 2)) / np.sqrt(np.mean(x.astype(np.float32) ** 2)))
-    assert abs(db - STROM_NIVA_DB) < 0.05 and len(ut) == len(x)
-    hog = daempa((np.full(100, 32767, dtype=np.int16)).tobytes(), db=6)  # up 6 dB: clipped, not wrapped
-    assert set(np.frombuffer(hog, dtype=np.int16).tolist()) == {32767}
+    for amp in (6000, 8000, 12000):  # sentences render at different levels
+        x = (np.sin(np.arange(48000) / 7) * amp).astype(np.int16).tobytes()
+        ut = normalisera(x)
+        assert abs(niva_db(ut) - STROM_MAL_DB) < 0.3 and len(ut) == len(x)
+    hog = normalisera((np.full(4800, 32000, dtype=np.int16)).tobytes(), mal_db=-1.0)  # up: clipped, not wrapped
+    assert int(np.frombuffer(hog, dtype=np.int16).min()) > 0
+    stilla = (np.sin(np.arange(48000) / 7) * 40).astype(np.int16).tobytes()
+    assert niva_db(normalisera(stilla)) - niva_db(stilla) <= 6.05  # at most 6 dB either way
+
+
+def test_normalisera_lamnar_ett_klipp_kortare_an_en_ram_orort():
+    import numpy as np
+
+    from app.early_ack import normalisera
+
+    kort = (np.ones(500, dtype=np.int16) * 3000).tobytes()  # 500 samples < one 960-sample frame
+    assert normalisera(kort) == kort
