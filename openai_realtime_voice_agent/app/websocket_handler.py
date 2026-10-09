@@ -23,6 +23,7 @@ from pipecat.services.openai.realtime import events as openai_rt_events
 from app.device_registry import DeviceConnection, DeviceRegistry, device_id_from_websocket
 from app.multi_client_transport import MixedFastAPIWebsocketTransport
 from app.providers import (
+    GEMINI,
     OPENAI,
     bana0_hit,
     bana0_miss,
@@ -1788,6 +1789,18 @@ class WebSocketHandler:
             serializer.tider = tider
             openai_service.tider = tider
 
+            # The parallel track (BANA0_PING, Gemini only): a hit also gives the model the audio and a line
+            # about what was done; the log stops it from doing the same tool call again.
+            atgardslogg = None
+            if provider == GEMINI and bana0.ping_paa() and hasattr(openai_service, "ping_and_answer"):
+                atgardslogg = bana0.Atgardslogg()
+                skyddade = bana0.skydda_verktyg(openai_service, atgardslogg)
+                logger.info(f"⚡ bana0: parallel track on, {skyddade} light tool(s) guarded against repeats")
+
+            async def _ping(hort, svar):
+                atgardslogg.skriv(hort, svar)
+                await openai_service.ping_and_answer(bana0.ping_text(hort, svar))
+
             async def _on_user_turn_end():
                 pcm = serializer.take_turn_audio()
                 motorns = getattr(openai_service, "held_seconds", lambda: None)()
@@ -1808,6 +1821,7 @@ class WebSocketHandler:
                     efter_traff=_efter_traff,
                     skapa_svar=lambda: bana0_miss(provider, openai_service),
                     skapa_svar_med_text=(lambda t: bana0_miss(provider, openai_service, t)) if bana0.text_till_modell_paa() else None,
+                    ping=_ping if atgardslogg is not None else None,
                     efter_miss=_efter_miss,
                     klockan=_klockan if klockan.klipp_paa() else None,
                     tider=tider,

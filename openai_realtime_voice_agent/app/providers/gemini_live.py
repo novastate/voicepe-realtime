@@ -503,6 +503,16 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             return None
         return rescue[0]
 
+    async def ping_and_answer(self, ping: str) -> None:
+        """Bana 0 hit with BANA0_PING: tell the model what the fast track did, then give it the held audio
+        too, so it answers personally without repeating the tool call and can correct a misheard order."""
+        if not getattr(self, "_held", None):
+            return
+        if not await self._vaken_for_tur():
+            return
+        await self._send_activity(text=ping)
+        await self.answer_turn()
+
     async def answer_turn_text(self, text: str) -> None:
         """Bana 0 missed and the local speech-to-text has the words: give Google THOSE
         instead of the held audio (LOCAL_TEXT_TO_MODEL, raawr US-032 experiment).
