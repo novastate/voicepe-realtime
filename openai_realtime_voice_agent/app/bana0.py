@@ -114,16 +114,22 @@ class Atgardslogg:
 
     def redan(self, verktyg: str, argument: dict) -> bool:
         verb = "Off" if verktyg.endswith("TurnOff") else "On" if verktyg.endswith("TurnOn") else None
+        ljusinstallning = verktyg.endswith("LightSet")  # brightness/colour right after a hit: the same order again
         argument = argument or {}
         # Every word of area/name/floor counts ("lampan i kontoret" is the place "kontoret"); a word that
         # only names the kind of thing says nothing about the place.
         ord_ = [w for key in ("area", "name", "floor") for w in str(argument.get(key) or "").lower().split()
-                if len(w) >= 4 and w not in _GENERISKA]
-        if verb is None or not ord_:
+                if len(w) >= 3 and w not in _GENERISKA]
+        if (verb is None and not ljusinstallning) or not ord_:
             return False
         nu = self.klocka()
         self._poster = [p for p in self._poster if nu - p[2] <= self.TTL_S]
-        return any(v == verb and any(w[:5] in h for w in ord_) for v, h, _ in self._poster)
+        # a word names the place when it and a heard word start the same way ('Kök' against 'köket')
+        return any((ljusinstallning or v == verb) and any(w[:5] in h or any(x.startswith(w[:3]) and w.startswith(x[:3]) for x in h.split()) for w in ord_)
+                   for v, h, _ in self._poster)
+
+
+_VAKTADE = ("HassTurnOn", "HassTurnOff", "HassLightSet")
 
 
 def skydda_verktyg(service, logg: "Atgardslogg") -> int:
@@ -144,7 +150,7 @@ def skydda_verktyg(service, logg: "Atgardslogg") -> int:
 
     antal = 0
     for namn, post in list(getattr(service, "_functions", {}).items()):
-        if isinstance(namn, str) and namn.endswith(("HassTurnOn", "HassTurnOff")):
+        if isinstance(namn, str) and namn.endswith(_VAKTADE):
             post.handler = vakta(namn, post.handler)
             antal += 1
 
@@ -153,7 +159,7 @@ def skydda_verktyg(service, logg: "Atgardslogg") -> int:
     orig_register = service.register_function
 
     def register_function(function_name, handler, *args, **kwargs):
-        if isinstance(function_name, str) and function_name.endswith(("HassTurnOn", "HassTurnOff")):
+        if isinstance(function_name, str) and function_name.endswith(_VAKTADE):
             handler = vakta(function_name, handler)
         return orig_register(function_name, handler, *args, **kwargs)
 

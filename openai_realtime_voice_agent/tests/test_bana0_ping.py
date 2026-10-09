@@ -108,8 +108,10 @@ async def test_ping_and_answer_skickar_raden_fore_ljudet_och_vaecker_motorn():
         handelser.append("ljud")
 
     ns = SimpleNamespace(_held=[object()], _vaken_for_tur=vaken, _send_activity=skicka, answer_turn=svara)
+    ns._turn_rescue = "satt av answer_turn"
     await S.ping_and_answer(ns, "[huset] ...")
     assert handelser == ["vaken", ("skicka", ["text"]), "ljud"]
+    assert ns._turn_rescue is None  # a hit is not replayed after a dropped link
     ns._held = None
     handelser.clear()
     await S.ping_and_answer(ns, "x")
@@ -124,6 +126,16 @@ def test_loggen_ser_rummet_i_name_och_floor_och_hoppar_over_ord_som_bara_namnger
     assert logg.redan("intent__HassTurnOff", {"floor": "kontoret"}) is True
     assert logg.redan("intent__HassTurnOff", {"area": "Kontor"}) is True
     assert logg.redan("intent__HassTurnOff", {"name": "lampan"}) is False
+
+
+def test_kok_och_koket_ar_samma_plats_och_en_ljusinstallning_efter_en_traff_ar_samma_order():
+    """G on #42 omgång 2 (fynd 1 och 2)."""
+    logg = bana0.Atgardslogg()
+    logg.skriv("Släck i köket.", "Släckte")
+    assert logg.redan("intent__HassTurnOff", {"area": "Kök"}) is True
+    assert logg.redan("light__HassLightSet", {"area": "kontoret"}) is False  # another place
+    logg.skriv("Släck i kontoret.", "Släckte")
+    assert logg.redan("light__HassLightSet", {"area": "kontoret", "brightness": 10}) is True
 
 
 def test_en_radbrytning_i_det_hoerda_kan_inte_starta_en_ny_huset_rad():

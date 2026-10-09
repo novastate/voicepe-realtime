@@ -513,6 +513,9 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             return
         await self._send_activity(text=ping)
         await self.answer_turn()
+        # The hit is already done: a replay of this audio after a dropped link would reach the model without
+        # the line (G on #42) and could do it a second time.
+        self._turn_rescue = None
 
     async def answer_turn_text(self, text: str) -> None:
         """Bana 0 missed and the local speech-to-text has the words: give Google THOSE
