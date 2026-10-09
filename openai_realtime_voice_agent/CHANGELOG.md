@@ -2,6 +2,12 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.29 (fork)
+
+- **Nivån på strömmade Core-meningar (raawr US-047 AC-4).** TTS mättes 2,3 dB högre än Live-rösten
+  (`tools/rostjamforelse.py`); meningar som `fraga_core` talar på Gemini dämpas nu 2,3 dB
+  (`early_ack.daempa`, `STROM_NIVA_DB`), så rösten inte hoppar i volym mellan Live-svar och mening.
+
 ## 0.27.28 (fork)
 
 - **Core-svar som talas medan de skrivs, bakom flagga (raawr US-047 AC-4, US-036).** Med

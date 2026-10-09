@@ -91,6 +91,17 @@ READ_ALOUD_LEVANDE = ("Läs upp följande på svenska med levande, naturlig into
                       "som en vän som pratar avslappnat vid köksbordet: ")
 
 
+STROM_NIVA_DB = -2.3  # a streamed Core sentence next to the Live voice: TTS measured 2.3 dB louder (2026-10-09)
+
+
+def daempa(pcm: bytes, db: float = STROM_NIVA_DB) -> bytes:
+    """`pcm` (PCM16) turned `db` decibels down (negative) or up, clipped at full scale."""
+    import numpy as np
+
+    x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) * (10 ** (db / 20))
+    return np.clip(x, -32768, 32767).astype(np.int16).tobytes()
+
+
 def to_clip_rate(pcm: bytes, mime: str) -> bytes:
     """PCM16 mono at the rate in `mime` ("audio/L16;codec=pcm;rate=24000") -> 24 kHz."""
     import numpy as np
