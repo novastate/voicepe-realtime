@@ -36,6 +36,35 @@ from app.session_state import SessionMaskin
 # The turn's audio may have grown by this much since the early speech-to-text started
 # (the last stretch of quiet, ~0.3 s at 16 kHz PCM16 mono) and still be the same words.
 SPEC_STT_SLACK_BYTES = 16000 * 2 * 6 // 10
+TUR_LJUD_DIR = os.environ.get("TUR_LJUD_DIR", "")  # a diagnostic: save each turn's mic audio here
+TUR_LJUD_MAX = 200
+
+
+def _spara_tur(device_id, pcm, forrulle_bytes, text):
+    """Save one turn as <dir>/<time>-<device>.wav + .json (pre-roll bytes) + .txt (what the local
+    speech-to-text heard, a stand-in for the truth). OFF unless TUR_LJUD_DIR is set. It is a voice
+    in a room: for a comparison, then deleted (raawr US-032, 2026-10-09)."""
+    if not TUR_LJUD_DIR or not pcm:
+        return
+    try:
+        import wave
+        os.makedirs(TUR_LJUD_DIR, exist_ok=True)
+        if len([f for f in os.listdir(TUR_LJUD_DIR) if f.endswith(".wav")]) >= TUR_LJUD_MAX:
+            return
+        namn = os.path.join(TUR_LJUD_DIR, f"{time.strftime('%Y%m%d-%H%M%S')}-{device_id}")
+        with wave.open(namn + ".wav", "wb") as f:
+            f.setnchannels(1)
+            f.setsampwidth(2)
+            f.setframerate(16000)
+            f.writeframes(pcm)
+        with open(namn + ".json", "w") as f:
+            json.dump({"forrulle_bytes": int(forrulle_bytes)}, f)
+        with open(namn + ".txt", "w", encoding="utf-8") as f:
+            f.write(text or "")
+    except Exception as e:
+        logger.warning(f"⚠️ could not save the turn audio: {e!r}")
+
+
 SPEC_LANGD_SKILLNAD_S = 0.3  # bana 0's turn audio vs what the engine holds
 SPEC_STT_KONTROLL = os.environ.get("SPEC_STT_KONTROLL", "1") != "0"  # 0 = off
 
@@ -1752,6 +1781,11 @@ class WebSocketHandler:
                     logger.debug(f"bana0: the check failed ({e!r})")
 
             async def _stt(pcm, t):
+                text = await _stt_inner(pcm, t)
+                spec["text"] = text
+                return text
+
+            async def _stt_inner(pcm, t):
                 task, n = spec.pop("task", None), spec.pop("n", 0)
                 if task is not None and 0 <= len(pcm) - n <= SPEC_STT_SLACK_BYTES:
                     try:
@@ -1771,6 +1805,7 @@ class WebSocketHandler:
                 return await bana0.transkribera(pcm, host, port, t)
 
             async def _on_user_turn_end():
+                forrulle = getattr(serializer, "forrulle_bytes", 0)
                 pcm = serializer.take_turn_audio()
                 motorns = getattr(openai_service, "held_seconds", lambda: None)()
                 if motorns is not None:
@@ -1795,6 +1830,7 @@ class WebSocketHandler:
                 )
                 if bana in ("bana0", "klockan"):
                     await phase_emitter.force_idle(bana)
+                _spara_tur(client_id, pcm, forrulle, spec.pop("text", None))
 
             openai_service.on_user_turn_end = _on_user_turn_end
             def _tur_borjar():

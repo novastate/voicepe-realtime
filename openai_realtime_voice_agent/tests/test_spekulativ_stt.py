@@ -193,3 +193,31 @@ async def test_motorn_med_mindre_ljud_an_banan_ar_normalt_och_ger_bara_info(ha_s
         await asyncio.sleep(0.05)
     rader = [r for r in caplog.records if "the engine holds 0.00 s" in r.getMessage()]
     assert rader and all(r.levelno == logging.INFO for r in rader)
+
+
+@pytest.mark.asyncio
+async def test_turens_ljud_sparas_bara_nar_katalogen_ar_satt(ha_svarar, monkeypatch, tmp_path):
+    from app import websocket_handler
+    import json as _json
+    import wave
+
+    async def kor(katalog):
+        monkeypatch.setattr(websocket_handler, "TUR_LJUD_DIR", katalog)
+        ha_svarar.append("Släckte i kontoret")
+        server, port, seen = await _wyoming(_transcript("släck kontoret"))
+        connection, service, google, said, idle = _gemini_koppling(
+            ("127.0.0.1", port), [None, "start", "preend", None, "end"])
+        async with server:
+            await _speak(connection, service, 5)
+            await service._turn_end_task
+            await asyncio.sleep(0.05)
+
+    await kor("")
+    assert list(tmp_path.iterdir()) == []
+    await kor(str(tmp_path))
+    wavs = sorted(tmp_path.glob("*.wav"))
+    assert len(wavs) == 1
+    with wave.open(str(wavs[0])) as f:
+        assert f.getframerate() == 16000 and f.getnframes() > 0
+    assert wavs[0].with_suffix(".txt").read_text(encoding="utf-8") == "släck kontoret"
+    assert "forrulle_bytes" in _json.loads(wavs[0].with_suffix(".json").read_text())

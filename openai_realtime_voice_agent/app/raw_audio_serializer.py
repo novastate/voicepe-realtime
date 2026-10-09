@@ -81,6 +81,7 @@ class RawAudioSerializer(FrameSerializer):
         # (live 2026-10-09 12:09: 0.8 s of a question was missing from bana 0's audio).
         self._ring = bytearray()
         self._samla_tur = False
+        self.forrulle_bytes = 0
         # True while the assistant is speaking (set by build_pipeline from the
         # phase): its own voice must never become a turn's audio.
         self.is_replying = lambda: False
@@ -354,6 +355,7 @@ class RawAudioSerializer(FrameSerializer):
             self.turn_pcm = bytearray(self._ring)
         self._samla_tur = True
         del self.turn_pcm[:-TURN_PCM_PREROLL]
+        self.forrulle_bytes = len(self.turn_pcm)  # how much of the turn is pre-roll (the capture says so)
         return ringen  # True when the pre-roll came from the ring (logged by the caller)
 
     def peek_turn_audio(self) -> bytes:
