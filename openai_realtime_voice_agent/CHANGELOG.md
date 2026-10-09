@@ -2,6 +2,15 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.27.26 (fork)
+
+- **Diagnostik: spara turens mikrofonljud (raawr US-032, jämförelseprovet 2026-10-09).** Med
+  `TUR_LJUD_DIR=/sökväg` sparas varje tur (filer 0600 i en katalog 0700, rensas efter 7 dygn) som `<tid>-<enhet>.wav` (16 kHz mono) + `.json`
+  (`forrulle_bytes`) + `.txt` (vad lokala tal-till-text hörde, som ersättning för sanningen), högst 200.
+  AV som standard. Det är en röst i ett rum: används för jämförelsen och raderas sedan.
+  Ingen ändring i vad agenten gör. Verktyget `tools/gemini_jamforelse.py` (`--radera DIR` tar bort alla sparade turer) jämför hur Gemini Live hör
+  samma ljud i drift-läget och i Googles eget läge.
+
 ## 0.27.25 (fork)
 
 - **Experiment: lokalt hörd text till modellen (raawr US-032, Hemma ja 2026-10-09).** Live

@@ -36,6 +36,53 @@ from app.session_state import SessionMaskin
 # The turn's audio may have grown by this much since the early speech-to-text started
 # (the last stretch of quiet, ~0.3 s at 16 kHz PCM16 mono) and still be the same words.
 SPEC_STT_SLACK_BYTES = 16000 * 2 * 6 // 10
+TUR_LJUD_DIR = os.environ.get("TUR_LJUD_DIR", "")  # a diagnostic: save each turn's mic audio here
+TUR_LJUD_MAX = 200
+
+
+TUR_LJUD_DAGAR = 7  # saved turns older than this are deleted at the next save
+
+
+def _spara_tur(device_id, pcm, forrulle_bytes, text):
+    """Save one turn as <dir>/<time>-<device>.wav + .json (pre-roll bytes) + .txt (what the local
+    speech-to-text heard, a stand-in for the truth). OFF unless TUR_LJUD_DIR is set. It is a voice
+    in a room: owner-only files (0600 in a 0700 directory), deleted after TUR_LJUD_DAGAR days at the
+    next save, and `tools/gemini_jamforelse.py --radera DIR` removes the lot (raawr US-032)."""
+    if not TUR_LJUD_DIR or not pcm:
+        return
+    try:
+        import re
+        import wave
+
+        os.makedirs(TUR_LJUD_DIR, mode=0o700, exist_ok=True)
+        os.chmod(TUR_LJUD_DIR, 0o700)
+        gammalt = time.time() - TUR_LJUD_DAGAR * 86400
+        for f in os.listdir(TUR_LJUD_DIR):
+            sokvag = os.path.join(TUR_LJUD_DIR, f)
+            if f.endswith((".wav", ".json", ".txt")) and os.path.getmtime(sokvag) < gammalt:
+                os.remove(sokvag)
+        if len([f for f in os.listdir(TUR_LJUD_DIR) if f.endswith(".wav")]) >= TUR_LJUD_MAX:
+            return
+        rent = re.sub(r"[^A-Za-z0-9_-]", "_", str(device_id))[:40]
+        namn = os.path.join(TUR_LJUD_DIR, f"{time.strftime('%Y%m%d-%H%M%S')}-{rent}")
+
+        def oppna(suffix):
+            return os.fdopen(os.open(namn + suffix, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb")
+
+        with oppna(".wav") as raw:
+            with wave.open(raw, "wb") as f:
+                f.setnchannels(1)
+                f.setsampwidth(2)
+                f.setframerate(16000)
+                f.writeframes(pcm)
+        with oppna(".json") as f:
+            f.write(json.dumps({"forrulle_bytes": int(forrulle_bytes)}).encode())
+        with oppna(".txt") as f:
+            f.write((text or "").encode("utf-8"))
+    except Exception as e:
+        logger.warning(f"⚠️ could not save the turn audio: {type(e).__name__}")
+
+
 SPEC_LANGD_SKILLNAD_S = 0.3  # bana 0's turn audio vs what the engine holds
 SPEC_STT_KONTROLL = os.environ.get("SPEC_STT_KONTROLL", "1") != "0"  # 0 = off
 
@@ -1752,6 +1799,11 @@ class WebSocketHandler:
                     logger.debug(f"bana0: the check failed ({e!r})")
 
             async def _stt(pcm, t):
+                text = await _stt_inner(pcm, t)
+                spec["text"] = text
+                return text
+
+            async def _stt_inner(pcm, t):
                 task, n = spec.pop("task", None), spec.pop("n", 0)
                 if task is not None and 0 <= len(pcm) - n <= SPEC_STT_SLACK_BYTES:
                     try:
@@ -1771,6 +1823,7 @@ class WebSocketHandler:
                 return await bana0.transkribera(pcm, host, port, t)
 
             async def _on_user_turn_end():
+                forrulle = getattr(serializer, "forrulle_bytes", 0)
                 pcm = serializer.take_turn_audio()
                 motorns = getattr(openai_service, "held_seconds", lambda: None)()
                 if motorns is not None:
@@ -1795,6 +1848,7 @@ class WebSocketHandler:
                 )
                 if bana in ("bana0", "klockan"):
                     await phase_emitter.force_idle(bana)
+                _spara_tur(client_id, pcm, forrulle, spec.pop("text", None))
 
             openai_service.on_user_turn_end = _on_user_turn_end
             def _tur_borjar():

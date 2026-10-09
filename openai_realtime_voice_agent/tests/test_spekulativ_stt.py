@@ -193,3 +193,70 @@ async def test_motorn_med_mindre_ljud_an_banan_ar_normalt_och_ger_bara_info(ha_s
         await asyncio.sleep(0.05)
     rader = [r for r in caplog.records if "the engine holds 0.00 s" in r.getMessage()]
     assert rader and all(r.levelno == logging.INFO for r in rader)
+
+
+@pytest.mark.asyncio
+async def test_turens_ljud_sparas_bara_nar_katalogen_ar_satt(ha_svarar, monkeypatch, tmp_path):
+    from app import websocket_handler
+    import json as _json
+    import wave
+
+    async def kor(katalog):
+        monkeypatch.setattr(websocket_handler, "TUR_LJUD_DIR", katalog)
+        ha_svarar.append("Släckte i kontoret")
+        server, port, seen = await _wyoming(_transcript("släck kontoret"))
+        connection, service, google, said, idle = _gemini_koppling(
+            ("127.0.0.1", port), [None, "start", "preend", None, "end"])
+        async with server:
+            await _speak(connection, service, 5)
+            await service._turn_end_task
+            await asyncio.sleep(0.05)
+
+    await kor("")
+    assert list(tmp_path.iterdir()) == []
+    await kor(str(tmp_path))
+    wavs = sorted(tmp_path.glob("*.wav"))
+    assert len(wavs) == 1
+    with wave.open(str(wavs[0])) as f:
+        assert f.getframerate() == 16000 and f.getnframes() > 0
+    assert wavs[0].with_suffix(".txt").read_text(encoding="utf-8") == "släck kontoret"
+    assert "forrulle_bytes" in _json.loads(wavs[0].with_suffix(".json").read_text())
+
+
+def test_sparade_turer_ar_bara_for_agaren_gamla_rensas_och_namnet_ar_rent(monkeypatch, tmp_path):
+    import os
+    import stat
+    import time as _time
+    from app import websocket_handler as wh
+
+    katalog = tmp_path / "turer"
+    monkeypatch.setattr(wh, "TUR_LJUD_DIR", str(katalog))
+    gammal = tmp_path / "x"
+    katalog.mkdir(mode=0o755)
+    gammal = katalog / "20200101-000000-koket.wav"
+    gammal.write_bytes(b"x")
+    os.utime(gammal, (_time.time() - 8 * 86400,) * 2)
+    wh._spara_tur("../../etc/koket", b"\x01\x00" * 1600, 100, "hej")
+    assert not gammal.exists()  # older than a week: deleted at the next save
+    assert stat.S_IMODE(os.stat(katalog).st_mode) == 0o700
+    filer = sorted(katalog.iterdir())
+    assert len(filer) == 3 and all(f.parent == katalog for f in filer)  # the name cannot climb out
+    assert all(stat.S_IMODE(os.stat(f).st_mode) == 0o600 for f in filer)
+    assert "/" not in filer[0].name and ".." not in filer[0].name
+
+
+def test_jamforelseverktyget_skrubbar_nyckeln_ur_felen(monkeypatch):
+    import importlib.util
+    import pathlib
+
+    spec = importlib.util.spec_from_file_location(
+        "gemini_jamforelse", pathlib.Path(__file__).parent.parent / "tools" / "gemini_jamforelse.py")
+    mod = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(mod)
+    except ImportError:
+        pytest.skip("google-genai not installed here")
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaSyHEMLIG-nyckel_123")
+    url = "ConnectionError('wss://x/v1beta/ws?key=AIzaSyHEMLIG-nyckel_123&alt=sse')"
+    rent = mod.skrubba(url + " och AIzaSyHEMLIG-nyckel_123 en gång till")
+    assert "AIzaSy" not in rent and "<dold>" in rent
