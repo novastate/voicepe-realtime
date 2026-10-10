@@ -18,7 +18,7 @@ from app.core_strom import (
     strom_url,
 )
 from app.klockan import klipp_paa as klockan_klipp_paa
-from app.mcp_service import HomeAssistantMCPService
+from app.mcp_service import CommsDoorMCPService, HomeAssistantMCPService
 from app.phase_emitter import TurnLiveness
 from app.idag import Idag
 from app.early_ack import EARLY_ACK_PHRASES, ack_phrase, gemini_tts, paa as early_ack_paa, xai_tts
@@ -287,6 +287,9 @@ def _compact_slots(tool_name: str, properties: dict) -> dict:
 class Application:
     """Main application class using Pipecat."""
 
+    dorr_client = None  # comms' own MCP door, see CommsDoorMCPService
+    _dorr_namn: frozenset = frozenset()  # tool names the door handed out the last time it was asked
+
     # Local turn end on Gemini; GEMINI_TURN_SILENCE_MS overrides it at start.
     gemini_turn_silence_ms = TURN_SILENCE_MS
     # Same on xAI (0.25.3): XAI_TURN_SILENCE_MS; XAI_TURN_DETECTION=server
@@ -526,6 +529,14 @@ class Application:
         except Exception as e:
             logger.warning(f"⚠️ Failed to initialize Home Assistant MCP Client: {e}")
         
+        # comms' own MCP door (raawr US-021): a second, dynamic tool source, off unless COMMS_MCP_DORR=1.
+        self.dorr_client = None
+        try:
+            if ha_api.configured():
+                self.dorr_client = await CommsDoorMCPService().initialize()
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to initialize the comms MCP door client: {e}")
+
         # Initialize audio recording before the handler so its pipeline can
         # grant exactly one connection ownership of the shared file recorder.
         self.audio_recording_service = AudioRecordingService(
@@ -1105,11 +1116,33 @@ class Application:
         if timeout is None:
             timeout = _env_seconds("MCP_TOOLS_TIMEOUT_SECONDS", 5.0)
         try:
-            return await asyncio.wait_for(
+            ha = await asyncio.wait_for(
                 self.mcp_client.get_tools_schema(), timeout=timeout
             )
         except asyncio.TimeoutError:
             raise TimeoutError(f"no answer from Home Assistant in {timeout:g} s")
+        return await self._med_dorrens_verktyg(ha, timeout)
+
+    async def _med_dorrens_verktyg(self, ha, timeout: float):
+        """HA's tools plus the ones comms' own door lists right now (`tools/list`, asked each time).
+
+        The door failing never costs HA's tools: the door's tools are then simply missing for this session and
+        the next wake asks again. On a name both have, HA's wins."""
+        if self.dorr_client is None:
+            return ha
+        from pipecat.adapters.schemas.tools_schema import ToolsSchema
+
+        try:
+            dorr = await asyncio.wait_for(self.dorr_client.get_tools_schema(), timeout=timeout)
+        except Exception as e:
+            self._dorr_namn = frozenset()
+            logger.warning(f"⚠️ comms MCP door: no tool list ({e!r}) — HA's tools only this time")
+            return ha
+        har = {f.name for f in ha.standard_tools}
+        nya = [f for f in dorr.standard_tools if f.name not in har]
+        self._dorr_namn = frozenset(f.name for f in nya)
+        logger.info(f"✅ comms MCP door lists {len(dorr.standard_tools)} tools, {len(nya)} added: {sorted(self._dorr_namn)}")
+        return ToolsSchema(standard_tools=list(ha.standard_tools) + nya)
 
     def _ha_tool_definitions(self, mcp_tools_schema) -> list:
         """The HA tools the model gets to see, in OpenAI Realtime shape.
@@ -1152,8 +1185,15 @@ class Application:
         handlers rather than adding a second set.
         """
         try:
-            await self.mcp_client.register_tools_schema(mcp_tools_schema, service)
-            logger.info(f"✅ Registered {len(mcp_tools_schema.standard_tools)} MCP tool handlers")
+            from pipecat.adapters.schemas.tools_schema import ToolsSchema
+
+            dorrens = [f for f in mcp_tools_schema.standard_tools if f.name in self._dorr_namn]
+            hass = [f for f in mcp_tools_schema.standard_tools if f.name not in self._dorr_namn]
+            await self.mcp_client.register_tools_schema(ToolsSchema(standard_tools=hass), service)
+            logger.info(f"✅ Registered {len(hass)} MCP tool handlers")
+            if dorrens and self.dorr_client is not None:  # each tool is called on the client it came from
+                await self.dorr_client.register_tools_schema(ToolsSchema(standard_tools=dorrens), service)
+                logger.info(f"✅ Registered {len(dorrens)} comms-door tool handlers")
         except Exception as e:
             logger.warning(f"⚠️ Failed to register MCP tool handlers: {e}")
         # MUST come AFTER register_tools_schema: pipecat registers a handler
