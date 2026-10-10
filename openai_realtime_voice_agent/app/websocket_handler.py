@@ -1775,6 +1775,19 @@ class WebSocketHandler:
                     spec["n"] = len(pcm)
                     spec["task"] = asyncio.get_running_loop().create_task(
                         bana0.transkribera(pcm, host, port, timeout_stt))
+                    if bana0.tidigt_slut_paa() and hasattr(openai_service, "end_early"):
+                        spec["task"].add_done_callback(lambda t: _tidigt_slut(t))
+
+            def _tidigt_slut(task):
+                """The early text is a whole command: do not wait out the last stretch of silence."""
+                try:
+                    if task.cancelled() or spec.get("task") is not task:
+                        return
+                    text = task.result()
+                    if bana0.komplett_kommando(text) and openai_service.end_early():
+                        logger.info(f"⚡ bana0: whole command {text!r} at the early end, the turn ends now")
+                except Exception as e:
+                    logger.debug(f"bana0: early end skipped ({e!r})")
 
             kontroller = set()
 

@@ -636,3 +636,235 @@ async def test_vackning_over_svaret_samlar_traffen_aven_om_fasen_inte_flyttat_si
     assert ser.take_turn_audio() == PCM
     await ser.deserialize(PCM)  # next turn, still replying and no new start: his own voice is not collected
     assert ser.take_turn_audio() == b""
+
+
+# --- A whole command ends the turn at "preend" (raawr US-047) -----------------
+
+
+@pytest.mark.parametrize("text,ok", [
+    ("släck kontoret", True), ("Tänd lampan i köket.", True), ("vad är klockan", True),
+    ("släck", False), ("tänd lampan i", False), ("släck köket och", False), ("slå på", False),
+    ("vad är huvudstaden i frankrike", False), (None, False), ("", False),
+    # raawr US-047, G's findings: unfinished or turned-around orders and plain words that are not light orders
+    ("tänd inte", False), ("tänd inte köket", False), ("kan du tända", False), ("tänd lampan för", False),
+    ("tänd lampan så", False), ("släck när", False), ("tänd köket och släck", False), ("släck köket och tänd", False),
+    ("vi går på bio", False), ("jag tänkte på bio", False), ("ställ klockan på sju", False), ("stäng dörren", False),
+    ("slå av", False), ("stäng av", False), ("slå på köket", True), ("stäng av taket", True),
+])
+def test_komplett_kommando(text, ok):
+    assert bana0.komplett_kommando(text) is ok
+
+
+@pytest.mark.asyncio
+async def test_end_early_ends_the_turn_once_and_swallows_the_normal_end():
+    """At "preend" a whole command ends the turn; the detector's own "end" a moment later must not
+    start the decision again. A speaker who has started again (the pre-detector hears speech) is not cut."""
+    from test_gemini_provider import _ScriptedTurns, _frame, _options, _wire, OPENAI_SHAPE
+    from app.providers import build_service
+
+    service = build_service("gemini", _options(), OPENAI_SHAPE)
+    _wire(service, _ScriptedTurns(["start", None, "preend", None, "end", "start"]))
+    avgjorde = []
+
+    async def on_end():
+        avgjorde.append(len(service._held or []))
+        service._held = None
+
+    service.on_user_turn_end = on_end
+    for b in range(3):
+        await service._send_user_audio(_frame(b))
+    assert service.end_early() is True
+    assert service.end_early() is False  # once per turn
+    await asyncio.sleep(0.05)
+    assert avgjorde == [4]  # pre-roll + three frames
+    await service._send_user_audio(_frame(3))
+    await service._send_user_audio(_frame(4))  # the normal "end": swallowed, no second decision
+    await asyncio.sleep(0.05)
+    assert avgjorde == [4]  # pre-roll + three frames
+    assert service._tidigt is False
+    await service._send_user_audio(_frame(5))  # the next "start" opens a fresh turn
+    assert service._held is not None
+
+
+@pytest.mark.asyncio
+async def test_end_early_does_not_cut_a_speaker_who_resumed():
+    from test_gemini_provider import _ScriptedTurns, _frame, _options, _wire, OPENAI_SHAPE
+    from app.providers import build_service
+
+    service = build_service("gemini", _options(), OPENAI_SHAPE)
+    turns = _ScriptedTurns(["start", None])
+    _wire(service, turns)
+    service.on_user_turn_end = lambda: None
+    for b in range(2):
+        await service._send_user_audio(_frame(b))
+    turns._pre_speaking = True
+    assert service.end_early() is False
+
+
+@pytest.mark.asyncio
+async def test_end_early_is_refused_when_the_normal_end_already_decided_the_turn():
+    """The early text can come after the normal end. Then the turn is decided already: no second decision,
+    no second timing line (G, PR #53)."""
+    from test_gemini_provider import _ScriptedTurns, _frame, _options, _wire, OPENAI_SHAPE
+    from app.providers import build_service
+
+    service = build_service("gemini", _options(), OPENAI_SHAPE)
+    _wire(service, _ScriptedTurns(["start", None, "end"]))
+    avgjorde = []
+
+    async def on_end():
+        avgjorde.append(1)
+
+    service.on_user_turn_end = on_end
+    for b in range(3):
+        await service._send_user_audio(_frame(b))
+    await asyncio.sleep(0.05)
+    assert avgjorde == [1]
+    service._held = [object()]  # the hook has not cleared it yet
+    assert service.end_early() is False
+
+
+@pytest.mark.asyncio
+async def test_speech_that_resumes_after_an_early_end_opens_a_turn_of_its_own():
+    """He goes on talking after the early end: the detector would never call that a new start. The
+    continuation must not be thrown away with the decided turn (G, PR #53)."""
+    from test_gemini_provider import _ScriptedTurns, _frame, _options, _wire, OPENAI_SHAPE
+    from app.providers import build_service
+
+    service = build_service("gemini", _options(), OPENAI_SHAPE)
+    turns = _ScriptedTurns(["start", None, "preend", None, None])
+    _wire(service, turns)
+
+    async def on_end():
+        service._held = None
+
+    service.on_user_turn_end = on_end
+    for b in range(3):
+        await service._send_user_audio(_frame(b))
+    assert service.end_early() is True
+    await asyncio.sleep(0.05)
+    turns._pre_speaking = True  # the pre-detector hears him again
+    await service._send_user_audio(_frame(3))
+    assert service._tidigt is False
+    assert turns.resets == 1
+
+
+@pytest.mark.asyncio
+async def test_early_end_times_the_turn_from_the_end_of_speech_not_from_the_text():
+    """The speech ended PRE_END_MS before "preend"; text that came 0.2 s later must not move it."""
+    from test_gemini_provider import _ScriptedTurns, _frame, _options, _wire, OPENAI_SHAPE
+    from app.providers import build_service
+    from app.providers.local_turns import PRE_END_MS
+
+    service = build_service("gemini", _options(), OPENAI_SHAPE)
+    _wire(service, _ScriptedTurns(["start", None, "preend"]))
+    tystnad = []
+
+    class Tider:
+        def start(self, s):
+            tystnad.append(s)
+
+    service.tider = Tider()
+    service.on_user_turn_end = lambda: asyncio.sleep(0)
+    for b in range(3):
+        await service._send_user_audio(_frame(b))
+    await asyncio.sleep(0.2)
+    assert service.end_early() is True
+    assert tystnad[0] >= PRE_END_MS / 1000 + 0.19
+
+
+@pytest.mark.asyncio
+async def test_continuation_after_an_early_end_gets_its_own_decision_when_the_hook_still_holds_the_turn():
+    """G's second pass: bana 0 holds the decided turn (waiting for comms) while he goes on; the rest must be
+    its own turn, decided after the first, not merged into the held audio that a hit throws away."""
+    from test_gemini_provider import _ScriptedTurns, _frame, _options, _wire, OPENAI_SHAPE
+    from app.providers import build_service
+
+    service = build_service("gemini", _options(), OPENAI_SHAPE)
+    turns = _ScriptedTurns(["start", None, "preend", None, "start", None, "end"])
+    _wire(service, turns)
+    frisl = asyncio.Event()
+    avgjorde = []
+    starter = []
+    service.on_user_turn_start = lambda: starter.append(1)
+
+    async def on_end():
+        avgjorde.append(len(service._held or []))
+        if len(avgjorde) == 1:
+            await frisl.wait()
+        service._held = None  # a hit: drop_turn
+
+    service.on_user_turn_end = on_end
+    for b in range(3):
+        await service._send_user_audio(_frame(b))
+    assert service.end_early() is True
+    await asyncio.sleep(0.05)
+    turns._pre_speaking = True
+    for b in range(3, 7):  # the continuation: reset, start, quiet, end
+        await service._send_user_audio(_frame(b))
+    assert avgjorde == [4]  # still only the first decision; the continuation waits
+    frisl.set()
+    await asyncio.sleep(0.1)
+    assert len(avgjorde) == 2 and avgjorde[1] >= 3  # its own turn, with its own frames
+    assert starter == [1, 1]  # the first turn's start and the continuation's own
+
+
+@pytest.mark.asyncio
+async def test_a_drop_in_the_middle_of_the_continuation_keeps_what_was_said_of_it():
+    """G's third pass: a hit drops the first turn while the continuation is being collected. The continuation
+    must not be left half-collected: it reopens as a turn of its own with its frames as the pre-roll."""
+    from test_gemini_provider import _ScriptedTurns, _frame, _options, _wire, OPENAI_SHAPE
+    from app.providers import build_service
+
+    service = build_service("gemini", _options(), OPENAI_SHAPE)
+    turns = _ScriptedTurns(["start", None, "preend", None, None, "start"])
+    _wire(service, turns)
+    service.on_user_turn_end = lambda: asyncio.sleep(0)
+    for b in range(3):
+        await service._send_user_audio(_frame(b))
+    assert service.end_early() is True
+    await asyncio.sleep(0.05)
+    service._held = [object()]  # bana 0 is still deciding the first turn
+    turns._pre_speaking = True
+    for b in range(3, 5):
+        await service._send_user_audio(_frame(b))
+    assert service._forts is not None and len(service._forts) == 2
+    await service.drop_turn()  # a hit: the first turn is dropped
+    assert service._forts is None and service._held is None
+    assert bytes(service._preroll) == _frame(3).audio + _frame(4).audio
+    await service._send_user_audio(_frame(5))  # still talking: the detector opens it again
+    assert service._held is not None and _frame(3).audio in b"".join(f.audio for f in service._held)
+
+
+@pytest.mark.asyncio
+async def test_a_decision_that_ends_in_the_middle_of_the_continuation_hands_it_the_turn():
+    """A's FAIL on PR #53: a miss or a ping clears the held turn without drop_turn while the continuation is
+    collected. The continuation becomes the held turn, is decided at its own end, and the next turn is answered."""
+    from test_gemini_provider import _ScriptedTurns, _frame, _options, _wire, OPENAI_SHAPE
+    from app.providers import build_service
+
+    service = build_service("gemini", _options(), OPENAI_SHAPE)
+    turns = _ScriptedTurns(["start", None, "preend", None, "start", None, "end", "start", None, "end"])
+    _wire(service, turns)
+    avgjorde = []
+
+    async def on_end():
+        avgjorde.append(len(service._held or []))
+        service._held = None  # answer_turn: the miss path clears it, no drop_turn
+
+    service.on_user_turn_end = on_end
+    for b in range(3):
+        await service._send_user_audio(_frame(b))
+    assert service.end_early() is True
+    await asyncio.sleep(0.05)
+    assert avgjorde == [4] and service._held is None
+    turns._pre_speaking = True
+    for b in range(3, 7):  # the continuation after the first decision is over: reset, start, quiet, end
+        await service._send_user_audio(_frame(b))
+    await asyncio.sleep(0.05)
+    assert len(avgjorde) == 2, "the continuation must be decided on its own"
+    assert service._forts is None
+    for b in range(7, 10):  # and the turn after that is answered too
+        await service._send_user_audio(_frame(b))
+    await asyncio.sleep(0.05)
+    assert len(avgjorde) == 3

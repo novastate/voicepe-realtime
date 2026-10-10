@@ -57,6 +57,41 @@ def ping_paa() -> bool:
     return os.environ.get("BANA0_PING", "0") == "1"
 
 
+def tidigt_slut_paa() -> bool:
+    """Gemini: a turn whose early speech-to-text is a complete command ends at "preend" instead of
+    waiting the last stretch of silence (raawr US-047). OFF by default. TIDIGT_SLUT=1 turns it on."""
+    return os.environ.get("TIDIGT_SLUT", "0") == "1"
+
+
+# A command that ends on one of these is still going: "tänd lampan i", "släck köket och", "tänd inte", "slå på".
+_OFARDIG_SLUT = {"och", "samt", "eller", "men", "i", "på", "av", "vid", "till", "med", "den", "det", "de", "en", "ett",
+                 "som", "att", "också", "sen", "sedan", "lite", "typ", "alltså", "inte", "ej", "för", "så", "om", "när",
+                 "kan", "ska", "vill", "bara", "nu", "då", "eller"}
+# One order only: any of these inside the words means more may follow or the order is turned around.
+_FLER_ELLER_NEJ = {"och", "samt", "eller", "men", "sen", "sedan", "inte", "ej", "så", "när", "om", "kan", "ska", "vill"}
+# The words that open a plain light order. "stäng dörren", "ställ klockan på sju" and "vi går på bio" do not.
+_LAMPORDER = re.compile(r"^(tänd\w*|släck\w*|(?:slå|sätt|stäng) (?:på|av))\b", re.I)
+
+
+def komplett_kommando(text: Optional[str]) -> bool:
+    """True when the heard words look like a whole order the fast track can act on: ONE order that begins
+    with a light verb (tänd, släck, slå på/av ...) and names something, or a clock question. A coarse test:
+    "släck tv:n" and "släcker du lampan" pass too; the fast track decides exactly as before, only sooner. At least two
+    words, no word that adds or turns the order around ("och", "inte" ...), not ending on a word that asks
+    for more. Anything else waits out the silence as before."""
+    ord_ = re.findall(r"[\wåäöÅÄÖ]+", (text or "").lower())
+    if len(ord_) < 2 or ord_[-1] in _OFARDIG_SLUT:
+        return False
+    if klocka.ar_klockfraga(text):
+        return not (set(ord_) & _FLER_ELLER_NEJ)
+    if set(ord_) & _FLER_ELLER_NEJ:
+        return False
+    m = _LAMPORDER.match(" ".join(ord_))
+    if m is None or verb_ur(text) is None:
+        return False
+    return len(" ".join(ord_)[m.end():].split()) >= 1
+
+
 def _rensa(text: str) -> str:
     """Words that go into the model's line: no quotes, no control characters or line breaks (G on #42: a
     line break in the heard words could start a new [huset] line)."""

@@ -387,7 +387,38 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         if turns is None:
             return await super()._send_user_audio(frame)
         event = turns.feed(frame.audio)
+        if event == "end" and self._tidigt:
+            self._tidigt = False  # this turn was ended early (end_early); this is only its normal end
+            event = None
+        elif event == "start":
+            self._tidigt = False
+            self._avgjord = False
+        elif self._tidigt and getattr(turns, "_pre_speaking", False):
+            # He went on talking after the turn was ended early. The detector would call it one long
+            # speech and never open the continuation: start it over so the next speech is a turn of its own.
+            logger.warning("⚠️ speech resumed after the early turn end: the continuation starts a new turn")
+            self._tidigt = False
+            turns.reset()
+            if getattr(self, "_held", None):  # bana 0 still holds the decided turn: keep the rest apart
+                self._forts = []
+        if event == "preend":
+            self._preend_t = time.monotonic()
         held = getattr(self, "_held", None)
+        if held is None and self._forts is not None:
+            # The first turn's decision ended (a miss or a ping, not drop_turn) while the continuation was being
+            # collected: the continuation is the held turn now and goes on through the branch below.
+            held = self._held = self._forts
+            self._forts = None
+            if event == "start" and self.on_user_turn_start is not None:
+                self.on_user_turn_start()
+        if held is not None and self._forts is not None:
+            self._forts.append(frame)  # the continuation of an early-ended turn: its own turn, decided after the first
+            if event == "start" and self.on_user_turn_start is not None:
+                self.on_user_turn_start()
+            if event == "end":
+                forts, self._forts = self._forts, None
+                asyncio.get_running_loop().create_task(self._fortsatt(forts))
+            return
         if held is not None:
             # Bana 0 holds this turn; keep collecting until it decides. Speech
             # that resumes during the decision belongs to the same turn.
@@ -395,6 +426,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             if event == "preend" and self.on_user_turn_pre_end is not None:
                 self.on_user_turn_pre_end()
             if event == "end":
+                self._avgjord = True
                 self._tider_start()
                 await self.push_frame(UserStoppedSpeakingFrame())
                 self._decide_turn()
@@ -435,9 +467,45 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
 
     tider = None  # the connection's TurnTider (app/turn_tider.py), set by the handler
 
-    def _tider_start(self) -> None:
+    def _tider_start(self, tystnad_s: Optional[float] = None) -> None:
         if self.tider is not None and self._turns is not None:
-            self.tider.start(getattr(self._turns, "silence_s", 0.8))
+            self.tider.start(tystnad_s if tystnad_s is not None else getattr(self._turns, "silence_s", 0.8))
+
+    _forts = None  # frames of a continuation that came while the early-ended turn was still being decided
+
+    async def _fortsatt(self, frames) -> None:
+        """Decide the continuation as a turn of its own once the first turn's decision is done."""
+        task = self._turn_end_task
+        if task is not None:
+            await asyncio.wait({task})
+        if getattr(self, "_held", None) is not None:  # something else took the turn meanwhile
+            return
+        self._held = frames
+        self._avgjord = True
+        self._tider_start()
+        await self.push_frame(UserStoppedSpeakingFrame())
+        self._decide_turn()
+
+    _avgjord = False  # the held turn has been decided (early or at the normal end)
+    _preend_t = 0.0
+    _tidigt = False  # the held turn was ended at "preend"; the detector's own "end" is then swallowed
+
+    def end_early(self) -> bool:
+        """End the held turn now, at "preend", because bana 0's early speech-to-text is a whole command
+        (raawr US-047). Refused when no turn is held or the speaker has started again. True = ended."""
+        held = getattr(self, "_held", None)
+        turns = self._turns
+        if not held or turns is None or self.on_user_turn_end is None or self._tidigt or self._avgjord:
+            return False  # no turn, or it is already decided (the text came after the normal end)
+        if getattr(turns, "_pre_speaking", False):
+            return False
+        self._tidigt = True
+        self._avgjord = True
+        # The speech ended PRE_END_MS before "preend" was said; the text may have come later than that.
+        self._tider_start(PRE_END_MS / 1000 + max(0.0, time.monotonic() - self._preend_t))
+        asyncio.get_running_loop().create_task(self.push_frame(UserStoppedSpeakingFrame()))
+        self._decide_turn()
+        return True
 
     # Seconds of speech Live has given (the daily cap counts these), turns it has finished, and the
     # event a fed text waits on for its first sound (core_strom.LiveMatare).
@@ -574,10 +642,13 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         # its hits never take this path.
         if self._activity_open:
             logger.info("🧽 open Gemini activity abandoned (device dropped the input)")
+        forts, self._forts = getattr(self, "_forts", None), None
         self._held = None
         self._turn_rescue = None
         self._activity_open = False
-        self._preroll = bytearray()
+        # A continuation being collected (see _fortsatt) is not the dropped turn: the reset below makes the
+        # detector open it again, so what was said of it so far goes back in as the pre-roll.
+        self._preroll = bytearray(b"".join(f.audio for f in forts)) if forts else bytearray()
         self._transkr_start, self._transkr_kollad, self._tur_text = "", False, ""  # a dropped turn must not mute the next one's check
         self.cancel_silence_ack()
         if self._turns is not None:
