@@ -160,6 +160,8 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
         self._closing = False
         self.vagran = None  # why the last wake was refused: "las" / "budget"
         self._rate_vanta = None  # seconds the server said to wait after a rate-limit refusal of session.start
+        self._rate_ev = asyncio.Event()
+        self._connect_t0 = None
 
     # --- lifecycle -------------------------------------------------------------
 
@@ -181,9 +183,11 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
         import websockets
 
         self._closing = False
+        self._connect_t0 = time.monotonic()
         try:
             for forsok in (1, 2):
                 self._started.clear()
+                self._rate_ev.clear()
                 self._rate_vanta = None
                 self._ws = await websockets.connect(
                     self._url, additional_headers={"Authorization": f"Bearer {self._api_key}"},
@@ -195,20 +199,26 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
                     break
                 # The project's gpt-live-1 limit is 600 tokens/min and one session start asks for all of it:
                 # a second wake within the minute is refused with "try again in 900ms" (probed 2026-10-10).
-                # Wait that long once, inside the wake's own 3 s, instead of losing the wake.
+                # Wait for the start or that refusal; on the refusal wait the time it names once, inside the
+                # wake's own budget (_ar_uppkopplad takes what is left of 4.6 s), instead of losing the wake.
+                # _closing is held meanwhile: the server may close the refused socket, and that end is not a sleep.
+                self._closing = True
+                varte = [asyncio.ensure_future(self._started.wait()), asyncio.ensure_future(self._rate_ev.wait())]
                 try:
-                    await asyncio.wait_for(self._started.wait(), 1.2)
+                    await asyncio.wait(varte, timeout=1.2, return_when=asyncio.FIRST_COMPLETED)
+                finally:
+                    for t in varte:
+                        t.cancel()
+                if self._started.is_set() or self._rate_vanta is None:
+                    self._closing = False
                     break
-                except asyncio.TimeoutError:
-                    if self._rate_vanta is None:
-                        break
-                vanta = min(self._rate_vanta, 1.5)
+                vanta = min(self._rate_vanta, 1.0)
                 logger.info(f"⏳ OpenAI Live: rate limit, trying again in {vanta:.1f}s")
-                self._closing = True  # the closing socket's end is ours, not a failure
                 await self._close_socket()
                 self._closing = False
                 await asyncio.sleep(vanta + 0.1)
         except Exception as e:
+            self._closing = False
             logger.error(f"❌ OpenAI Live connect failed: {e!r}")
             await self._close_socket()
 
@@ -248,7 +258,10 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
 
     async def _ar_uppkopplad(self, timeout: float = 3.0) -> bool:
         # Under ConnectionRecovery.VAKNA_TIMEOUT_S (5 s), so a session that never
-        # starts lands in SovlageMixin's "asleep again" here, not in a cancel.
+        # starts lands in SovlageMixin's "asleep again" here, not in a cancel. A retried start has used part of
+        # the budget already: 4.6 s in all.
+        gatt = time.monotonic() - (getattr(self, "_connect_t0", None) or time.monotonic())
+        timeout = max(0.5, min(timeout, 4.6 - gatt))
         try:
             await asyncio.wait_for(self._started.wait(), timeout)
         except asyncio.TimeoutError:
@@ -329,6 +342,7 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
             if err.get("code") == "rate_limit_exceeded":
                 m = re.search(r"again in (\d+)\s*ms", str(err.get("message") or ""))
                 self._rate_vanta = (int(m.group(1)) / 1000.0) if m else 1.0
+                self._rate_ev.set()
         elif typ == "session.closed":
             logger.info(f"OpenAI Live session closed: {ev.get('reason')} {ev.get('usage')}")
 

@@ -463,3 +463,34 @@ async def test_en_andra_vakning_inom_minuten_far_ett_nytt_forsok(monkeypatch):
         assert await s.vakna() is True
         assert len(starts) == 2 and s.sover is False
         await s._disconnect()
+
+
+@pytest.mark.asyncio
+async def test_retryn_klarar_att_servern_stanger_den_nekade_sockeln():
+    """G's review of #49: the server closes the refused socket while we wait. That end must not put the engine to
+    sleep (sov_begaran) and the second start must still come up."""
+    starts = []
+
+    class Stanger(FakeLive):
+        async def handler(self, ws):
+            self.conn = ws
+            async for raw in ws:
+                ev = json.loads(raw)
+                self.seen.append(ev)
+                if ev["type"] == "session.start":
+                    starts.append(1)
+                    if len(starts) == 1:
+                        await ws.send(json.dumps({"type": "error", "error": {
+                            "code": "rate_limit_exceeded", "message": "... Please try again in 200ms."}}))
+                        await ws.close()
+                        return
+                    await ws.send(json.dumps({"type": "session.started", "session": {"id": "s"}}))
+
+    fake = Stanger()
+    server, url = await _server(fake)
+    async with server:
+        s = _service(url)
+        assert await s.vakna() is True
+        await asyncio.sleep(0.3)  # the first reader's end has been seen by now
+        assert len(starts) == 2 and s.sover is False and s._ws is not None
+        await s._disconnect()
