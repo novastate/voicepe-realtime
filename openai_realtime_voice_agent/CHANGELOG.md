@@ -4,6 +4,13 @@ All notable changes to this add-on. Newest first.
 
 ## 0.28.0 (fork)
 
+- **0.28.0, verktyg provade 2026-10-10 (nyckeln på All).** Live-delegation med `gpt-5.4-mini` och `gpt-6-luna` som backend fungerar hela vägen:
+  Live delegerar, vi kör verktyget (provat: `homeassistant__GetLiveContext` 236 ms ok), Live talar svaret. Två gränser hos OpenAI funna och
+  hanterade: indata får inte komma snabbare än 1,2 x realtid eller i skurar över 5 s (`input_audio_rate_limit_exceeded`), så det hållna turljudet släpps
+  nu i 4 s-skur + 1,15 x realtid (`OPENAI_LIVE_BURST_S`, `OPENAI_LIVE_MAX_X`); och projektets gpt-live-1-gräns är 600 tokens/min där EN
+  sessionsstart begär allt (`rate_limit_exceeded`, "try again in 900ms"), så väckningen väntar den tiden en gång och försöker igen.
+  Sätt `OPENAI_LIVE_DELEGATION_MODEL` (t.ex. gpt-5.4-mini). Mätt via hela add-onet på core: första ljud 0,9 s efter lokalt turslut, svenska hela vägen.
+
 - **0.28.0, prov mot riktiga OpenAI Live 2026-10-10 (nyckeln i rostagentens SOPS).** Session-formatet rättat efter riktiga endpointen:
   EN `audio.format` (24 kHz) för båda håll, `audio.input` nekas; tystnad är exakta nollor i en jämn ström och räknas inte som svar;
   väckning/sömn går nu genom `SovlageMixin`-krokarna och tillståndsmaskinen (inga egna `vakna`/`sova`); `report_failure` väntas (async).

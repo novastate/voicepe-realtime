@@ -408,3 +408,58 @@ def test_lopande_bokforing_hamnar_ocksa_i_openai_liggaren():
     assert 99 <= openai_live.OPENAI_BUDGET.anvant() <= 101 and 99 <= s.budget.anvant() <= 101
     s.bokfor()  # the teardown after it adds only what is left (nothing)
     assert openai_live.OPENAI_BUDGET.anvant() < 102 and s.budget.anvant() < 102
+
+
+@pytest.mark.asyncio
+async def test_hallet_ljud_slapps_inte_snabbare_an_live_tillater(monkeypatch):
+    """Probed live: > 1.2x real time or a burst over 5 s is dropped. The first BURST_S go at once, the rest paced."""
+    import time
+
+    monkeypatch.setenv("OPENAI_LIVE_BURST_S", "0.2")
+    monkeypatch.setenv("OPENAI_LIVE_MAX_X", "1.15")
+    s = _service("ws://x")
+    skickat = []
+
+    async def append(pcm):
+        skickat.append((time.monotonic(), len(pcm)))
+
+    async def end():
+        pass
+
+    s._append, s._end_activity = append, end
+    chunk = b"\x01\x00" * int(openai_live.IN_RATE * 0.2)  # 0.2 s each
+    s._held = [chunk] * 5
+    t0 = time.monotonic()
+    await s.answer_turn()
+    assert len(skickat) == 5
+    assert time.monotonic() - t0 >= 3 * 0.2 / 1.15 * 0.9  # four chunks after the burst, each waited ~0.17 s
+
+
+@pytest.mark.asyncio
+async def test_en_andra_vakning_inom_minuten_far_ett_nytt_forsok(monkeypatch):
+    """Probed live: gpt-live-1 is limited to 600 tokens/min and a session start asks for all of it ("try again in
+    900ms"). The wake waits that long once instead of being lost."""
+    starts = []
+
+    class Strypt(FakeLive):
+        async def handler(self, ws):
+            self.conn = ws
+            async for raw in ws:
+                ev = json.loads(raw)
+                self.seen.append(ev)
+                if ev["type"] == "session.start":
+                    starts.append(1)
+                    if len(starts) == 1:
+                        await ws.send(json.dumps({"type": "error", "error": {
+                            "code": "rate_limit_exceeded",
+                            "message": "Rate limit reached ... tokens per min (TPM): Limit 600. Please try again in 200ms."}}))
+                    else:
+                        await ws.send(json.dumps({"type": "session.started", "session": {"id": "s"}}))
+
+    fake = Strypt()
+    server, url = await _server(fake)
+    async with server:
+        s = _service(url)
+        assert await s.vakna() is True
+        assert len(starts) == 2 and s.sover is False
+        await s._disconnect()

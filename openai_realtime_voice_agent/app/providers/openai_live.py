@@ -30,6 +30,7 @@ import base64
 import json
 import logging
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -158,6 +159,7 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
         self._on_turn_complete = None
         self._closing = False
         self.vagran = None  # why the last wake was refused: "las" / "budget"
+        self._rate_vanta = None  # seconds the server said to wait after a rate-limit refusal of session.start
 
     # --- lifecycle -------------------------------------------------------------
 
@@ -178,15 +180,34 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
             return
         import websockets
 
-        self._started.clear()
         self._closing = False
         try:
-            self._ws = await websockets.connect(
-                self._url, additional_headers={"Authorization": f"Bearer {self._api_key}"},
-                max_size=None,
-            )
-            await self._send({"type": "session.start", "session": self._config})
-            self._reader = asyncio.get_running_loop().create_task(self._read_loop())
+            for forsok in (1, 2):
+                self._started.clear()
+                self._rate_vanta = None
+                self._ws = await websockets.connect(
+                    self._url, additional_headers={"Authorization": f"Bearer {self._api_key}"},
+                    max_size=None,
+                )
+                await self._send({"type": "session.start", "session": self._config})
+                self._reader = asyncio.get_running_loop().create_task(self._read_loop())
+                if forsok == 2:
+                    break
+                # The project's gpt-live-1 limit is 600 tokens/min and one session start asks for all of it:
+                # a second wake within the minute is refused with "try again in 900ms" (probed 2026-10-10).
+                # Wait that long once, inside the wake's own 3 s, instead of losing the wake.
+                try:
+                    await asyncio.wait_for(self._started.wait(), 1.2)
+                    break
+                except asyncio.TimeoutError:
+                    if self._rate_vanta is None:
+                        break
+                vanta = min(self._rate_vanta, 1.5)
+                logger.info(f"⏳ OpenAI Live: rate limit, trying again in {vanta:.1f}s")
+                self._closing = True  # the closing socket's end is ours, not a failure
+                await self._close_socket()
+                self._closing = False
+                await asyncio.sleep(vanta + 0.1)
         except Exception as e:
             logger.error(f"❌ OpenAI Live connect failed: {e!r}")
             await self._close_socket()
@@ -304,6 +325,10 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
                 await self._tool_call(item)
         elif typ == "error":
             logger.warning(f"⚠️ OpenAI Live error: {ev.get('error')}")
+            err = ev.get("error") or {}
+            if err.get("code") == "rate_limit_exceeded":
+                m = re.search(r"again in (\d+)\s*ms", str(err.get("message") or ""))
+                self._rate_vanta = (int(m.group(1)) / 1000.0) if m else 1.0
         elif typ == "session.closed":
             logger.info(f"OpenAI Live session closed: {ev.get('reason')} {ev.get('usage')}")
 
@@ -458,7 +483,17 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
         held, self._held = self._held, None
         if not held:
             return
+        # Live drops audio that arrives faster than 1.2x real time or in bursts over 5 s (probed 2026-10-10:
+        # input_audio_rate_limit_exceeded, "This append was dropped"). The held turn is released at once, so its
+        # first OPENAI_LIVE_BURST_S (4) go straight away and the rest at OPENAI_LIVE_MAX_X (1.15) times real time.
+        burst = _env_float("OPENAI_LIVE_BURST_S", 4.0)
+        fart = max(1.0, _env_float("OPENAI_LIVE_MAX_X", 1.15))
+        skickat = 0.0
         for pcm in held:
+            dur = len(pcm) / (IN_RATE * 2)
+            if skickat + dur > burst:
+                await asyncio.sleep(dur / fart)
+            skickat += dur
             await self._append(pcm)
         await self._end_activity()
 
