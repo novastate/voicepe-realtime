@@ -635,7 +635,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         # its hits never take this path.
         if self._activity_open:
             logger.info("🧽 open Gemini activity abandoned (device dropped the input)")
-        forts, self._forts = self._forts, None
+        forts, self._forts = getattr(self, "_forts", None), None
         self._held = None
         self._turn_rescue = None
         self._activity_open = False
