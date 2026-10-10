@@ -399,9 +399,19 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             logger.warning("⚠️ speech resumed after the early turn end: the continuation starts a new turn")
             self._tidigt = False
             turns.reset()
+            if getattr(self, "_held", None):  # bana 0 still holds the decided turn: keep the rest apart
+                self._forts = []
         if event == "preend":
             self._preend_t = time.monotonic()
         held = getattr(self, "_held", None)
+        if held is not None and self._forts is not None:
+            self._forts.append(frame)  # the continuation of an early-ended turn: its own turn, decided after the first
+            if event == "start" and self.on_user_turn_start is not None:
+                self.on_user_turn_start()
+            if event == "end":
+                forts, self._forts = self._forts, None
+                asyncio.get_running_loop().create_task(self._fortsatt(forts))
+            return
         if held is not None:
             # Bana 0 holds this turn; keep collecting until it decides. Speech
             # that resumes during the decision belongs to the same turn.
@@ -453,6 +463,21 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
     def _tider_start(self, tystnad_s: Optional[float] = None) -> None:
         if self.tider is not None and self._turns is not None:
             self.tider.start(tystnad_s if tystnad_s is not None else getattr(self._turns, "silence_s", 0.8))
+
+    _forts = None  # frames of a continuation that came while the early-ended turn was still being decided
+
+    async def _fortsatt(self, frames) -> None:
+        """Decide the continuation as a turn of its own once the first turn's decision is done."""
+        task = self._turn_end_task
+        if task is not None:
+            await asyncio.wait({task})
+        if getattr(self, "_held", None) is not None:  # something else took the turn meanwhile
+            return
+        self._held = frames
+        self._avgjord = True
+        self._tider_start()
+        await self.push_frame(UserStoppedSpeakingFrame())
+        self._decide_turn()
 
     _avgjord = False  # the held turn has been decided (early or at the normal end)
     _preend_t = 0.0
