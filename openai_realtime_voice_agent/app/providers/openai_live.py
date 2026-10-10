@@ -348,6 +348,12 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
 
     _svar_start = ""
     _svar_kollad = False
+    tider = None  # the connection's TurnTider (app/turn_tider.py), set by the handler, as on Gemini
+
+    def _tider_start(self) -> None:
+        """A turn has ended locally: start its timing line (`⏱ tider ...`, the comparison day's yardstick)."""
+        if self.tider is not None and self._turns is not None:
+            self.tider.start(getattr(self._turns, "silence_s", 0.8))
 
     def _svarsprak(self, delta: str) -> None:
         """Log (once per reply, the first words only) when the answer starts in another language than Swedish."""
@@ -371,6 +377,8 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
             return
         if not self._reply_open:
             self._reply_open = True
+            if self.tider is not None:
+                self.tider.mark("modell")  # the first real sound from the engine
             self.cancel_silence_ack()
             await self._flush_user_text()
             await self.push_frame(TTSStartedFrame())
@@ -452,6 +460,7 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
         if self._held is not None:
             self._held.append(frame.audio)
             if event == "end":
+                self._tider_start()
                 await self.push_frame(UserStoppedSpeakingFrame())
                 self._decide_turn()
             return
@@ -470,6 +479,7 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
             await self._append(preroll)
         await self._append(frame.audio)
         if event == "end":
+            self._tider_start()
             await self.push_frame(UserStoppedSpeakingFrame())
             await self._end_activity()
 
