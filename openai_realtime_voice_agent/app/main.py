@@ -288,7 +288,6 @@ class Application:
     """Main application class using Pipecat."""
 
     dorr_client = None  # comms' own MCP door, see CommsDoorMCPService
-    _dorr_namn: frozenset = frozenset()  # tool names the door handed out the last time it was asked
 
     # Local turn end on Gemini; GEMINI_TURN_SILENCE_MS overrides it at start.
     gemini_turn_silence_ms = TURN_SILENCE_MS
@@ -1115,34 +1114,42 @@ class Application:
         """
         if timeout is None:
             timeout = _env_seconds("MCP_TOOLS_TIMEOUT_SECONDS", 5.0)
+        borjan = time.monotonic()
         try:
             ha = await asyncio.wait_for(
                 self.mcp_client.get_tools_schema(), timeout=timeout
             )
         except asyncio.TimeoutError:
             raise TimeoutError(f"no answer from Home Assistant in {timeout:g} s")
-        return await self._med_dorrens_verktyg(ha, timeout)
+        # ONE deadline for both: the door only gets what HA left of it (G's review of #50).
+        return await self._med_dorrens_verktyg(ha, timeout - (time.monotonic() - borjan))
 
     async def _med_dorrens_verktyg(self, ha, timeout: float):
         """HA's tools plus the ones comms' own door lists right now (`tools/list`, asked each time).
 
-        The door failing never costs HA's tools: the door's tools are then simply missing for this session and
-        the next wake asks again. On a name both have, HA's wins."""
+        The door failing never costs HA's tools: the door's tools are then simply missing for this session. (The
+        wake refetch only runs when HA's own list was missing, so the door is asked again with the next session
+        build, not necessarily the next wake.) On a name both have, HA's wins. `timeout` is what is left of the
+        one deadline HA's fetch started."""
         if self.dorr_client is None:
             return ha
         from pipecat.adapters.schemas.tools_schema import ToolsSchema
 
+        if timeout <= 0:
+            logger.warning("⚠️ comms MCP door: no time left of the tool-list deadline — HA's tools only this time")
+            return ha
         try:
             dorr = await asyncio.wait_for(self.dorr_client.get_tools_schema(), timeout=timeout)
         except Exception as e:
-            self._dorr_namn = frozenset()
             logger.warning(f"⚠️ comms MCP door: no tool list ({e!r}) — HA's tools only this time")
             return ha
         har = {f.name for f in ha.standard_tools}
         nya = [f for f in dorr.standard_tools if f.name not in har]
-        self._dorr_namn = frozenset(f.name for f in nya)
-        logger.info(f"✅ comms MCP door lists {len(dorr.standard_tools)} tools, {len(nya)} added: {sorted(self._dorr_namn)}")
-        return ToolsSchema(standard_tools=list(ha.standard_tools) + nya)
+        namn = frozenset(f.name for f in nya)
+        logger.info(f"✅ comms MCP door lists {len(dorr.standard_tools)} tools, {len(nya)} added: {sorted(namn)}")
+        ut = ToolsSchema(standard_tools=list(ha.standard_tools) + nya)
+        ut.dorr_namn = namn  # travels with the schema it describes: a later fetch by another session cannot change it
+        return ut
 
     def _ha_tool_definitions(self, mcp_tools_schema) -> list:
         """The HA tools the model gets to see, in OpenAI Realtime shape.
@@ -1187,8 +1194,9 @@ class Application:
         try:
             from pipecat.adapters.schemas.tools_schema import ToolsSchema
 
-            dorrens = [f for f in mcp_tools_schema.standard_tools if f.name in self._dorr_namn]
-            hass = [f for f in mcp_tools_schema.standard_tools if f.name not in self._dorr_namn]
+            dorr_namn = getattr(mcp_tools_schema, "dorr_namn", frozenset())
+            dorrens = [f for f in mcp_tools_schema.standard_tools if f.name in dorr_namn]
+            hass = [f for f in mcp_tools_schema.standard_tools if f.name not in dorr_namn]
             await self.mcp_client.register_tools_schema(ToolsSchema(standard_tools=hass), service)
             logger.info(f"✅ Registered {len(hass)} MCP tool handlers")
             if dorrens and self.dorr_client is not None:  # each tool is called on the client it came from

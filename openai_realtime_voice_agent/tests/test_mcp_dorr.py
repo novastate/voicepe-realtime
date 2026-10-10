@@ -78,7 +78,7 @@ async def test_en_dorr_som_inte_svarar_kostar_inte_havs_verktyg():
     ha = _Klient(_schema("HassTurnOn"))
     app = _app(ha, _Klient(RuntimeError("503")))
     out = await app._fetch_ha_tools_schema()
-    assert [f.name for f in out.standard_tools] == ["HassTurnOn"] and app._dorr_namn == frozenset()
+    assert [f.name for f in out.standard_tools] == ["HassTurnOn"] and not hasattr(out, "dorr_namn")
 
 
 @pytest.mark.asyncio
@@ -87,7 +87,7 @@ async def test_samma_namn_i_bada_ger_havs():
     app = _app(ha, _Klient(_schema("GetLiveContext", "lage_drift")))
     out = await app._fetch_ha_tools_schema()
     assert [f.name for f in out.standard_tools] == ["GetLiveContext", "lage_drift"]
-    assert app._dorr_namn == frozenset({"lage_drift"})
+    assert out.dorr_namn == frozenset({"lage_drift"})
 
 
 @pytest.mark.asyncio
@@ -105,3 +105,37 @@ async def test_dorrens_verktyg_erbjuds_modellen():
     schema = await app._fetch_ha_tools_schema()
     namn = [t["name"] for t in app._ha_tool_definitions(schema)]
     assert "lage_drift" in namn and "HassTurnOn" in namn
+
+
+class _Sen:
+    def __init__(self, dröjer, schema):
+        self.dröjer, self.schema = dröjer, schema
+
+    async def get_tools_schema(self):
+        import asyncio
+        await asyncio.sleep(self.dröjer)
+        return self.schema
+
+
+@pytest.mark.asyncio
+async def test_dorren_far_bara_den_tid_ha_lamnade_av_en_gemensam_tidsgrans():
+    import time
+
+    ha, dorr = _Sen(0.2, _schema("HassTurnOn")), _Sen(60, _schema("lage_drift"))  # HA slow, the door hangs
+    t0 = time.monotonic()
+    out = await _app(ha, dorr)._fetch_ha_tools_schema(timeout=0.3)
+    assert time.monotonic() - t0 < 0.4  # was 0.5 s (0.2 + a full 0.3 again) before the shared deadline
+    assert [f.name for f in out.standard_tools] == ["HassTurnOn"]
+
+
+@pytest.mark.asyncio
+async def test_tva_sessioner_far_var_sin_uppdelning():
+    """The door names travel with the schema they came with (G's review of #50, finding b)."""
+    app = _app(_Klient(_schema("HassTurnOn")), _Klient(_schema("lage_drift")))
+    a = await app._fetch_ha_tools_schema()
+    app.dorr_client = None
+    b = await app._fetch_ha_tools_schema()  # a later fetch without the door
+    ha, dorr = _Klient(), _Klient()
+    app.mcp_client, app.dorr_client = ha, dorr
+    await app._register_ha_handlers(object(), a, "kontoret")
+    assert dorr.registrerat == [["lage_drift"]] and ha.registrerat == [["HassTurnOn"]]
