@@ -151,14 +151,14 @@ async def probe_engine(provider: str) -> bool:
     """
     import httpx
 
-    from app.providers import GEMINI, OPENAI, XAI
+    from app.providers import GEMINI, OPENAI, OPENAI_LIVE, XAI
 
     params = None
     if provider == XAI:
         key = (os.environ.get("XAI_API_KEY") or "").strip()
         url = "https://api.x.ai/v1/models"
         headers = {"Authorization": f"Bearer {key}"}
-    elif provider == OPENAI:
+    elif provider in (OPENAI, OPENAI_LIVE):
         key = (os.environ.get("OPENAI_API_KEY") or "").strip()
         url = "https://api.openai.com/v1/models"
         headers = {"Authorization": f"Bearer {key}"}
@@ -678,6 +678,9 @@ class Application:
         self.gemini_voice = os.environ.get("GEMINI_VOICE", "").strip()
         # xAI Grok Voice (0.25.0). rex is the default; helios is the deepest
         # male voice measured (median F0 92 Hz against rex's 108).
+        # OpenAI Live (0.28.0, raawr US-025): the same key as OpenAI.
+        self.openai_live_model = os.environ.get("OPENAI_LIVE_MODEL", "").strip() or "gpt-live-1"
+        self.openai_live_voice = os.environ.get("OPENAI_LIVE_VOICE", "").strip() or "marin"
         self.xai_api_key = os.environ.get("XAI_API_KEY", "").strip()
         self.xai_model = os.environ.get("XAI_MODEL", "").strip() or "grok-voice-latest"
         self.xai_voice = os.environ.get("XAI_VOICE", "").strip() or "rex"
@@ -767,9 +770,18 @@ class Application:
             A ProviderOptions. The instructions are the same for both engines,
             memory included -- only the key, model and voice differ.
         """
-        from app.providers import GEMINI, XAI, ProviderOptions
+        from app.providers import GEMINI, OPENAI_LIVE, XAI, ProviderOptions
 
         instructions = self._instructions()
+        if provider == OPENAI_LIVE:
+            return ProviderOptions(
+                api_key=self.openai_api_key,
+                model=self.openai_live_model,
+                voice=self.openai_live_voice,
+                instructions=instructions,
+                max_output_tokens=self.max_output_tokens,
+                gemini_turn_silence_ms=self.gemini_turn_silence_ms,
+            )
         if provider == GEMINI:
             return ProviderOptions(
                 api_key=self.gemini_api_key,

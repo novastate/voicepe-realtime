@@ -2,6 +2,42 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.28.0 (fork)
+
+- **0.28.0, verktyg provade 2026-10-10 (nyckeln på All).** Live-delegation med `gpt-5.4-mini` och `gpt-6-luna` som backend fungerar hela vägen:
+  Live delegerar, vi kör verktyget (provat: `homeassistant__GetLiveContext` 236 ms ok), Live talar svaret. Två gränser hos OpenAI funna och
+  hanterade: indata får inte komma snabbare än 1,2 x realtid eller i skurar över 5 s (`input_audio_rate_limit_exceeded`), så det hållna turljudet släpps
+  nu i 4 s-skur + 1,15 x realtid (`OPENAI_LIVE_BURST_S`, `OPENAI_LIVE_MAX_X`); och projektets gpt-live-1-gräns är 600 tokens/min där EN
+  sessionsstart begär allt (`rate_limit_exceeded`, "try again in 900ms"), så väckningen väntar den tiden en gång och försöker igen.
+  Sätt `OPENAI_LIVE_DELEGATION_MODEL` (t.ex. gpt-5.4-mini). Mätt via hela add-onet på core: första ljud 0,9 s efter lokalt turslut, svenska hela vägen.
+
+- **0.28.0, prov mot riktiga OpenAI Live 2026-10-10 (nyckeln i rostagentens SOPS).** Session-formatet rättat efter riktiga endpointen:
+  EN `audio.format` (24 kHz) för båda håll, `audio.input` nekas; tystnad är exakta nollor i en jämn ström och räknas inte som svar;
+  väckning/sömn går nu genom `SovlageMixin`-krokarna och tillståndsmaskinen (inga egna `vakna`/`sova`); `report_failure` väntas (async).
+  Verktyg: `delegation.type=responses` kräver nyckelns behörighet `api.responses.write` (saknas: `missing_scope`, ingen session);
+  `OPENAI_LIVE_DELEGATION=client` startar utan den men har ingen funktionsanrop. NY: `DEVICE_PROVIDERS="koket=openai_live,kontoret=gemini"`
+  låser en enhet vid en motor (jämförelsedygn); en motor som fallerar lämnar enheten åt routerns motor i `DEVICE_PROVIDER_PAUS_MIN` (10) min.
+  Mätt mot riktiga Live (syntetisk svensk röst, direkt mot endpointen): rätt hörd svenska, första ljud 0,9-1,0 s efter talets slut.
+
+- **OpenAI Live som röstmotor, `openai_live`** (raawr US-025). Henriks
+  OpenAI-nyckel tillåter bara Live (gpt-live-1); Realtime-motorn `openai`
+  lämnas orörd. Eget protokoll (`app/providers/openai_live.py`):
+  `session.start` -> `session.started`, ljud in som
+  `session.input_audio.append` (16 kHz), ut som `session.output_audio.delta`
+  (24 kHz), verktyg via Responses-delegering (`response.event` ->
+  `function_call_output` + `response.create`), `session.close`. Inget
+  "ljud klart"-event: `OPENAI_LIVE_REPLY_GAP_MS` (1500) utan ljud avslutar
+  svaret.
+- Som de andra: sover till väckningen, snabbvägen först (turens ljud hålls
+  tills bana 0 avgjort, Live hör aldrig en träff), lokala turer, maxtid och
+  dagstak. Henriks två regler för motorn: **en OpenAI-session åt gången** i
+  hela processen, och **eget tak `OPENAI_MAX_MINUTER_PER_DAG` (6)** i
+  `/data/moln_minuter_openai.json`. En nekad väckning flyttar högtalaren till
+  nästa motor i kedjan (han väcker igen).
+- `VOICE_PROVIDERS=gemini,openai_live,xai`. Inställningar: `OPENAI_LIVE_MODEL`
+  (gpt-live-1), `OPENAI_LIVE_VOICE` (marin), `OPENAI_LIVE_DELEGATION_MODEL`,
+  `OPENAI_LIVE_TAIL_MS`. Protokollfält som inte är provade live står på ett
+  ställe: `openai_live.session_config` (ponytail).
 ## 0.27.42 (fork)
 
 - **Comms egna MCP-dörr som andra verktygskälla, hämtad dynamiskt (raawr US-021, spår A:s önskemål).** Agenten har ingen lista över
