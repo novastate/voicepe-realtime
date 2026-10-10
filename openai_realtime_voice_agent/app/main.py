@@ -18,6 +18,7 @@ from app.core_strom import (
     strom_url,
 )
 from app.klockan import klipp_paa as klockan_klipp_paa
+from app import bjorn_karna
 from app.mcp_service import CommsDoorMCPService, HomeAssistantMCPService
 from app.phase_emitter import TurnLiveness
 from app.idag import Idag
@@ -288,6 +289,7 @@ class Application:
     """Main application class using Pipecat."""
 
     dorr_client = None  # comms' own MCP door, see CommsDoorMCPService
+    karna = None  # bjorn_karna.Karna, made in initialize() (tests that skip it get one without an environment text)
 
     # Local turn end on Gemini; GEMINI_TURN_SILENCE_MS overrides it at start.
     gemini_turn_silence_ms = TURN_SILENCE_MS
@@ -399,7 +401,10 @@ class Application:
         )
 
         # Get instructions with default
-        instructions = os.environ.get("INSTRUCTIONS", "You are the Home Assistant Voice Agent and can control the Smart Home.")
+        # US-056: the text comes from Core through comms (app/bjorn_karna.py); INSTRUCTIONS in the environment is only
+        # the fallback now, and unset it is no longer needed.
+        miljo_instruktioner = os.environ.get("INSTRUCTIONS", "").strip()
+        instructions = miljo_instruktioner or bjorn_karna.INBYGGD
 
         # OpenAI Realtime model + voice. These are dropdowns in the add-on UI with
         # a "custom" sentinel + a sibling *_CUSTOM free-text field; _resolve_choice
@@ -734,6 +739,7 @@ class Application:
         self.transcription_language = transcription_language
         self.transcription_model = transcription_model
         self.instructions = instructions
+        self.karna = bjorn_karna.Karna(miljo_instruktioner)
         self.model = openai_model
         self.voice = openai_voice
         self.openai_speed = openai_speed
@@ -835,6 +841,18 @@ class Application:
             transcription_language=self.transcription_language,
         )
 
+    async def _uppdatera_karna(self) -> None:
+        """Björn's text for the session about to be built: fetched through comms, else the fallbacks (US-056)."""
+        try:
+            if self.karna is None:
+                self.karna = bjorn_karna.Karna("")
+            text, kalla = await self.karna.text()
+        except Exception as e:  # never hold a session build up over the text
+            logger.warning(f"⚠️ Björn-kärnan: oväntat fel ({e!r}), den gamla texten behålls")
+            return
+        self.instructions = text
+        logger.info(f"📜 Björn-kärnan: källa={kalla} ({len(text)} tecken)")
+
     def _instructions(self) -> str:
         """The system instruction, Idag block last (the time is rendered now)."""
         # No EARLY_ACK_INSTRUCTION: Grok said "Jag kollar." before every answer,
@@ -910,6 +928,7 @@ class Application:
             self._pipeline_lock = asyncio.Lock()
 
         async with self._pipeline_lock:
+            await self._uppdatera_karna()
             if client_id is None:
                 logger.warning("⚠️ No client_id provided to create_service")
 

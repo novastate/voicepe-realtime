@@ -2,6 +2,17 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.28.4 (fork)
+
+- **Björns text hämtas ur Core genom comms i stället för ur en miljöfil (raawr US-056, D-20).** När en session byggs frågar agenten
+  `<rummets comms-adress>/bjorn` (kontorets nyckel, `BJORN_KARNA_URL` åsidosätter) om själen plus högtalartillägget. Reservkedja: hämtad text
+  (minne en minut), senast hämtade (`minne`), `INSTRUCTIONS` ur miljön (`miljö`), sist en inbyggd minimal själ (`inbyggd`); loggen säger
+  `📜 Björn-kärnan: källa=...`. Hämtningen håller aldrig ett sessionsbygge längre än 2,5 s och en död comms frågas inte om igen på 10 s.
+  Språklåset (`SPRAKLAS`) sitter sist som förut. `INSTRUCTIONS` kan tas bort ur miljöfilen när Comms-dörren och Core-tillägget är utlagda.
+  Kräver raawr-ändringarna (Comms-dörr `/kanal/rost/kontoret/bjorn`, Core-tillägget `rost`); innan dess faller agenten tyst tillbaka på miljön.
+
+Rättat efter korsgranskning (A): Comms reservtext (`halsa: "reserv"`, Core nere) räknas som misslyckad hämtning så miljön/minnet behålls; en text under 200 tecken räknas inte som själ; `BJORN_KARNA=av` hoppar över hämtningen; `TIMEOUT_S` 1,5 s.
+
 ## 0.28.3 (fork)
 
 - **Turen kan sluta vid föravslutet när snabbspåret redan hört ett helt kommando** (raawr US-047, `TIDIGT_SLUT=1`, av som standard, bara Gemini).
