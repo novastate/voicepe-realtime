@@ -38,6 +38,16 @@ All notable changes to this add-on. Newest first.
   (gpt-live-1), `OPENAI_LIVE_VOICE` (marin), `OPENAI_LIVE_DELEGATION_MODEL`,
   `OPENAI_LIVE_TAIL_MS`. Protokollfält som inte är provade live står på ett
   ställe: `openai_live.session_config` (ponytail).
+## 0.27.42 (fork)
+
+- **Comms egna MCP-dörr som andra verktygskälla, hämtad dynamiskt (raawr US-021, spår A:s önskemål).** Agenten har ingen lista över
+  dörrens verktyg: `tools/list` frågas av `/kanal/rost/kontoret/mcp` (bredvid `HA_API_URL`, inte under; `/api/mcp` går till HA) varje gång en
+  session byggs eller vid väckningens omhämtning, så ett verktyg som läggs till eller ändras i comms syns vid nästa väckning utan att agenten
+  ändras. Verktygen läggs till HA:s i samma schema och varje verktyg anropas på den klient det kom från. Svarar dörren inte försvinner bara
+  dess verktyg den gången (HA:s påverkas inte); samma namn i båda ger HA:s. Av som standard: sätt `COMMS_MCP_DORR=1` (adress ur `HA_API_URL`,
+  eller `COMMS_MCP_URL`). Mot riktiga dörren (bara läsning): 8 verktyg listas (lage_drift, fraga_huset, lista_svar, hamta_svar, folj_upp,
+  mac_byggen, svara_bygget, kasta_in). `MCP_TOOL_ALLOWLIST`, om satt, gäller även dessa.
+
 ## 0.27.41 (fork)
 
 - **Sena svar från `ask_openclaw` ropas ut i rummet där frågan ställdes.** Verktyget skickade processens `INSTANCE_NAME` ("kontor" på core) som
