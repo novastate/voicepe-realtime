@@ -404,6 +404,13 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         if event == "preend":
             self._preend_t = time.monotonic()
         held = getattr(self, "_held", None)
+        if held is None and self._forts is not None:
+            # The first turn's decision ended (a miss or a ping, not drop_turn) while the continuation was being
+            # collected: the continuation is the held turn now and goes on through the branch below.
+            held = self._held = self._forts
+            self._forts = None
+            if event == "start" and self.on_user_turn_start is not None:
+                self.on_user_turn_start()
         if held is not None and self._forts is not None:
             self._forts.append(frame)  # the continuation of an early-ended turn: its own turn, decided after the first
             if event == "start" and self.on_user_turn_start is not None:

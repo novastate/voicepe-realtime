@@ -74,8 +74,9 @@ _LAMPORDER = re.compile(r"^(tänd\w*|släck\w*|(?:slå|sätt|stäng) (?:på|av))
 
 
 def komplett_kommando(text: Optional[str]) -> bool:
-    """True when the heard words are a whole order the fast track can act on: ONE plain light order that
-    begins with its verb (tänd, släck, slå på/av ...) and names something, or a clock question. At least two
+    """True when the heard words look like a whole order the fast track can act on: ONE order that begins
+    with a light verb (tänd, släck, slå på/av ...) and names something, or a clock question. A coarse test:
+    "släck tv:n" and "släcker du lampan" pass too; the fast track decides exactly as before, only sooner. At least two
     words, no word that adds or turns the order around ("och", "inte" ...), not ending on a word that asks
     for more. Anything else waits out the silence as before."""
     ord_ = re.findall(r"[\wåäöÅÄÖ]+", (text or "").lower())

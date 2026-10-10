@@ -834,3 +834,37 @@ async def test_a_drop_in_the_middle_of_the_continuation_keeps_what_was_said_of_i
     assert bytes(service._preroll) == _frame(3).audio + _frame(4).audio
     await service._send_user_audio(_frame(5))  # still talking: the detector opens it again
     assert service._held is not None and _frame(3).audio in b"".join(f.audio for f in service._held)
+
+
+@pytest.mark.asyncio
+async def test_a_decision_that_ends_in_the_middle_of_the_continuation_hands_it_the_turn():
+    """A's FAIL on PR #53: a miss or a ping clears the held turn without drop_turn while the continuation is
+    collected. The continuation becomes the held turn, is decided at its own end, and the next turn is answered."""
+    from test_gemini_provider import _ScriptedTurns, _frame, _options, _wire, OPENAI_SHAPE
+    from app.providers import build_service
+
+    service = build_service("gemini", _options(), OPENAI_SHAPE)
+    turns = _ScriptedTurns(["start", None, "preend", None, "start", None, "end", "start", None, "end"])
+    _wire(service, turns)
+    avgjorde = []
+
+    async def on_end():
+        avgjorde.append(len(service._held or []))
+        service._held = None  # answer_turn: the miss path clears it, no drop_turn
+
+    service.on_user_turn_end = on_end
+    for b in range(3):
+        await service._send_user_audio(_frame(b))
+    assert service.end_early() is True
+    await asyncio.sleep(0.05)
+    assert avgjorde == [4] and service._held is None
+    turns._pre_speaking = True
+    for b in range(3, 7):  # the continuation after the first decision is over: reset, start, quiet, end
+        await service._send_user_audio(_frame(b))
+    await asyncio.sleep(0.05)
+    assert len(avgjorde) == 2, "the continuation must be decided on its own"
+    assert service._forts is None
+    for b in range(7, 10):  # and the turn after that is answered too
+        await service._send_user_audio(_frame(b))
+    await asyncio.sleep(0.05)
+    assert len(avgjorde) == 3
