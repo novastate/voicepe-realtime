@@ -433,6 +433,31 @@ async def test_prebuf_0_spelar_direkt_som_for(monkeypatch):
     s._reply_end_task.cancel()
 
 
+@pytest.mark.asyncio
+async def test_en_bit_under_urspolningen_hamnar_efter_de_hallna_inte_framfor(monkeypatch):
+    """A's review of #54: a chunk arriving while the held ones are pushed must not go in front of them."""
+    s = _service("ws://x")
+    ordning = []
+
+    async def push(frame, *a, **k):
+        if isinstance(frame, TTSAudioRawFrame):
+            ordning.append(frame.audio[0])
+        await asyncio.sleep(0.01)  # gives up control, as a real push does
+
+    s.push_frame = push
+    bit = lambda n: bytes([n, 1]) * 2400
+    await s._audio_out(bit(1))
+    await s._audio_out(bit(2))
+    tom = asyncio.get_running_loop().create_task(s._slapp_forbuffer())  # the timer's release
+    await asyncio.sleep(0.005)  # inside the loop
+    await s._audio_out(bit(3))  # a chunk arrives from the reader meanwhile
+    await tom
+    await asyncio.sleep(0.05)
+    assert ordning == [1, 2, 3]
+    if s._reply_end_task is not None:
+        s._reply_end_task.cancel()
+
+
 def test_svar_pa_annat_sprak_loggas_med_de_forsta_orden(caplog):
     import logging
 

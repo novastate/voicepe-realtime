@@ -157,6 +157,7 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
         self._pre = None  # audio held at the start of a reply (see _ljud_ut)
         self._pre_s = 0.0
         self._pre_task = None
+        self._pre_slapper = False
         self._reply_end_task = None
         self._user_text = ""
         self._on_turn_complete = None
@@ -412,12 +413,22 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
         await self._slapp_forbuffer()
 
     async def _slapp_forbuffer(self) -> None:
-        pre, self._pre, self._pre_s = self._pre, None, 0.0
+        """Play what is held, in order. `_pre` stays the list until it is empty, so a chunk that arrives while
+        this runs is appended after the held ones, never pushed in front of them (A's review of #54)."""
+        pre = self._pre
+        if pre is None or self._pre_slapper:
+            return  # nothing held, or a drain already running: it will take what has been added
         if self._pre_task is not None and self._pre_task is not asyncio.current_task():
             self._pre_task.cancel()
         self._pre_task = None
-        for pcm in pre or []:
-            await self.push_frame(TTSAudioRawFrame(audio=pcm, sample_rate=OUT_RATE, num_channels=1))
+        self._pre_slapper = True
+        try:
+            while pre:
+                await self.push_frame(TTSAudioRawFrame(audio=pre.pop(0), sample_rate=OUT_RATE, num_channels=1))
+        finally:
+            self._pre_slapper = False
+            if self._pre is pre:
+                self._pre, self._pre_s = None, 0.0
 
     async def _end_reply_later(self):
         await asyncio.sleep(_env_float("OPENAI_LIVE_REPLY_GAP_MS", 1500.0) / 1000.0)
