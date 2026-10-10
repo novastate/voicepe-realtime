@@ -807,3 +807,30 @@ async def test_continuation_after_an_early_end_gets_its_own_decision_when_the_ho
     await asyncio.sleep(0.1)
     assert len(avgjorde) == 2 and avgjorde[1] >= 3  # its own turn, with its own frames
     assert starter == [1, 1]  # the first turn's start and the continuation's own
+
+
+@pytest.mark.asyncio
+async def test_a_drop_in_the_middle_of_the_continuation_keeps_what_was_said_of_it():
+    """G's third pass: a hit drops the first turn while the continuation is being collected. The continuation
+    must not be left half-collected: it reopens as a turn of its own with its frames as the pre-roll."""
+    from test_gemini_provider import _ScriptedTurns, _frame, _options, _wire, OPENAI_SHAPE
+    from app.providers import build_service
+
+    service = build_service("gemini", _options(), OPENAI_SHAPE)
+    turns = _ScriptedTurns(["start", None, "preend", None, None, "start"])
+    _wire(service, turns)
+    service.on_user_turn_end = lambda: asyncio.sleep(0)
+    for b in range(3):
+        await service._send_user_audio(_frame(b))
+    assert service.end_early() is True
+    await asyncio.sleep(0.05)
+    service._held = [object()]  # bana 0 is still deciding the first turn
+    turns._pre_speaking = True
+    for b in range(3, 5):
+        await service._send_user_audio(_frame(b))
+    assert service._forts is not None and len(service._forts) == 2
+    await service.drop_turn()  # a hit: the first turn is dropped
+    assert service._forts is None and service._held is None
+    assert bytes(service._preroll) == _frame(3).audio + _frame(4).audio
+    await service._send_user_audio(_frame(5))  # still talking: the detector opens it again
+    assert service._held is not None and _frame(3).audio in b"".join(f.audio for f in service._held)

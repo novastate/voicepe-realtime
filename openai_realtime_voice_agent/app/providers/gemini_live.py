@@ -635,10 +635,13 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         # its hits never take this path.
         if self._activity_open:
             logger.info("🧽 open Gemini activity abandoned (device dropped the input)")
+        forts, self._forts = self._forts, None
         self._held = None
         self._turn_rescue = None
         self._activity_open = False
-        self._preroll = bytearray()
+        # A continuation being collected (see _fortsatt) is not the dropped turn: the reset below makes the
+        # detector open it again, so what was said of it so far goes back in as the pre-roll.
+        self._preroll = bytearray(b"".join(f.audio for f in forts)) if forts else bytearray()
         self._transkr_start, self._transkr_kollad, self._tur_text = "", False, ""  # a dropped turn must not mute the next one's check
         self.cancel_silence_ack()
         if self._turns is not None:
