@@ -561,10 +561,13 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
                 logger.info(f"🛡️ avbrott godkänt, Björn avbryts: {k.rad()}")
                 self._kandidat = None
                 await self._oppna_tur(bytes(k.ljud))
-                if event == "end" and self._held is not None:
+                if event == "end":
                     self._tider_start()
                     await self.push_frame(UserStoppedSpeakingFrame())
-                    self._decide_turn()
+                    if self._held is not None:
+                        self._decide_turn()
+                    else:
+                        await self._end_activity()  # no bana 0 hook: Live gets the silent tail that ends the turn
             elif event == "end":
                 logger.info(f"🛡️ avbrott avfärdat (rumsljud eller för kort), Björn pratar vidare: {k.rad()}")
                 self._kandidat = None
@@ -628,6 +631,7 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
     async def drop_turn(self) -> None:
         """Bana 0 hit (or the device dropped the input): Live never hears this turn."""
         self._held = None
+        self._kandidat = None  # a half-collected barge-in belongs to the input that was just dropped
         self._activity_open = False
         self._preroll = bytearray()
         self.cancel_silence_ack()

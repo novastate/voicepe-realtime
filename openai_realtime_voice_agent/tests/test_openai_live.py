@@ -667,3 +667,15 @@ def test_vilolage_efter_svaret_ar_kortare_for_gemini_an_for_live(monkeypatch):
     assert idle_debounce_for("gemini") == 0.6 and idle_debounce_for("openai_live") == 1.5
     monkeypatch.setenv("PHASE_IDLE_DEBOUNCE_MS", "1000")
     assert idle_debounce_for("gemini") == 1.0 and idle_debounce_for("openai_live") == 1.0
+
+
+@pytest.mark.asyncio
+async def test_drop_turn_kastar_en_halvfardig_avbrottskandidat():
+    """A's review of #55: a candidate left over from dropped input must not be mixed with the next speech."""
+    s = _service("ws://x")
+    s.on_user_turn_end = lambda: asyncio.sleep(0)
+    _pagar_svar(s)
+    await _spela_in(s, _ljud(-22, 10), ["start"] + [None] * 9)  # 100 ms: still a candidate
+    assert s._kandidat is not None
+    await s.drop_turn()
+    assert s._kandidat is None
