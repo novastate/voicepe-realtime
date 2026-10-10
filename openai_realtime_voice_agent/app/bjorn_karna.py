@@ -7,7 +7,7 @@ speaker's own addendum. Core owns the text; comms is the only door to it (Core's
 The answer is never an error: the fallback chain is the text fetched now, the last good one (`minne`), the
 `INSTRUCTIONS` of the environment (`miljö`), and last a minimal built-in soul (`inbyggd`). The journal says which
 one a session got. A fetch never holds a session build longer than `TIMEOUT_S`, and a comms that failed is not
-asked again for `PAUS_S`, so a dead comms does not cost 2.5 s per session.
+asked again for `PAUS_S`, so a dead comms does not cost 1.5 s per session. `BJORN_KARNA=av` skips the fetch altogether.
 """
 import asyncio
 import logging
@@ -21,7 +21,8 @@ from app import ha_api
 
 logger = logging.getLogger(__name__)
 
-TIMEOUT_S = 2.5
+TIMEOUT_S = 1.5  # a hung comms costs one session this much, once per PAUS_S
+MIN_TECKEN = 200  # a shorter answer is a half or broken one, not a soul
 LEVANDE_S = 60.0  # a fetched text is reused this long (comms keeps its own minute too)
 PAUS_S = 10.0
 
@@ -55,7 +56,7 @@ class Karna:
 
     async def _hamta(self) -> Optional[str]:
         url = karna_url()
-        if not url or not ha_api.configured():
+        if not url or not ha_api.configured() or os.environ.get("BJORN_KARNA", "").strip().lower() == "av":
             return None
         try:
             # One ceiling over the whole fetch (connect + read are separate httpx timeouts): a session build is held
@@ -64,9 +65,14 @@ class Karna:
                 svar = await asyncio.wait_for(klient.get(url, headers=ha_api.headers()), TIMEOUT_S)
             if svar.status_code != 200:
                 raise RuntimeError(f"comms svarade {svar.status_code}")
-            text = (svar.json() or {}).get("text")
-            if not isinstance(text, str) or not text.strip():
-                raise RuntimeError("comms gav ingen text")
+            data = svar.json() or {}
+            if data.get("halsa") == "reserv":
+                # Core is down and comms answers with its short reserve soul: worse than the memory or the
+                # environment's text, so it counts as a failed fetch.
+                raise RuntimeError("comms gav bara reservtexten (Core nere)")
+            text = data.get("text")
+            if not isinstance(text, str) or len(text.strip()) < MIN_TECKEN:
+                raise RuntimeError("comms gav ingen text eller för kort text")
             return text.strip()
         except Exception as e:  # the answer is always some text: log why, fall back
             logger.warning(f"⚠️ Björn-kärnan: hämtningen misslyckades ({e!r})")

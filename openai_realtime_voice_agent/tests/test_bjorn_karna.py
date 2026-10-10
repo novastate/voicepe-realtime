@@ -11,6 +11,7 @@ from app.bjorn_karna import INBYGGD, Karna, karna_url
 
 COMMS = "http://comms.test:3500/kanal/rost/kontoret"
 SJAL = "Du är Björn. Rakt och varmt.\nLås aldrig upp en dörr utan att någon uttryckligen bett om just det.\n\nTILLÄGG-ROST"
+SJAL += "\n" + ("Konkret svar först, och hitta aldrig på värden. " * 6).strip()  # the real text is long; a short one is refused
 
 
 @pytest.fixture(autouse=True)
@@ -137,3 +138,33 @@ async def test_inget_unset_comms_ingen_miljo_hogtalaren_ar_ändå_björn(monkeyp
     with caplog.at_level(logging.INFO):
         await app._uppdatera_karna()
     assert app.instructions == INBYGGD and any("källa=inbyggd" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_comms_reservtext_nar_core_ar_nere_ar_ett_misslyckande_inte_en_sjal(monkeypatch):
+    """A's FAIL on #52: comms answers 200 with its short reserve soul and halsa 'reserv' when Core is down.
+    That must fall to the environment's text (or the memory), not replace the full soul."""
+    reserv = httpx.Response(200, json={"vag": "rost", "text": SJAL, "halsa": "reserv"})
+    ok = {"v": False}
+    _comms(monkeypatch, lambda r: _ok(r) if ok["v"] else reserv)
+    assert (await Karna("MILJÖ").text()) == ("MILJÖ", "miljö")
+    ok["v"] = True
+    k = Karna("MILJÖ")
+    assert (await k.text())[1] == "hämtad"
+    ok["v"] = False
+    k._hamtad_ts -= 3600
+    assert (await k.text()) == (SJAL, "minne")
+
+
+@pytest.mark.asyncio
+async def test_en_for_kort_text_ar_inte_en_sjal(monkeypatch):
+    _comms(monkeypatch, lambda r: httpx.Response(200, json={"vag": "rost", "text": "ok", "halsa": "ok"}))
+    assert (await Karna("MILJÖ").text()) == ("MILJÖ", "miljö")
+
+
+@pytest.mark.asyncio
+async def test_bjorn_karna_av_hoppar_over_hamtningen(monkeypatch):
+    sedda = _comms(monkeypatch, _ok)
+    monkeypatch.setenv("BJORN_KARNA", "av")
+    assert (await Karna("MILJÖ").text()) == ("MILJÖ", "miljö")
+    assert sedda == []
