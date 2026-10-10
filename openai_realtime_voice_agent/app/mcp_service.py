@@ -1,5 +1,6 @@
 """MCP service integration using Pipecat's MCPClient with StreamableHTTP."""
 import logging
+import os
 from typing import Optional
 from pipecat.services.mcp_service import MCPClient, StreamableHttpParameters
 
@@ -51,3 +52,36 @@ class HomeAssistantMCPService:
 
 
 
+
+
+def dorr_url() -> Optional[str]:
+    """comms' own MCP door for this room, or None when it is off (COMMS_MCP_DORR) or cannot be worked out.
+
+    `/kanal/rost/kontoret/mcp` sits beside `HA_API_URL` (`.../kanal/rost/kontoret/api`), not under it: `/api/mcp`
+    goes to Home Assistant, the door hands out comms' own registry (lage_drift, fraga_huset, folj_upp, kasta_in
+    ...) -- the same tools Grok has (raawr US-021). COMMS_MCP_URL overrides the derived address.
+    """
+    if (os.environ.get("COMMS_MCP_DORR") or "").strip().lower() not in ("1", "true", "yes", "on"):
+        return None
+    explicit = (os.environ.get("COMMS_MCP_URL") or "").strip()
+    if explicit:
+        return explicit
+    bas = ha_api.base()
+    return bas[: -len("/api")] + "/mcp" if bas.endswith("/api") else None
+
+
+class CommsDoorMCPService:
+    """comms' MCP door as a second tool source. Nothing is listed here by hand: `tools/list` is asked of the door
+    every time the agent builds a session (main.py `_fetch_ha_tools_schema`), so a tool added or changed in comms
+    shows up on the next wake with no change to the agent."""
+
+    def __init__(self):
+        self.url = dorr_url()
+        self.mcp_client: Optional[MCPClient] = None
+
+    async def initialize(self) -> Optional[MCPClient]:
+        if not self.url:
+            return None
+        logger.info(f"🔗 Initializing comms MCP door client at {self.url}")
+        self.mcp_client = MCPClient(server_params=StreamableHttpParameters(url=self.url, headers=ha_api.headers()))
+        return self.mcp_client
