@@ -645,6 +645,11 @@ async def test_vackning_over_svaret_samlar_traffen_aven_om_fasen_inte_flyttat_si
     ("släck kontoret", True), ("Tänd lampan i köket.", True), ("vad är klockan", True),
     ("släck", False), ("tänd lampan i", False), ("släck köket och", False), ("slå på", False),
     ("vad är huvudstaden i frankrike", False), (None, False), ("", False),
+    # raawr US-047, G's findings: unfinished or turned-around orders and plain words that are not light orders
+    ("tänd inte", False), ("tänd inte köket", False), ("kan du tända", False), ("tänd lampan för", False),
+    ("tänd lampan så", False), ("släck när", False), ("tänd köket och släck", False), ("släck köket och tänd", False),
+    ("vi går på bio", False), ("jag tänkte på bio", False), ("ställ klockan på sju", False), ("stäng dörren", False),
+    ("slå av", False), ("stäng av", False), ("slå på köket", True), ("stäng av taket", True),
 ])
 def test_komplett_kommando(text, ok):
     assert bana0.komplett_kommando(text) is ok
@@ -694,3 +699,75 @@ async def test_end_early_does_not_cut_a_speaker_who_resumed():
         await service._send_user_audio(_frame(b))
     turns._pre_speaking = True
     assert service.end_early() is False
+
+
+@pytest.mark.asyncio
+async def test_end_early_is_refused_when_the_normal_end_already_decided_the_turn():
+    """The early text can come after the normal end. Then the turn is decided already: no second decision,
+    no second timing line (G, PR #53)."""
+    from test_gemini_provider import _ScriptedTurns, _frame, _options, _wire, OPENAI_SHAPE
+    from app.providers import build_service
+
+    service = build_service("gemini", _options(), OPENAI_SHAPE)
+    _wire(service, _ScriptedTurns(["start", None, "end"]))
+    avgjorde = []
+
+    async def on_end():
+        avgjorde.append(1)
+
+    service.on_user_turn_end = on_end
+    for b in range(3):
+        await service._send_user_audio(_frame(b))
+    await asyncio.sleep(0.05)
+    assert avgjorde == [1]
+    service._held = [object()]  # the hook has not cleared it yet
+    assert service.end_early() is False
+
+
+@pytest.mark.asyncio
+async def test_speech_that_resumes_after_an_early_end_opens_a_turn_of_its_own():
+    """He goes on talking after the early end: the detector would never call that a new start. The
+    continuation must not be thrown away with the decided turn (G, PR #53)."""
+    from test_gemini_provider import _ScriptedTurns, _frame, _options, _wire, OPENAI_SHAPE
+    from app.providers import build_service
+
+    service = build_service("gemini", _options(), OPENAI_SHAPE)
+    turns = _ScriptedTurns(["start", None, "preend", None, None])
+    _wire(service, turns)
+
+    async def on_end():
+        service._held = None
+
+    service.on_user_turn_end = on_end
+    for b in range(3):
+        await service._send_user_audio(_frame(b))
+    assert service.end_early() is True
+    await asyncio.sleep(0.05)
+    turns._pre_speaking = True  # the pre-detector hears him again
+    await service._send_user_audio(_frame(3))
+    assert service._tidigt is False
+    assert turns.resets == 1
+
+
+@pytest.mark.asyncio
+async def test_early_end_times_the_turn_from_the_end_of_speech_not_from_the_text():
+    """The speech ended PRE_END_MS before "preend"; text that came 0.2 s later must not move it."""
+    from test_gemini_provider import _ScriptedTurns, _frame, _options, _wire, OPENAI_SHAPE
+    from app.providers import build_service
+    from app.providers.local_turns import PRE_END_MS
+
+    service = build_service("gemini", _options(), OPENAI_SHAPE)
+    _wire(service, _ScriptedTurns(["start", None, "preend"]))
+    tystnad = []
+
+    class Tider:
+        def start(self, s):
+            tystnad.append(s)
+
+    service.tider = Tider()
+    service.on_user_turn_end = lambda: asyncio.sleep(0)
+    for b in range(3):
+        await service._send_user_audio(_frame(b))
+    await asyncio.sleep(0.2)
+    assert service.end_early() is True
+    assert tystnad[0] >= PRE_END_MS / 1000 + 0.19

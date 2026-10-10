@@ -392,6 +392,15 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             event = None
         elif event == "start":
             self._tidigt = False
+            self._avgjord = False
+        elif self._tidigt and getattr(turns, "_pre_speaking", False):
+            # He went on talking after the turn was ended early. The detector would call it one long
+            # speech and never open the continuation: start it over so the next speech is a turn of its own.
+            logger.warning("⚠️ speech resumed after the early turn end: the continuation starts a new turn")
+            self._tidigt = False
+            turns.reset()
+        if event == "preend":
+            self._preend_t = time.monotonic()
         held = getattr(self, "_held", None)
         if held is not None:
             # Bana 0 holds this turn; keep collecting until it decides. Speech
@@ -400,6 +409,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             if event == "preend" and self.on_user_turn_pre_end is not None:
                 self.on_user_turn_pre_end()
             if event == "end":
+                self._avgjord = True
                 self._tider_start()
                 await self.push_frame(UserStoppedSpeakingFrame())
                 self._decide_turn()
@@ -444,6 +454,8 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         if self.tider is not None and self._turns is not None:
             self.tider.start(tystnad_s if tystnad_s is not None else getattr(self._turns, "silence_s", 0.8))
 
+    _avgjord = False  # the held turn has been decided (early or at the normal end)
+    _preend_t = 0.0
     _tidigt = False  # the held turn was ended at "preend"; the detector's own "end" is then swallowed
 
     def end_early(self) -> bool:
@@ -451,12 +463,14 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         (raawr US-047). Refused when no turn is held or the speaker has started again. True = ended."""
         held = getattr(self, "_held", None)
         turns = self._turns
-        if not held or turns is None or self.on_user_turn_end is None or self._tidigt:
-            return False
+        if not held or turns is None or self.on_user_turn_end is None or self._tidigt or self._avgjord:
+            return False  # no turn, or it is already decided (the text came after the normal end)
         if getattr(turns, "_pre_speaking", False):
             return False
         self._tidigt = True
-        self._tider_start(PRE_END_MS / 1000)
+        self._avgjord = True
+        # The speech ended PRE_END_MS before "preend" was said; the text may have come later than that.
+        self._tider_start(PRE_END_MS / 1000 + max(0.0, time.monotonic() - self._preend_t))
         asyncio.get_running_loop().create_task(self.push_frame(UserStoppedSpeakingFrame()))
         self._decide_turn()
         return True

@@ -63,18 +63,32 @@ def tidigt_slut_paa() -> bool:
     return os.environ.get("TIDIGT_SLUT", "0") == "1"
 
 
-# A command that ends on one of these is still going: "tänd lampan i", "släck köket och", "slå på".
-_OFARDIG_SLUT = {"och", "samt", "eller", "men", "i", "på", "av", "vid", "till", "med", "i", "den", "det", "de",
-                 "en", "ett", "som", "att", "också", "sen", "sedan", "lite", "typ", "alltså"}
+# A command that ends on one of these is still going: "tänd lampan i", "släck köket och", "tänd inte", "slå på".
+_OFARDIG_SLUT = {"och", "samt", "eller", "men", "i", "på", "av", "vid", "till", "med", "den", "det", "de", "en", "ett",
+                 "som", "att", "också", "sen", "sedan", "lite", "typ", "alltså", "inte", "ej", "för", "så", "om", "när",
+                 "kan", "ska", "vill", "bara", "nu", "då", "eller"}
+# One order only: any of these inside the words means more may follow or the order is turned around.
+_FLER_ELLER_NEJ = {"och", "samt", "eller", "men", "sen", "sedan", "inte", "ej", "så", "när", "om", "kan", "ska", "vill"}
+# The words that open a plain light order. "stäng dörren", "ställ klockan på sju" and "vi går på bio" do not.
+_LAMPORDER = re.compile(r"^(tänd\w*|släck\w*|(?:slå|sätt|stäng) (?:på|av))\b", re.I)
 
 
 def komplett_kommando(text: Optional[str]) -> bool:
-    """True when the heard words are a whole order the fast track can act on: a plain light order or a
-    clock question, with at least two words and not ending on a word that asks for more."""
+    """True when the heard words are a whole order the fast track can act on: ONE plain light order that
+    begins with its verb (tänd, släck, slå på/av ...) and names something, or a clock question. At least two
+    words, no word that adds or turns the order around ("och", "inte" ...), not ending on a word that asks
+    for more. Anything else waits out the silence as before."""
     ord_ = re.findall(r"[\wåäöÅÄÖ]+", (text or "").lower())
     if len(ord_) < 2 or ord_[-1] in _OFARDIG_SLUT:
         return False
-    return verb_ur(text) is not None or klocka.ar_klockfraga(text)
+    if klocka.ar_klockfraga(text):
+        return not (set(ord_) & _FLER_ELLER_NEJ)
+    if set(ord_) & _FLER_ELLER_NEJ:
+        return False
+    m = _LAMPORDER.match(" ".join(ord_))
+    if m is None or verb_ur(text) is None:
+        return False
+    return len(" ".join(ord_)[m.end():].split()) >= 1
 
 
 def _rensa(text: str) -> str:
