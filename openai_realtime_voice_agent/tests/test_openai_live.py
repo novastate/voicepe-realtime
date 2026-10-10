@@ -396,3 +396,15 @@ def test_svar_pa_annat_sprak_loggas_med_de_forsta_orden(caplog):
             s._svarsprak(d)
     rader = [r.getMessage() for r in caplog.records if "another language" in r.getMessage()]
     assert len(rader) == 1 and "ronzio a terra hej" in rader[0] and "på dig" not in rader[0]
+
+
+def test_lopande_bokforing_hamnar_ocksa_i_openai_liggaren():
+    """G's review of #49: 100 s open, booked running then at the end, must be 100 s on BOTH ledgers, once."""
+    import time
+
+    s = _service("ws://x")
+    s._uppkopplad_sedan = time.monotonic() - 100
+    s.bokfor_lopande()
+    assert 99 <= openai_live.OPENAI_BUDGET.anvant() <= 101 and 99 <= s.budget.anvant() <= 101
+    s.bokfor()  # the teardown after it adds only what is left (nothing)
+    assert openai_live.OPENAI_BUDGET.anvant() < 102 and s.budget.anvant() < 102

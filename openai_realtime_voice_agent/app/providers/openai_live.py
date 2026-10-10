@@ -243,6 +243,14 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
             self.vagran = "budget"
         return over
 
+    def bokfor_lopande(self, var_s: float = 20.0) -> None:
+        """The running booking (every ~20 s of an open call) goes on both ledgers too, or a call longer than
+        that never fills OPENAI_MAX_MINUTER_PER_DAG (G's review of #49)."""
+        sekunder = self._obokfort()
+        super().bokfor_lopande(var_s)
+        if sekunder >= var_s:
+            OPENAI_BUDGET.lagg_till(sekunder)
+
     def bokfor(self) -> None:
         """Book on the house ledger (the mixin) and on this engine's own, once."""
         sekunder = self._obokfort()
