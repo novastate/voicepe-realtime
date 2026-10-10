@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 LIVE_URL = "wss://api.openai.com/v1/live/sessions"
 DEFAULT_MODEL = "gpt-live-1"
 OUT_RATE = 24000
-IN_RATE = 16000
+IN_RATE = 24000  # one audio.format for both directions; probed live 2026-10-10 ("audio.input" is refused)
 
 
 def _env_float(name: str, default: float) -> float:
@@ -98,9 +98,10 @@ class _Las:
 def session_config(options, tools: List[Dict[str, Any]]) -> Dict[str, Any]:
     """The whole session.start body, in one place.
 
-    ponytail: the audio input format keys and the delegation block are
-    written from the docs, not yet from a live probe. If session.start is
-    refused ("unknown field"), fix it HERE and nowhere else.
+    Probed against the real endpoint 2026-10-10: ONE `audio.format` ({type, rate}, 16000 or 24000) covers both
+    directions (`audio.input` is refused: unknown_parameter). `delegation.type` "responses" needs the API key scope
+    api.responses.write (without it: missing_scope, no session.started); "client" (OPENAI_LIVE_DELEGATION=client)
+    starts without it but has no function calling, only `session.delegation.created` with no payload.
     """
     functions = [
         {"type": "function", "name": t["name"], "description": t.get("description", ""),
@@ -118,10 +119,11 @@ def session_config(options, tools: List[Dict[str, Any]]) -> Dict[str, Any]:
         "model": options.model or DEFAULT_MODEL,
         "instructions": options.instructions,
         "audio": {
-            "input": {"format": {"type": "audio/pcm", "rate": IN_RATE}},
+            "format": {"type": "audio/pcm", "rate": IN_RATE},
             "output": {"voice": options.voice or "marin"},
         },
-        "delegation": {"type": "responses", "responses": responses},
+        "delegation": ({"type": "client"} if (os.environ.get("OPENAI_LIVE_DELEGATION") or "").strip().lower() == "client"
+                       else {"type": "responses", "responses": responses}),
     }
 
 
@@ -213,6 +215,13 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
     # --- SovlageMixin --------------------------------------------------------------
 
     async def _ateranslut(self, forut: bool) -> None:
+        # One OpenAI session in the process (Henrik's key allows one): the other speaker holds it, so this wake
+        # connects nothing and _ar_uppkopplad says no -> the mixin puts us back to sleep.
+        if not _Las.ta(self):
+            self.vagran = "las"
+            logger.warning("🔒 OpenAI Live: the other speaker holds the one session — not connecting")
+            return
+        self.vagran = None
         await self._connect()  # Live has no resumption: always a fresh session
 
     async def _ar_uppkopplad(self, timeout: float = 3.0) -> bool:
@@ -221,38 +230,23 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
         try:
             await asyncio.wait_for(self._started.wait(), timeout)
         except asyncio.TimeoutError:
+            _Las.slapp(self)
             return False
         return self._ws is not None
 
     def over_budget(self) -> bool:
-        return super().over_budget() or (
+        over = super().over_budget() or (
             OPENAI_BUDGET.anvant() + self.oppen_tid() >= max_sekunder_openai()
         )
-
-    async def vakna(self) -> bool:
-        if not self.sover:
-            return False
-        self.vagran = None
-        if OPENAI_BUDGET.anvant() >= max_sekunder_openai():
+        if over and self.sover:
             self.vagran = "budget"
-            logger.warning(f"💸 OpenAI Live: today's {max_sekunder_openai() / 60:.0f} min used — not connecting")
-            return False
-        if not _Las.ta(self):
-            self.vagran = "las"
-            logger.warning("🔒 OpenAI Live: the other speaker holds the one session — not connecting")
-            return False
-        ok = await super().vakna()
-        if not ok:
-            _Las.slapp(self)
-        return ok
+        return over
 
-    async def sova(self, reason: str) -> bool:
-        tid = self.oppen_tid()
-        slept = await super().sova(reason)
-        if slept:
-            OPENAI_BUDGET.lagg_till(tid)
-        _Las.slapp(self)
-        return slept
+    def bokfor(self) -> None:
+        """Book on the house ledger (the mixin) and on this engine's own, once."""
+        sekunder = self._obokfort()
+        super().bokfor()
+        OPENAI_BUDGET.lagg_till(sekunder)
 
     # --- wire ------------------------------------------------------------------------
 
@@ -280,7 +274,7 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
                 logger.warning(f"⚠️ OpenAI Live socket ended: {e!r}")
         if not self.sover and not self._closing:
             # Never reconnect on our own: asleep, so the next wake connects.
-            asyncio.get_running_loop().create_task(self.sova("OpenAI Live socket closed"))
+            asyncio.get_running_loop().create_task(self.sov_begaran("OpenAI Live socket closed"))
 
     async def _handle(self, ev: Dict[str, Any]) -> None:
         typ = ev.get("type")
@@ -304,7 +298,10 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
             logger.info(f"OpenAI Live session closed: {ev.get('reason')} {ev.get('usage')}")
 
     async def _audio_out(self, pcm: bytes) -> None:
-        if not pcm:
+        # Live is full duplex: the server streams output audio ALL the time, exact zeros while it says nothing
+        # (probed 2026-10-10: ~12 s of zeros around a 1 s answer). Zeros are not a reply: they would open one
+        # that never ends and keep the speaker busy.
+        if not pcm or not any(pcm):
             return
         if not self._reply_open:
             self._reply_open = True

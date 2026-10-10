@@ -76,10 +76,10 @@ async def _vant(cond, t=2.0):
     return cond()
 
 
-def test_motorn_finns_och_tar_16_khz():
+def test_motorn_finns_och_tar_24_khz():
     from app.providers import input_sample_rate, supports_client_events, self_heals
     assert OPENAI_LIVE in PROVIDERS
-    assert input_sample_rate(OPENAI_LIVE) == 16000
+    assert input_sample_rate(OPENAI_LIVE) == 24000
     assert not supports_client_events(OPENAI_LIVE) and self_heals(OPENAI_LIVE)
 
 
@@ -335,7 +335,7 @@ async def test_nedrivning_raknar_minuterna():
         conn = DeviceConnection(device_id="kontoret", websocket=object(), serializer=None)
         conn.openai_service = s
         await WebSocketHandler()._teardown(conn)
-        assert s.sover is True and openai_live._Las.agare is None
+        assert openai_live._Las.agare is None  # the lock is released; minutes counted (the machine closes it)
         assert openai_live.OPENAI_BUDGET.anvant() >= 119
 
 
@@ -360,3 +360,28 @@ async def test_svaret_tar_inte_slut_medan_ett_verktyg_kor():
         await asyncio.sleep(0.3)  # past the (test) 100 ms gap
         assert done == []
         await s.sova("klar")
+
+
+def test_sessionen_startas_med_det_riktiga_endpointen_godkanner(monkeypatch):
+    """Probed against /v1/live/sessions 2026-10-10: one audio.format for both directions, no audio.input."""
+    from types import SimpleNamespace
+
+    opts = SimpleNamespace(model="gpt-live-1", instructions="x", voice="marin", max_output_tokens=None)
+    verktyg = [{"name": "HassTurnOn", "description": "d", "parameters": {"type": "object", "properties": {}}}]
+    monkeypatch.delenv("OPENAI_LIVE_DELEGATION", raising=False)
+    cfg = openai_live.session_config(opts, verktyg)
+    assert cfg["audio"]["format"] == {"type": "audio/pcm", "rate": 24000} and "input" not in cfg["audio"]
+    assert cfg["delegation"]["type"] == "responses" and cfg["delegation"]["responses"]["tools"][0]["name"] == "HassTurnOn"
+    monkeypatch.setenv("OPENAI_LIVE_DELEGATION", "client")
+    assert openai_live.session_config(opts, verktyg)["delegation"] == {"type": "client"}
+
+
+@pytest.mark.asyncio
+async def test_tystnaden_i_stromen_ar_inget_svar():
+    """Live streams zeros between answers (probed live 2026-10-10); only real sound opens a reply."""
+    s = _service("ws://x")
+    await s._audio_out(b"\x00" * 4800)
+    assert s.frames == [] and s._reply_open is False
+    await s._audio_out(bytes([5, 1]) * 2400)
+    assert any(isinstance(f, TTSAudioRawFrame) for f in s.frames) and s._reply_open is True
+    s._reply_end_task.cancel()

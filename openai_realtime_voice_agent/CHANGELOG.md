@@ -4,6 +4,14 @@ All notable changes to this add-on. Newest first.
 
 ## 0.28.0 (fork)
 
+- **0.28.0, prov mot riktiga OpenAI Live 2026-10-10 (nyckeln i rostagentens SOPS).** Session-formatet rättat efter riktiga endpointen:
+  EN `audio.format` (24 kHz) för båda håll, `audio.input` nekas; tystnad är exakta nollor i en jämn ström och räknas inte som svar;
+  väckning/sömn går nu genom `SovlageMixin`-krokarna och tillståndsmaskinen (inga egna `vakna`/`sova`); `report_failure` väntas (async).
+  Verktyg: `delegation.type=responses` kräver nyckelns behörighet `api.responses.write` (saknas: `missing_scope`, ingen session);
+  `OPENAI_LIVE_DELEGATION=client` startar utan den men har ingen funktionsanrop. NY: `DEVICE_PROVIDERS="koket=openai_live,kontoret=gemini"`
+  låser en enhet vid en motor (jämförelsedygn); en motor som fallerar lämnar enheten åt routerns motor i `DEVICE_PROVIDER_PAUS_MIN` (10) min.
+  Mätt mot riktiga Live (syntetisk svensk röst, direkt mot endpointen): rätt hörd svenska, första ljud 0,9-1,0 s efter talets slut.
+
 - **OpenAI Live som röstmotor, `openai_live`** (raawr US-025). Henriks
   OpenAI-nyckel tillåter bara Live (gpt-live-1); Realtime-motorn `openai`
   lämnas orörd. Eget protokoll (`app/providers/openai_live.py`):

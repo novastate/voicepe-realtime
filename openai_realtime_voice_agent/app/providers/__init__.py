@@ -25,7 +25,7 @@ PROVIDERS = (OPENAI, GEMINI, XAI, OPENAI_LIVE)
 # What each engine wants the microphone audio to be. The device produces
 # 16 kHz; OpenAI needs it raised, Gemini takes it as it is. Both answer with
 # 24 kHz, which is what the pipeline already plays.
-_INPUT_RATE = {OPENAI: 24000, GEMINI: 16000, XAI: 24000, OPENAI_LIVE: 16000}
+_INPUT_RATE = {OPENAI: 24000, GEMINI: 16000, XAI: 24000, OPENAI_LIVE: 24000}
 
 # pipecat's OpenAI Realtime service has no reconnect logic; a dead socket
 # floods ErrorFrames forever. The Gemini service has _reconnect,
@@ -228,3 +228,45 @@ def build_service(provider: str, options: ProviderOptions, tools: List[Dict[str,
     if isinstance(service, SovlageMixin):
         service.sover = sovlage_pa()
     return service
+
+
+# --- one engine per device (DEVICE_PROVIDERS="koket=openai_live,kontoret=gemini") -------------------------------
+# For a day's side-by-side comparison (Henrik 2026-10-10): the kitchen on one engine, the office on another, the
+# same Björn and the same tools. A device NOT listed follows the router. A listed engine that fails (or refuses a
+# wake) hands that device to the router's engine for DEVICE_PROVIDER_PAUS_MIN minutes (10), then tries again.
+import os as _os
+import time as _time
+
+_ENHET_FEL: Dict[str, float] = {}
+
+
+def device_provider(device_id: str) -> Optional[str]:
+    """The engine DEVICE_PROVIDERS pins this device to, or None (unlisted, unknown engine, or failed lately)."""
+    for del_ in (_os.environ.get("DEVICE_PROVIDERS") or "").split(","):
+        namn, _, motor = del_.partition("=")
+        if namn.strip() == device_id and motor.strip().lower() in PROVIDERS:
+            try:
+                paus = float(_os.environ.get("DEVICE_PROVIDER_PAUS_MIN") or 10) * 60
+            except ValueError:
+                paus = 600.0
+            if _time.monotonic() - _ENHET_FEL.get(device_id, -1e9) < paus:
+                return None
+            return motor.strip().lower()
+    return None
+
+
+class EnhetsRouter:
+    """What a pinned device's ConnectionRecovery sees as its router: a failure of the pinned engine is not the
+    router's business. It pauses the pin for this device and says "move to the router's engine"."""
+
+    def __init__(self, router, device_id: str):
+        self._router, self._device_id = router, device_id
+
+    async def report_failure(self, provider: str, message: str) -> str:
+        _ENHET_FEL[self._device_id] = _time.monotonic()
+        nasta = self._router.current()
+        logger.warning(f"📌 {self._device_id}: pinned engine {provider} failed ({message[:80]}) — {nasta} for a while")
+        return nasta
+
+    def __getattr__(self, namn):
+        return getattr(self._router, namn)

@@ -24,9 +24,11 @@ from app.device_registry import DeviceConnection, DeviceRegistry, device_id_from
 from app.multi_client_transport import MixedFastAPIWebsocketTransport
 from app.providers import (
     GEMINI,
+    EnhetsRouter,
     OPENAI,
     bana0_hit,
     bana0_miss,
+    device_provider,
     drop_pending_input_audio,
     input_sample_rate,
     supports_client_events,
@@ -786,7 +788,7 @@ class ConnectionRecovery(FrameProcessor):
                 # that engine; he wakes it again. ponytail: a per-wake fallback
                 # would keep this utterance; build it if Live becomes the primary.
                 grund = self._service.vagran
-                nasta = self._router.report_failure(self._provider, f"insufficient_quota (openai_live: {grund})")
+                nasta = await self._router.report_failure(self._provider, f"insufficient_quota (openai_live: {grund})")
                 if nasta != self._provider and self._on_failover is not None:
                     logger.warning(f"🔀 {self._provider} refused the wake ({grund}) — this speaker moves to {nasta}")
                     self._vakna_task = asyncio.create_task(self._on_failover())
@@ -795,10 +797,10 @@ class ConnectionRecovery(FrameProcessor):
             # half-open socket closes, its lock is released, the minutes are
             # counted, and the next wake tries again (review of US-025).
             logger.warning(f"⚠️ cloud connect on wake took over {self.VAKNA_TIMEOUT_S:.0f}s — asleep again")
-            sova = getattr(self._service, "sova", None)
-            if sova is not None:
+            sov_begaran = getattr(self._service, "sov_begaran", None)
+            if sov_begaran is not None:
                 try:
-                    await sova("connect on wake timed out")
+                    await sov_begaran("connect on wake timed out")
                 except Exception as e:
                     logger.warning(f"⚠️ sleep after a timed-out wake failed: {e!r}")
 
@@ -1367,7 +1369,9 @@ class WebSocketHandler:
             # reconnects on the engine the router just switched to -- see
             # make_failover's docstring for why a teardown+reconnect and not
             # an in-place service swap.
-            provider=connection.provider or OPENAI, router=self.router,
+            provider=connection.provider or OPENAI,
+            router=(EnhetsRouter(self.router, connection.device_id)
+                    if self.router is not None and connection.provider != self.router.current() else self.router),
             on_failover=make_failover(connection),
         )
         # connection.provider was decided once in serve_connection, before
@@ -2205,7 +2209,7 @@ class WebSocketHandler:
         # tool-schema fetch, could come back different if another
         # connection's failure landed in that real gap, splitting the
         # transport's declared rate from the engine actually built.
-        provider = self.router.current() if self.router is not None else OPENAI
+        provider = device_provider(connection.device_id) or (self.router.current() if self.router is not None else OPENAI)
         connection.provider = provider
         # Report which engine is live, right here and not in create_service:
         # status() calls current() again internally, and the comment above
