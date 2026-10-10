@@ -494,3 +494,25 @@ async def test_retryn_klarar_att_servern_stanger_den_nekade_sockeln():
         await asyncio.sleep(0.3)  # the first reader's end has been seen by now
         assert len(starts) == 2 and s.sover is False and s._ws is not None
         await s._disconnect()
+
+
+@pytest.mark.asyncio
+async def test_tidsraden_skrivs_for_live_som_for_gemini(caplog):
+    """The comparison day reads `⏱ tider <rum> turslut=.. modell=.. enhet=..` for the kitchen too."""
+    import logging
+
+    from app.turn_tider import TurnTider
+
+    nu = [100.0]
+    s = _service("ws://x")
+    s.tider = TurnTider("koket", klocka=lambda: nu[0])
+    s._turns = type("T", (), {"silence_s": 0.8})()
+    s._tider_start()          # the local turn end
+    nu[0] += 1.2
+    await s._audio_out(bytes([5, 1]) * 2400)   # the first real sound
+    nu[0] += 0.05
+    with caplog.at_level(logging.INFO):
+        s.tider.mark("enhet")                  # it reached the device
+    rad = [r.getMessage() for r in caplog.records if "⏱ tider koket" in r.getMessage()]
+    assert rad and "turslut=800" in rad[0] and "modell=2000" in rad[0] and "enhet=2050" in rad[0]
+    s._reply_end_task.cancel()

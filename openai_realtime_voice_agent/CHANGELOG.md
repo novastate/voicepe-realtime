@@ -2,6 +2,12 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.28.1 (fork)
+
+- **Tidsraden `⏱ tider` skrivs också för OpenAI Live.** Jämförelsedygnet (köket på openai_live, kontoret på Gemini, Henrik 2026-10-10) läser tiderna
+  ur den raden, men Live-motorn skrev ingen: den startar nu raden vid lokalt turslut och märker `modell` när första riktiga ljudet kommer
+  (`enhet` märks av websocket-handlern som förut). Samma form som Gemini: `⏱ tider koket turslut=.. [stt=.. comms=.. verktyg=..] modell=.. enhet=..`.
+
 ## 0.28.0 (fork)
 
 - **0.28.0, verktyg provade 2026-10-10 (nyckeln på All).** Live-delegation med `gpt-5.4-mini` och `gpt-6-luna` som backend fungerar hela vägen:
