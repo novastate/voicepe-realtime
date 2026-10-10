@@ -385,3 +385,14 @@ async def test_tystnaden_i_stromen_ar_inget_svar():
     await s._audio_out(bytes([5, 1]) * 2400)
     assert any(isinstance(f, TTSAudioRawFrame) for f in s.frames) and s._reply_open is True
     s._reply_end_task.cancel()
+
+
+def test_svar_pa_annat_sprak_loggas_med_de_forsta_orden(caplog):
+    import logging
+
+    s = _service("ws://x")
+    with caplog.at_level(logging.WARNING):
+        for d in ["Ronzio ", "a terra ", "hej ", "på dig"]:
+            s._svarsprak(d)
+    rader = [r.getMessage() for r in caplog.records if "another language" in r.getMessage()]
+    assert len(rader) == 1 and "ronzio a terra hej" in rader[0] and "på dig" not in rader[0]

@@ -50,6 +50,7 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import FunctionCallFromLLM, LLMService
 
+from app import sprakkoll
 from app.providers.local_turns import LocalTurns, LocalTurnsMixin
 from app.providers.sovlage import Budget, SovlageMixin
 from app.providers.tool_registration import ToolRegistrationMixin
@@ -284,6 +285,7 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
             await self._audio_out(base64.b64decode(ev.get("delta") or ""))
         elif typ == "session.output_transcript.delta":
             if ev.get("delta"):
+                self._svarsprak(ev["delta"])
                 await self.push_frame(TTSTextFrame(text=ev["delta"], aggregated_by="sentence"))
         elif typ == "session.input_transcript.delta":
             self._user_text += ev.get("delta") or ""
@@ -296,6 +298,23 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
             logger.warning(f"⚠️ OpenAI Live error: {ev.get('error')}")
         elif typ == "session.closed":
             logger.info(f"OpenAI Live session closed: {ev.get('reason')} {ev.get('usage')}")
+
+    _svar_start = ""
+    _svar_kollad = False
+
+    def _svarsprak(self, delta: str) -> None:
+        """Log (once per reply, the first words only) when the answer starts in another language than Swedish."""
+        try:
+            if self._svar_kollad:
+                return
+            self._svar_start += delta
+            if len(sprakkoll.forsta_orden(self._svar_start)) >= sprakkoll.FORSTA_ORD:
+                self._svar_kollad = True
+                hit = sprakkoll.annat_sprak(self._svar_start)
+                if hit:
+                    logger.warning(f"🌐 OpenAI Live's answer starts in another language ({hit[0]}): '{' '.join(hit[1])}'")
+        except Exception as e:
+            logger.debug(f"answer language check failed: {e!r}")
 
     async def _audio_out(self, pcm: bytes) -> None:
         # Live is full duplex: the server streams output audio ALL the time, exact zeros while it says nothing
@@ -317,6 +336,7 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
     async def _end_reply_later(self):
         await asyncio.sleep(_env_float("OPENAI_LIVE_REPLY_GAP_MS", 1500.0) / 1000.0)
         self._reply_end_task = None
+        self._svar_start, self._svar_kollad = "", False
         if getattr(self, "_verktyg_pagar", 0) > 0:
             return  # a tool is still running: the answer comes after it
         self._reply_open = False
