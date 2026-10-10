@@ -636,3 +636,61 @@ async def test_vackning_over_svaret_samlar_traffen_aven_om_fasen_inte_flyttat_si
     assert ser.take_turn_audio() == PCM
     await ser.deserialize(PCM)  # next turn, still replying and no new start: his own voice is not collected
     assert ser.take_turn_audio() == b""
+
+
+# --- A whole command ends the turn at "preend" (raawr US-047) -----------------
+
+
+@pytest.mark.parametrize("text,ok", [
+    ("släck kontoret", True), ("Tänd lampan i köket.", True), ("vad är klockan", True),
+    ("släck", False), ("tänd lampan i", False), ("släck köket och", False), ("slå på", False),
+    ("vad är huvudstaden i frankrike", False), (None, False), ("", False),
+])
+def test_komplett_kommando(text, ok):
+    assert bana0.komplett_kommando(text) is ok
+
+
+@pytest.mark.asyncio
+async def test_end_early_ends_the_turn_once_and_swallows_the_normal_end():
+    """At "preend" a whole command ends the turn; the detector's own "end" a moment later must not
+    start the decision again. A speaker who has started again (the pre-detector hears speech) is not cut."""
+    from test_gemini_provider import _ScriptedTurns, _frame, _options, _wire, OPENAI_SHAPE
+    from app.providers import build_service
+
+    service = build_service("gemini", _options(), OPENAI_SHAPE)
+    _wire(service, _ScriptedTurns(["start", None, "preend", None, "end", "start"]))
+    avgjorde = []
+
+    async def on_end():
+        avgjorde.append(len(service._held or []))
+        service._held = None
+
+    service.on_user_turn_end = on_end
+    for b in range(3):
+        await service._send_user_audio(_frame(b))
+    assert service.end_early() is True
+    assert service.end_early() is False  # once per turn
+    await asyncio.sleep(0.05)
+    assert avgjorde == [4]  # pre-roll + three frames
+    await service._send_user_audio(_frame(3))
+    await service._send_user_audio(_frame(4))  # the normal "end": swallowed, no second decision
+    await asyncio.sleep(0.05)
+    assert avgjorde == [4]  # pre-roll + three frames
+    assert service._tidigt is False
+    await service._send_user_audio(_frame(5))  # the next "start" opens a fresh turn
+    assert service._held is not None
+
+
+@pytest.mark.asyncio
+async def test_end_early_does_not_cut_a_speaker_who_resumed():
+    from test_gemini_provider import _ScriptedTurns, _frame, _options, _wire, OPENAI_SHAPE
+    from app.providers import build_service
+
+    service = build_service("gemini", _options(), OPENAI_SHAPE)
+    turns = _ScriptedTurns(["start", None])
+    _wire(service, turns)
+    service.on_user_turn_end = lambda: None
+    for b in range(2):
+        await service._send_user_audio(_frame(b))
+    turns._pre_speaking = True
+    assert service.end_early() is False

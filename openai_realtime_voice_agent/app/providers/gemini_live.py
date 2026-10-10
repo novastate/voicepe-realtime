@@ -387,6 +387,11 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         if turns is None:
             return await super()._send_user_audio(frame)
         event = turns.feed(frame.audio)
+        if event == "end" and self._tidigt:
+            self._tidigt = False  # this turn was ended early (end_early); this is only its normal end
+            event = None
+        elif event == "start":
+            self._tidigt = False
         held = getattr(self, "_held", None)
         if held is not None:
             # Bana 0 holds this turn; keep collecting until it decides. Speech
@@ -435,9 +440,26 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
 
     tider = None  # the connection's TurnTider (app/turn_tider.py), set by the handler
 
-    def _tider_start(self) -> None:
+    def _tider_start(self, tystnad_s: Optional[float] = None) -> None:
         if self.tider is not None and self._turns is not None:
-            self.tider.start(getattr(self._turns, "silence_s", 0.8))
+            self.tider.start(tystnad_s if tystnad_s is not None else getattr(self._turns, "silence_s", 0.8))
+
+    _tidigt = False  # the held turn was ended at "preend"; the detector's own "end" is then swallowed
+
+    def end_early(self) -> bool:
+        """End the held turn now, at "preend", because bana 0's early speech-to-text is a whole command
+        (raawr US-047). Refused when no turn is held or the speaker has started again. True = ended."""
+        held = getattr(self, "_held", None)
+        turns = self._turns
+        if not held or turns is None or self.on_user_turn_end is None or self._tidigt:
+            return False
+        if getattr(turns, "_pre_speaking", False):
+            return False
+        self._tidigt = True
+        self._tider_start(PRE_END_MS / 1000)
+        asyncio.get_running_loop().create_task(self.push_frame(UserStoppedSpeakingFrame()))
+        self._decide_turn()
+        return True
 
     # Seconds of speech Live has given (the daily cap counts these), turns it has finished, and the
     # event a fed text waits on for its first sound (core_strom.LiveMatare).

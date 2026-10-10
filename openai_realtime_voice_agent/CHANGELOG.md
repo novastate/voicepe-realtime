@@ -2,6 +2,14 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.28.3 (fork)
+
+- **Turen kan sluta vid föravslutet när snabbspåret redan hört ett helt kommando** (raawr US-047, `TIDIGT_SLUT=1`, av som standard, bara Gemini).
+  Efter 500 ms tystnad (`preend`) körs den tidiga tal-till-texten redan. Är texten en vanlig lampordning eller en klockfråga med minst två ord
+  som inte slutar på ett ord som ber om mer ("och", "i", "på" ...), avslutas turen direkt i stället för att vänta ut de sista 300 ms.
+  Talar han igen (föravslutsdetektorn hör tal) klipps inget. Detektorns eget slut efteråt sväljs, så turen avgörs en gång.
+  Tidsraden räknar talets slut från föravslutet. OpenAI Live (köket) rörs inte.
+
 ## 0.28.1 (fork)
 
 - **Tidsraden `⏱ tider` skrivs också för OpenAI Live.** Jämförelsedygnet (köket på openai_live, kontoret på Gemini, Henrik 2026-10-10) läser tiderna

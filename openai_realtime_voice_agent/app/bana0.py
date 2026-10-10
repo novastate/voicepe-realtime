@@ -57,6 +57,26 @@ def ping_paa() -> bool:
     return os.environ.get("BANA0_PING", "0") == "1"
 
 
+def tidigt_slut_paa() -> bool:
+    """Gemini: a turn whose early speech-to-text is a complete command ends at "preend" instead of
+    waiting the last stretch of silence (raawr US-047). OFF by default. TIDIGT_SLUT=1 turns it on."""
+    return os.environ.get("TIDIGT_SLUT", "0") == "1"
+
+
+# A command that ends on one of these is still going: "tänd lampan i", "släck köket och", "slå på".
+_OFARDIG_SLUT = {"och", "samt", "eller", "men", "i", "på", "av", "vid", "till", "med", "i", "den", "det", "de",
+                 "en", "ett", "som", "att", "också", "sen", "sedan", "lite", "typ", "alltså"}
+
+
+def komplett_kommando(text: Optional[str]) -> bool:
+    """True when the heard words are a whole order the fast track can act on: a plain light order or a
+    clock question, with at least two words and not ending on a word that asks for more."""
+    ord_ = re.findall(r"[\wåäöÅÄÖ]+", (text or "").lower())
+    if len(ord_) < 2 or ord_[-1] in _OFARDIG_SLUT:
+        return False
+    return verb_ur(text) is not None or klocka.ar_klockfraga(text)
+
+
 def _rensa(text: str) -> str:
     """Words that go into the model's line: no quotes, no control characters or line breaks (G on #42: a
     line break in the heard words could start a new [huset] line)."""
