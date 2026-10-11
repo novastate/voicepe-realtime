@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from app import ha_api
+from app import tur_ljud
 from app.avbrott import dbfs
 
 logger = logging.getLogger(__name__)
@@ -174,10 +175,24 @@ class SentSvar:
         try:
             await self._tala(fraga, rum)
             pcm = await lyssnare.lyssna()
+            self._mat_efter_fraga(rum, pcm, lyssnare.tal)
             text = await self._stt(pcm) if lyssnare.tal else None
             return text, tolka(text)
         finally:
             serializer.fraga_tap = None
+
+    @staticmethod
+    def _mat_efter_fraga(rum: str, pcm: bytes, tal: bool) -> None:
+        """What the mic heard after the question (D-97: does the speaker's own voice come back?): length, the loudest
+        0.25 s, whether it passed the speech threshold. The audio is kept by tur_ljud when that flag is on."""
+        try:
+            steg = [dbfs(pcm[i:i + 8000]) for i in range(0, len(pcm) - 8000, 8000)]
+            logger.info(f"🎙️ after the question ({rum}): {len(pcm) / 32000:.1f} s heard, loudest "
+                        f"{max(steg) if steg else float('-inf'):.0f} dBFS, speech level {'reached' if tal else 'not reached'} "
+                        f"(threshold {TAL_DBFS:.0f})")
+            tur_ljud.spara(pcm, rum)
+        except Exception as e:  # a measurement must never touch the question
+            logger.debug(f"after-question level not logged: {e!r}")
 
     async def _fraga(self, g: dict, serializer) -> None:
         rum, rid = g["rum"], g["result_id"]
