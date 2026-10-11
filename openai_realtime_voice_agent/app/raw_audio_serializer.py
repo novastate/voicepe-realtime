@@ -386,7 +386,19 @@ class RawAudioSerializer(FrameSerializer):
         self._samla_tur = False
         return pcm
 
+    _tysta_tills = 0.0
+
+    def tysta_svar(self, sek: float = 3.0) -> None:
+        """A person talked over the reply (US-060): what is left of it must not be sent. The device flushes its own queue
+        on "listening"; this stops the tail that is still on its way, until the next turn ends or `sek` has passed."""
+        self._tysta_tills = time.monotonic() + sek
+
+    def tysta_slut(self) -> None:
+        self._tysta_tills = 0.0
+
     async def serialize(self, frame: Frame) -> bytes:
+        if isinstance(frame, OutputAudioRawFrame) and self._tysta_tills and time.monotonic() < self._tysta_tills:
+            return b""
         if isinstance(frame, OutputAudioRawFrame):
             self._reply_audio_since_wake = True
             if self.tider is not None:
