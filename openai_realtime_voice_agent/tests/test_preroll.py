@@ -22,3 +22,20 @@ def test_the_engine_keeps_a_second_of_audio_before_the_start_event():
     kept = e._take_preroll()
     assert len(kept) == int(LocalTurnsMixin.PREROLL_S * 16000) * 2
     assert kept[:3200] == bytes([20]) * 3200  # frame 20 = 1.0 s back from the end, the oldest one kept
+
+
+def test_a_misspelt_env_value_does_not_stop_the_agent_starting(monkeypatch):
+    import importlib
+
+    import app.providers.local_turns as lt
+    import app.raw_audio_serializer as rs
+    monkeypatch.setenv("ENGINE_PREROLL_MS", "1s")
+    monkeypatch.setenv("TURN_PREROLL_MS", "lång")
+    try:
+        importlib.reload(lt)
+        importlib.reload(rs)
+        assert lt.LocalTurnsMixin.PREROLL_S == 1.0 and rs.TURN_PCM_PREROLL == 16000 * 2 * 1500 // 1000
+    finally:
+        monkeypatch.undo()
+        importlib.reload(lt)
+        importlib.reload(rs)
