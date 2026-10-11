@@ -157,8 +157,9 @@ def media_paus(function_name, arguments):
     if not isinstance(arguments, dict):
         return None
     args = dict(arguments)
-    if "media_player" not in [str(d) for d in _lista(args.get("domain"))]:
-        return None
+    domaner = [str(d) for d in _lista(args.get("domain"))]
+    if not domaner or any(d != "media_player" for d in domaner):
+        return None  # 'turn off the lights and the radio' must still turn the lights off: only a pure speaker request is a pause
     return "HassMediaPause", {k: args[k] for k in ("name", "area", "floor") if args.get(k)}
 
 

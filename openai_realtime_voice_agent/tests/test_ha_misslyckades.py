@@ -19,6 +19,14 @@ def test_turn_off_on_a_speaker_becomes_pause():
         ("HassMediaPause", {"name": "Kontor"})
 
 
+def test_a_mixed_list_is_not_turned_into_a_pause():
+    # B's FAIL on #62: 'stäng av lamporna och radion' must still turn the lights off
+    assert media_paus("intent__HassTurnOff", {"domain": ["light", "media_player"], "area": "Kontor"}) is None
+    assert media_paus("HassTurnOff", '{"domain": ["light", "media_player"], "area": "Kontor"}') is None
+    assert media_paus("HassTurnOff", {"domain": ["media_player", "media_player"], "area": "Kontor"}) == \
+        ("HassMediaPause", {"area": "Kontor"})
+
+
 def test_other_turn_offs_are_left_alone():
     assert media_paus("intent__HassTurnOff", {"domain": ["light"], "area": "kontor"}) is None
     assert media_paus("intent__HassTurnOff", {"area": "kontor"}) is None
