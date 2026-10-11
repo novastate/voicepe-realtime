@@ -319,6 +319,11 @@ class RawAudioSerializer(FrameSerializer):
                 except Exception as e:
                     logger.warning(f"⚠️ audio-ack failed: {e!r}")
 
+        # Echo measurement (US-060, EKO_PROV=1 only): every mic frame, before any guard.
+        if self.eko_mat is not None:
+            self.eko_mat(message)
+            return None  # measuring: nothing else may hear the mic (the engine would answer its own voice)
+
         # Announcement echo-guard: drop inbound audio while an out-of-band
         # announcement is playing (observed: the mic heard "your timer is done",
         # transcribed it, and the model replied to itself).
@@ -387,6 +392,7 @@ class RawAudioSerializer(FrameSerializer):
         return pcm
 
     _tysta_tills = 0.0
+    eko_mat = None
 
     def tysta_svar(self, sek: float = 3.0) -> None:
         """A person talked over the reply (US-060): what is left of it must not be sent. The device flushes its own queue
