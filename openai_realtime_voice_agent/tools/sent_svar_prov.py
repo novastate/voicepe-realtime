@@ -120,8 +120,8 @@ def sant(verdicts: list, namn: str, ok: bool, detalj: str = ""):
     print(json.dumps(verdicts[-1], ensure_ascii=False), flush=True)
 
 
-def notis(rid: str) -> dict:
-    return {"rum": "kontoret", "result_id": rid, "agent": "Sixten", "amne": "hockeyresultat",
+def notis(rid: str, rum: str) -> dict:
+    return {"rum": rum, "result_id": rid, "agent": "Sixten", "amne": "hockeyresultat",
             "amnesord": ["hockey", "resultat"], "created_at": "2026-10-11T08:00:00+02:00"}
 
 
@@ -131,9 +131,9 @@ def moln_oppnad(unit: str, sedan: float) -> bool:
     return "connected to the cloud engine" in ut or "cloud session opened" in ut
 
 
-async def skicka_notis(agent: str, rid: str) -> tuple[int, dict]:
+async def skicka_notis(agent: str, rid: str, rum: str) -> tuple[int, dict]:
     async with httpx.AsyncClient(timeout=5) as c:
-        r = await c.post(f"{agent}/sent-svar", json=notis(rid))
+        r = await c.post(f"{agent}/sent-svar", json=notis(rid, rum))
         try:
             return r.status_code, r.json()
         except ValueError:
@@ -146,21 +146,26 @@ async def dag(a, comms: FalskComms, v: list):
     async with websockets.connect(f"{a.ws}?device_id={a.enhet}", max_size=None, ping_interval=None) as ws:
         e = Enhet(ws)
         await ws.send(json.dumps({"type": "start"}))
-        await asyncio.sleep(1.5)
+        await asyncio.sleep(9.0)  # the agent builds the device's session a few seconds after it connects
         for namn, svar_ljud, forvantat in (("ja", ja, 1), ("nej", nej, 0), ("tystnad", None, 0)):
             rid = f"prov-{namn}-{int(time.time())}"
-            kod, kropp = await skicka_notis(a.agent, rid)
+            kod, kropp = await skicka_notis(a.agent, rid, a.enhet)
             sant(v, f"AC-1 {namn}: notisen tas emot (202 fragar:true)", kod == 202 and kropp.get("fragar") is True,
                  f"{kod} {kropp}")
-            if kod != 202:
+            if not (kod == 202 and kropp.get("fragar") is True):
                 continue  # no door: nothing is asked, so nothing more to say or measure
             fraga = await e.vanta_ljud(a.enhet_ljud_s)
             sant(v, f"AC-1 {namn}: frågan talas", fraga > 16000, f"{fraga} B")
             sant(v, f"AC-1 {namn}: svaret läses inte och inget hämtas", comms.hamtningar(rid) == 0)
+            # The agent sends the whole question at once and keeps the mic shut while it plays (+1.2 s); a real
+            # device opens the mic after that, so the stand-in speaks only then.
+            await asyncio.sleep(fraga / 48000 + 1.0)  # 24 kHz 16-bit mono
+            efter_fraga = e.bytes  # everything that arrives from here on is the answer's (or nothing)
             if svar_ljud is not None:
                 await e.tala(svar_ljud)
             await e.tystnad(7.0)  # the follow-up window, then the mic closes
-            svar = await e.vanta_ljud(a.enhet_ljud_s)
+            await e.vanta_ljud(a.enhet_ljud_s)
+            svar = e.bytes - efter_fraga
             hamtat = comms.hamtningar(rid)
             if forvantat:
                 sant(v, "AC-2 ja: svaret hämtas en gång och läses", hamtat == 1 and svar > 16000,
@@ -177,10 +182,11 @@ async def natt(a, comms: FalskComms, v: list):
     async with websockets.connect(f"{a.ws}?device_id={a.enhet}", max_size=None, ping_interval=None) as ws:
         e = Enhet(ws)
         await ws.send(json.dumps({"type": "start"}))
-        await asyncio.sleep(1.5)
+        await asyncio.sleep(9.0)  # the agent builds the device's session a few seconds after it connects
         rid = f"prov-natt-{int(time.time())}"
-        kod, kropp = await skicka_notis(a.agent, rid)
-        sant(v, "AC-3 natt: 202 fragar:false", kod == 202 and kropp.get("fragar") is False, f"{kod} {kropp}")
+        kod, kropp = await skicka_notis(a.agent, rid, a.enhet)
+        sant(v, "AC-3 natt: 202 fragar:false, orsak natt", kod == 202 and kropp == {"fragar": False, "orsak": "natt"},
+             f"{kod} {kropp}")
         ljud = await e.vanta_ljud(5.0)
         sant(v, "AC-3 natt: inget talas, inget hämtas", ljud < 3200 and comms.hamtningar(rid) == 0, f"{ljud} B")
         ws.transport.abort()
