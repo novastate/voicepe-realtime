@@ -246,3 +246,12 @@ def test_ac6_efter_svar_hooken_vantar_pa_idle():
         await t
     asyncio.run(go())
     assert anrop == [("kontoret", "idle")]
+
+
+def test_the_level_after_a_question_is_logged_and_never_breaks_it(caplog):
+    import logging
+    caplog.set_level(logging.INFO)
+    sent_svar.SentSvar._mat_efter_fraga("kontoret", TYST + TAL, True)
+    assert "after the question (kontoret): 1.5 s heard" in caplog.text and "reached" in caplog.text
+    sent_svar.SentSvar._mat_efter_fraga("kontoret", b"", False)  # nothing heard: no error
+    sent_svar.SentSvar._mat_efter_fraga("kontoret", None, False)  # junk: swallowed
