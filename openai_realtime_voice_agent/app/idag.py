@@ -152,6 +152,6 @@ class Idag:
             "Annat väder, andra dagar eller detaljer: använd verktygen. "
             "Klockan ovan gäller bara när samtalet öppnades: frågar någon vad klockan eller datumet är nu, "
             "kör GetDateTime först. Tider för matcher, resultat, öppettider, priser och nyheter gissar du aldrig: "
-            "sök först med Googles sökning, och säg om du inte hittar det."
+            "sök först med webbsökningen, och säg om du inte hittar det."
         )
         return "\n\n" + "\n".join(lines)
