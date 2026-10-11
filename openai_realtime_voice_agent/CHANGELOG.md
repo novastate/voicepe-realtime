@@ -2,6 +2,10 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.29.6 (fork)
+
+- **Mätrad efter frågan om ett sent svar** (raawr D-97, ekoprovet). Efter frågan loggas `🎙️ after the question: X s heard, loudest Y dBFS, speech level reached|not reached`, och ljudet sparas av `tur_ljud` när den flaggan är på. Inget beteende ändras. Skälet: den vägen tar mikrofonen från motorn, så varken inspelningen eller turfilerna ser den.
+
 ## 0.29.3 (fork)
 
 - **Varje turs ljud kan sparas som egen fil** (raawr D-97, för att jämföra Google, xAI och bana 0 på riktigt tal). Av som standard. `TUR_LJUD_SPARA=1` slår på; `TUR_LJUD_KATALOG` (standard `/data/tur_ljud`) och `TUR_LJUD_MAX` (standard 40 filer) styr var och hur mycket. Är katalogen full sparas inget mer och journalen säger det en gång. Filerna är bana 0:s kopia av turen (16 kHz mono) och innehåller röst: slå av flaggan och radera katalogen efter jämförelsen.
