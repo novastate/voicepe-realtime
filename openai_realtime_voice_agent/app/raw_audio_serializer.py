@@ -13,7 +13,9 @@ TURN_PCM_CAP = 16000 * 2 * 30  # 30 s of 16 kHz PCM16 mono
 # ponytail: fixed 0.8 s kept from before speech_started (the event arrives
 # after the speech began). Tune here if first syllables go missing or old
 # audio leaks into the transcript.
-TURN_PCM_PREROLL = 16000 * 2 * 8 // 10
+# 1.5 s since 2026-10-11 (was 0.8 s): of Henrik's 8 saved turns, three began at full speech level in the
+# first 50 ms, i.e. the first word started before the ring began. TURN_PREROLL_MS tunes it.
+TURN_PCM_PREROLL = 16000 * 2 * int(os.environ.get("TURN_PREROLL_MS", "1500")) // 1000
 
 
 class RawAudioSerializer(FrameSerializer):
