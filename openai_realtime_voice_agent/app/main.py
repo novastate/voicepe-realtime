@@ -1280,7 +1280,7 @@ class Application:
                 stt=stt if self.bana0_stt else None, enhet=enhet)
         return self._sent_svar_obj
 
-    async def _eko_prov(self, rum: str, pcm: bytes, extra_s: float) -> dict:
+    async def _eko_prov(self, rum: str, pcm: bytes, extra_s: float, pace: bool = False) -> dict:
         """Play `pcm` (24 kHz) on `rum` with the device's mic streaming, and hand back what the mic heard."""
         import base64
 
@@ -1297,7 +1297,7 @@ class Application:
             await asyncio.sleep(0.6)
             mark = len(got)
             clip = len(pcm) / 48000.0
-            await self.enrollment_conductor._say("", device_id=rum, pace=False, pcm=pcm)
+            await self.enrollment_conductor._say("", device_id=rum, pace=pace, pcm=pcm)
             await asyncio.sleep(clip + extra_s)
         finally:
             ser.eko_mat = None
@@ -1647,7 +1647,7 @@ class Application:
                 rum = body["rum"]
             except Exception:
                 return JSONResponse({"error": "invalid body"}, status_code=400)
-            return JSONResponse(await self._eko_prov(rum, pcm, float(body.get("extra_s", 2.0))))
+            return JSONResponse(await self._eko_prov(rum, pcm, float(body.get("extra_s", 2.0)), bool(body.get("pace", False))))
 
         @web_app.get("/healthz")
         async def healthz():
