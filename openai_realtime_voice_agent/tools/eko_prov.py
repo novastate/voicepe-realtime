@@ -58,6 +58,7 @@ async def main():
             print(i + 1, "error", r["error"])
             continue
         heard = base64.b64decode(r.pop("pcm_b64"))
+        print(f"   sand: {r.get('sand')}")
         lv = r["levels_dbfs_per_250ms"]
         topp = max(lv) if lv else None
         b = await bana0.transkribera(heard[int(r["mark_s"] * 32000):], host, int(port), 15.0)
