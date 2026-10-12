@@ -13,7 +13,10 @@ from app import ha_api, tool_selection
 from app.core_strom import (
     LiveMatare,
     core_stream_tala_paa,
+    EN_HJARNA_TILLAGG,
+    en_hjarna_aktiv,
     get_fraga_core_definition,
+    utan_kunskapsverktyg,
     register_fraga_core,
     strom_url,
 )
@@ -859,7 +862,8 @@ class Application:
         # No EARLY_ACK_INSTRUCTION: Grok said "Jag kollar." before every answer,
         # jokes included (owner 2026-10-02 23:07). The slow tools' descriptions
         # carry it instead (early_ack.with_ack_hint, 0.25.6).
-        return self.instructions + SPRAKLAS + memory_instructions() + self.idag.block()
+        return (self.instructions + SPRAKLAS + memory_instructions()
+                + (EN_HJARNA_TILLAGG if en_hjarna_aktiv() else "") + self.idag.block())
 
     async def _idag_loop(self) -> None:
         """Keep the Idag block fresh: refetch, then let Gemini reconnect when quiet.
@@ -1005,6 +1009,10 @@ class Application:
                     connection.ha_verktyg_saknas = True
                     logger.warning(f"⚠️ Failed to fetch MCP tool definitions: {e}")
             
+            if connection.provider == "gemini" and en_hjarna_aktiv():
+                # After every block above (openclaw, MCP): the filter must see the final list.
+                all_tools = utan_kunskapsverktyg(all_tools)
+
             from app.providers import GEMINI, build_service
 
             # The engine is decided exactly ONCE per connection, by

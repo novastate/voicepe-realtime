@@ -2,6 +2,10 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.29.9 (fork)
+
+- **EN hjärna: högtalaren är öron och mun** (raawr E-07/D-21, US-047 AC-4; av som standard). `EN_HJARNA=1` (kräver att rummets Comms-adress finns, annars händer inget): `fraga_core` slås på utan `CORE_STREAM_TALA`, modellens egna kunskapsverktyg (`web_search`, `ask_openclaw`, `recall_memory`) och Geminis `google_search` tas bort, och instruktionen får ett tillägg: allt utom husstyrning går till `fraga_core`, svara aldrig på en sakfråga själv, gissa aldrig. Husstyrning, bana 0 och timers är orörda. Obevisat live: strömmen hela vägen kräver Comms #US-050 deployad och ett lås (`/root/PROVPLATS`).
+
 ## 0.29.8 (fork)
 
 - **Ekonätet: nivågräns och kända hittepå-fraser** (raawr US-060, efter ekoprovet 07:00). Mätt på Kontor med aux (28 s klipp, 3 körningar, bara XMOS-lagret): rummets golv med Björns röst igång låg på −50 till −53 dBFS med toppar −41 till −47, och Geminis utskrift hade inga av hans ord (men "¿Qué tal?" ur bruset). Silero tog en gång brus för tal i 4,8 s, och bana 0 skrev "Björn." och "Tack till elever och personal …" ur golvet; nätet räknade det som en person. Nu: tal över hans svar vars högsta 0,25 s ligger under −36 dBFS (`EKO_NIVA_DBFS`; Henrik ligger på −12 till −20) är brus och ignoreras, och bana 0:s kända brusfraser räknas aldrig som en person.
