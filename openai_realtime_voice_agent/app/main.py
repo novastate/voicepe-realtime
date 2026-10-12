@@ -1642,6 +1642,8 @@ class Application:
         async def fraga_prov(request: Request):
             """Test only (EKO_PROV=1): speak a question INTO the session as if the mic heard it (16 kHz mono pcm), no wake word.
             Björn answers on the real speaker, so the echo path is the real one."""
+            if (request.client.host if request.client else "") not in ("127.0.0.1", "::1"):
+                return JSONResponse({"error": "loopback_only"}, status_code=403)
             if os.environ.get("EKO_PROV", "0") != "1":
                 return JSONResponse({"error": "eko_prov_off"}, status_code=404)
             import base64
