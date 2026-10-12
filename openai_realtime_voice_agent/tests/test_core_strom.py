@@ -392,3 +392,39 @@ def test_gemini_google_sokning_stangs_av_under_en_hjarna(monkeypatch):
     assert gemini_live._google_search_on("gemini-3.8-live") is True
     monkeypatch.setenv("EN_HJARNA", "1")
     assert gemini_live._google_search_on("gemini-3.8-live") is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("en_hjarna", ["1", "0"])
+async def test_en_hjarna_session_har_inga_kunskapsverktyg_trots_openclaw_och_mcp(monkeypatch, en_hjarna):
+    """Through create_service, with OPENCLAW_URL set and Home Assistant's tools fetched: the filter
+    must see the final list (A on #68: it ran before openclaw/MCP and left ask_openclaw behind)."""
+    from app import providers
+    from app.device_registry import DeviceConnection
+    from tests.test_provider_selection import _bare_app
+    from tests.test_token_budget import _McpClient
+
+    monkeypatch.setenv("OPENCLAW_URL", "http://openclaw.test:3400")
+    monkeypatch.setenv("CORE_STROM_URL", "http://x/fraga")
+    monkeypatch.setenv("CORE_STREAM_TALA", "1")
+    monkeypatch.setenv("EN_HJARNA", en_hjarna)
+    seen = {}
+    real_build = providers.build_service
+
+    def capture(provider, options, tools):
+        seen["tools"] = tools
+        return real_build(provider, options, tools)
+
+    monkeypatch.setattr(providers, "build_service", capture)
+    app = _bare_app(providers.GEMINI)
+    app.enable_web_search = True
+    app.web_search_model = "gpt-5.5"
+    app.mcp_client = _McpClient()
+    connection = DeviceConnection(device_id="kontor", websocket=object())
+    connection.provider = providers.GEMINI
+    await app.create_service(connection)
+    names = {t["name"] for t in seen["tools"]}
+    assert "fraga_core" in names
+    assert any(n.startswith("intent__HassTurnOn") for n in names)  # house control stays
+    for borta in ("web_search", "ask_openclaw", "recall_memory"):
+        assert (borta not in names) is (en_hjarna == "1"), borta

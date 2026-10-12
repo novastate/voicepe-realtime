@@ -1040,8 +1040,6 @@ class Application:
             # below so the model sees exactly one ask_openclaw.
             if core_stream_tala_paa() and strom_url() and connection.provider == "gemini":  # only Live can be fed text
                 all_tools.append(get_fraga_core_definition())
-                if en_hjarna_aktiv():
-                    all_tools = utan_kunskapsverktyg(all_tools)
             if openclaw_url():
                 all_tools.append(get_openclaw_tool_definition())
                 all_tools.append(get_recall_tool_definition())
@@ -1064,6 +1062,10 @@ class Application:
                     connection.ha_verktyg_saknas = True
                     logger.warning(f"⚠️ Failed to fetch MCP tool definitions: {e}")
             
+            if connection.provider == "gemini" and en_hjarna_aktiv():
+                # After every block above (openclaw, MCP): the filter must see the final list.
+                all_tools = utan_kunskapsverktyg(all_tools)
+
             from app.providers import GEMINI, build_service
 
             # The engine is decided exactly ONCE per connection, by
