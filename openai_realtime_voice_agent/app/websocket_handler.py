@@ -2133,6 +2133,9 @@ class WebSocketHandler:
             return False
         try:
             await client.send(data)
+            _aec = getattr(getattr(connection, "serializer", None), "aec", None)
+            if _aec is not None:  # clips and announcements are in the room too: the canceller must know them
+                _aec.ref(data, 24000)
             if getattr(connection, "tider", None) is not None:
                 connection.tider.mark("enhet")  # bana 0's own clips and the receipts go this way (B, #34)
             return True

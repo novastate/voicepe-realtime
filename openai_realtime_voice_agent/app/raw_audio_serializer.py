@@ -36,6 +36,9 @@ class RawAudioSerializer(FrameSerializer):
 
     def __init__(self, device_id: str, input_sample_rate: int | None = None):
         self._device_id = device_id
+        # Software echo canceller (SOFT_AEC=1, raawr US-060): None when off or the library is missing.
+        from app.mjuk_aec import MjukAec
+        self.aec = MjukAec.skapa()
         # The Home Assistant Voice PE firmware (va_client) streams 16 kHz PCM16
         # mono from the XMOS mic. We tag incoming frames with the device's true
         # rate. NOTE: pipecat 0.0.97's input transport does NOT resample — the
@@ -324,6 +327,11 @@ class RawAudioSerializer(FrameSerializer):
             self.eko_mat(message)
             return None  # measuring: nothing else may hear the mic (the engine would answer its own voice)
 
+        if self.aec is not None:  # the mic with his own voice taken out (SOFT_AEC=1)
+            message = self.aec.process(message)
+            if not message:
+                return None
+
         # Announcement echo-guard: drop inbound audio while an out-of-band
         # announcement is playing (observed: the mic heard "your timer is done",
         # transcribed it, and the model replied to itself).
@@ -407,6 +415,8 @@ class RawAudioSerializer(FrameSerializer):
             return b""
         if isinstance(frame, OutputAudioRawFrame):
             self._reply_audio_since_wake = True
+            if self.aec is not None:
+                self.aec.ref(frame.audio, getattr(frame, "sample_rate", 24000) or 24000)
             if self.tider is not None:
                 self.tider.mark("enhet")
         """Serialize frame to binary message.
