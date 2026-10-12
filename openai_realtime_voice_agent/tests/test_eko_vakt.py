@@ -10,7 +10,8 @@ def test_his_own_words_are_echo():
 
 
 def test_an_inexact_local_transcript_of_his_voice_is_still_echo():
-    assert ev.ar_eko("jag sätta på radio i kontor", BJORN)  # near enough, word by word
+    assert ev.ar_eko("jag sätter på radion i kontoret nu", BJORN)  # exact short words, one long word a little off is fine
+    assert ev.ar_eko("jag sätter på radion i kontorett", BJORN)  # a long word within the likeness
 
 
 def test_other_speech_is_an_interruption():
@@ -20,6 +21,23 @@ def test_other_speech_is_an_interruption():
 
 def test_nothing_intelligible_is_not_an_interruption():
     assert ev.ar_eko(None, BJORN) and ev.ar_eko("", BJORN) and ev.ar_eko("...", BJORN)
+    assert ev.dom("", True, BJORN)  # it listened and heard no words: noise, ignored
+
+
+def test_a_speech_to_text_that_missed_is_a_person_not_echo():
+    # A's FAIL on #65 (a): timeout/error = we do not know what was said = in doubt it is him
+    assert not ev.dom(None, False, "jag fixar det")
+    assert not ev.dom("", False, BJORN)
+    assert ev.dom("sätter på radion", True, BJORN)  # a clear echo is still ignored
+
+
+def test_a_short_interruption_is_not_hushed_by_a_similar_long_word():
+    # A's FAIL on #65 (b): 'vänta' against his 'väntar', 'sluta' against 'slutar', 'ja' against 'jag', 'nej' against 'nej det går inte'
+    assert not ev.ar_eko("vänta", "jag väntar på svaret nu")
+    assert not ev.ar_eko("sluta", "jag slutar nu")
+    assert not ev.ar_eko("ja", "jag fixar det")
+    assert not ev.ar_eko("nej", "jag tror inte det")
+    assert ev.ar_eko("nej", "nej det går inte")  # the same word, exactly: his own
 
 
 def test_before_he_has_said_anything_any_speech_is_a_person():

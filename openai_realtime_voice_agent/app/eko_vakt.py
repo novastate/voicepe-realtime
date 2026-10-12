@@ -13,6 +13,7 @@ import time
 
 MIN_ORD = 1             # fewer words than this is not speech
 LIKA = 0.75             # two words this alike are the same word (the local STT is not exact on his voice)
+LANGT = 7               # words shorter than this must match exactly: 'vänta' is not 'väntar', 'sluta' is not 'slutar', 'ja' is not 'jag' (A on #65)
 ANDEL = 0.6             # this share of the heard words found among his = echo
 
 
@@ -44,8 +45,16 @@ def ar_eko(hort: "str | None", hans: str) -> bool:
     sina = set(ord_(hans))
     if not sina:
         return False  # he has said nothing yet: whatever is heard is a person
-    traffar = sum(1 for w in h if w in sina or difflib.get_close_matches(w, sina, n=1, cutoff=LIKA))
+    traffar = sum(1 for w in h if w in sina or (len(w) >= LANGT and difflib.get_close_matches(w, sina, n=1, cutoff=LIKA)))
     return traffar / len(h) >= ANDEL
+
+
+def dom(hort: "str | None", ok: bool, hans: str) -> bool:
+    """The net's verdict: True = ignore (his own words, or clearly no words). In doubt it is the person: a speech-to-text
+    that failed or timed out (ok False) must never throw a real interruption away (A on #65)."""
+    if not ok:
+        return False
+    return ar_eko(hort, hans)
 
 
 class Svar:

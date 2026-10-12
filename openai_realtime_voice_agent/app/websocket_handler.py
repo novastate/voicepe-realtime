@@ -1946,9 +1946,9 @@ class WebSocketHandler:
                         a = _np.frombuffer(pcm, dtype=_np.int16).astype(_np.float32)
                         n = int(len(a) * 16000 / rate)
                         pcm = _np.interp(_np.linspace(0, len(a) - 1, n), _np.arange(len(a)), a).astype(_np.int16).tobytes()
-                    hort = await bana0.transkribera(pcm, host, port, timeout_stt)
+                    hort, ok = await bana0.transkribera_tydligt(pcm, host, port, timeout_stt)
                     hans = openai_service.svar.text() if getattr(openai_service, "svar", None) is not None else ""
-                    eko = eko_vakt.ar_eko(hort, hans)
+                    eko = eko_vakt.dom(hort, ok, hans)
                     logger.info(f"🔊 over his reply: heard {hort!r} -> {'his own words, ignored' if eko else 'a person, interrupts'}")
                     return eko
 
