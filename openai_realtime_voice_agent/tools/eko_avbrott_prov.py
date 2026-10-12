@@ -40,7 +40,7 @@ async def core_side(a) -> None:
     host, port = os.environ.get("BANA0_STT", "127.0.0.1:10300").rsplit(":", 1)
     for i in range(a.gange):
         print(f"START {time.time():.3f}", flush=True)
-        r = post(a.rum, pcm, 2.0, a.port)
+        r = post(a.rum, pcm, 2.0, a.port, a.pace)
         if "error" in r:
             print(json.dumps({"i": i + 1, "error": r["error"]}), flush=True)
             time.sleep(5)
@@ -75,7 +75,7 @@ async def core_side(a) -> None:
 def mac_side(a) -> None:
     cmd = ["ssh", a.ssh, f"cd {a.dir} && set -a && . /etc/raawr-rostagent.env && set +a && "
            f"PYTHONPATH={a.dir} {a.python} {a.skript} --core-side --wav {a.wav} --text-fil {a.text_fil} "
-           f"--vid {a.vid} --gange {a.gange} --rum {a.rum} --port {a.port}"
+           f"--vid {a.vid} --gange {a.gange} --rum {a.rum} --port {a.port}" + (" --pace" if a.pace else "")
            + (f" --spara {a.spara}" if a.spara else "")]
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
     for rad in p.stdout:
@@ -97,6 +97,7 @@ if __name__ == "__main__":
     ap.add_argument("--gange", type=int, default=5)
     ap.add_argument("--rum", default="kontoret")
     ap.add_argument("--port", type=int, default=8080)
+    ap.add_argument("--pace", action="store_true", help="send the clip in real time, as a reply is")
     ap.add_argument("--spara")
     ap.add_argument("--klipp", help="Mac side: the sound file to play (afplay)")
     ap.add_argument("--ssh", default="root@10.10.0.118")
