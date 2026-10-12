@@ -13,7 +13,10 @@ from app import ha_api, tool_selection
 from app.core_strom import (
     LiveMatare,
     core_stream_tala_paa,
+    EN_HJARNA_TILLAGG,
+    en_hjarna_aktiv,
     get_fraga_core_definition,
+    utan_kunskapsverktyg,
     register_fraga_core,
     strom_url,
 )
@@ -859,7 +862,8 @@ class Application:
         # No EARLY_ACK_INSTRUCTION: Grok said "Jag kollar." before every answer,
         # jokes included (owner 2026-10-02 23:07). The slow tools' descriptions
         # carry it instead (early_ack.with_ack_hint, 0.25.6).
-        return self.instructions + SPRAKLAS + memory_instructions() + self.idag.block()
+        return (self.instructions + SPRAKLAS + memory_instructions()
+                + (EN_HJARNA_TILLAGG if en_hjarna_aktiv() else "") + self.idag.block())
 
     async def _idag_loop(self) -> None:
         """Keep the Idag block fresh: refetch, then let Gemini reconnect when quiet.
@@ -983,6 +987,8 @@ class Application:
             # below so the model sees exactly one ask_openclaw.
             if core_stream_tala_paa() and strom_url() and connection.provider == "gemini":  # only Live can be fed text
                 all_tools.append(get_fraga_core_definition())
+                if en_hjarna_aktiv():
+                    all_tools = utan_kunskapsverktyg(all_tools)
             if openclaw_url():
                 all_tools.append(get_openclaw_tool_definition())
                 all_tools.append(get_recall_tool_definition())

@@ -987,6 +987,10 @@ def _google_search_on(model: str) -> bool:
     custom tool combinations for Gemini 3 only. gemini-3.8-live and
     3.1-flash-live-preview: 0 of 15 with grounding, and grounded web answers.
     """
+    from app.core_strom import en_hjarna_aktiv
+
+    if en_hjarna_aktiv():  # E-07/D-21: Core searches, the model does not
+        return False
     value = os.environ.get("GEMINI_GOOGLE_SEARCH", "").strip().lower()
     if value:
         return value == "true"
