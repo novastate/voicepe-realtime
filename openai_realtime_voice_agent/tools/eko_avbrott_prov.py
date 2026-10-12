@@ -50,9 +50,20 @@ async def core_side(a) -> None:
         t0 = mark + a.vid  # the interruption starts about here
         hort = await bana0.transkribera(heard[int((t0 - 0.2) * 32000):int((t0 + 2.5) * 32000)], host, int(port), 15.0)
         ok = hort is not None
-        print(json.dumps({"i": i + 1, "eko_dbfs": niva(heard, mark + 1.0, t0 - 0.3),
-                          "avbrott_dbfs": niva(heard, t0 - 0.2, t0 + 1.5), "hort": hort,
-                          "natet_ignorerar": eko_vakt.dom(hort, ok, text)}, ensure_ascii=False), flush=True)
+        gate = eko_vakt.niva_dbfs()
+        avbrott_db = niva(heard, t0 - 0.2, t0 + 1.5)
+        # False alarms: the net over 2 s of pure echo, as the agent would judge it (below the level gate = noise)
+        falsklarm, fonster = 0, 0
+        for a_s in range(int(mark + 1.0), int(t0 - 2.5), 2):
+            fonster += 1
+            if niva(heard, a_s, a_s + 2) < gate:
+                continue
+            h = await bana0.transkribera(heard[a_s * 32000:(a_s + 2) * 32000], host, int(port), 15.0)
+            falsklarm += not eko_vakt.dom(h, h is not None, text)
+        ignorerad = avbrott_db < gate or eko_vakt.dom(hort, ok, text)
+        print(json.dumps({"i": i + 1, "eko_dbfs": niva(heard, mark + 1.0, t0 - 0.3), "avbrott_dbfs": avbrott_db,
+                          "hort": hort, "avbrott_hors_som_person": not ignorerad,
+                          "falsklarm_fonster": f"{falsklarm}/{fonster}"}, ensure_ascii=False), flush=True)
         if a.spara:
             os.makedirs(a.spara, exist_ok=True)
             with wave.open(os.path.join(a.spara, f"avbrott_{i + 1}.wav"), "wb") as w:
@@ -63,7 +74,7 @@ async def core_side(a) -> None:
 
 def mac_side(a) -> None:
     cmd = ["ssh", a.ssh, f"cd {a.dir} && set -a && . /etc/raawr-rostagent.env && set +a && "
-           f"{a.python} tools/eko_avbrott_prov.py --core-side --wav {a.wav} --text-fil {a.text_fil} "
+           f"PYTHONPATH={a.dir} {a.python} {a.skript} --core-side --wav {a.wav} --text-fil {a.text_fil} "
            f"--vid {a.vid} --gange {a.gange} --rum {a.rum} --port {a.port}"
            + (f" --spara {a.spara}" if a.spara else "")]
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
@@ -90,6 +101,7 @@ if __name__ == "__main__":
     ap.add_argument("--klipp", help="Mac side: the sound file to play (afplay)")
     ap.add_argument("--ssh", default="root@10.10.0.118")
     ap.add_argument("--dir", default="/opt/raawr-rostagent/app")
+    ap.add_argument("--skript", default="tools/eko_avbrott_prov.py", help="path of this file on the core")
     ap.add_argument("--python", default="/opt/raawr-rostagent/venv/bin/python")
     a = ap.parse_args()
     asyncio.run(core_side(a)) if a.core_side else mac_side(a)
