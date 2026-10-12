@@ -39,3 +39,57 @@ async def test_a_tool_does_not_run_when_the_guard_says_no_and_runs_when_it_does_
     service.verktygsvakt = lambda: None
     await _call(service, "intent__HassTurnOn", {"area": "hall"})
     assert ran == ["intent__HassTurnOn"]
+
+
+def test_a_transcript_that_is_behind_the_audio_counts_as_his_own_voice():
+    assert eko_vakt.utskrift_efter(0, 1.0) is True            # audio is playing, nothing written yet
+    assert eko_vakt.utskrift_efter(0, 0.2) is False           # the reply has barely begun: nothing to compare yet
+    assert eko_vakt.utskrift_efter(3, 8.0) is True            # 8 s of audio, 3 words: far behind
+    assert eko_vakt.utskrift_efter(20, 8.0) is False          # caught up: the word comparison decides
+
+
+def test_the_serializer_counts_the_seconds_of_the_current_reply():
+    import asyncio
+    from pipecat.frames.frames import OutputAudioRawFrame
+    from app.raw_audio_serializer import RawAudioSerializer
+    ser = RawAudioSerializer("kontoret", input_sample_rate=16000)
+    asyncio.run(ser.serialize(OutputAudioRawFrame(audio=b"\x01\x00" * 24000, sample_rate=24000, num_channels=1)))
+    assert abs(ser.svar_sek() - 1.0) < 0.01
+    ser._svar_sist -= 3.0
+    assert ser.svar_sek() == 0.0                              # a new reply begins after a pause
+
+
+def test_the_cut_holds_a_moment_after_the_next_turn_is_decided():
+    from app.raw_audio_serializer import RawAudioSerializer
+    ser = RawAudioSerializer("kontoret", input_sample_rate=16000)
+    ser.tysta_slut()
+    assert ser._tysta_tills == 0.0                            # never cut: nothing to hold
+    ser.tysta_svar()
+    ser.tysta_slut()
+    assert 0 < ser._tysta_tills - __import__("time").monotonic() <= 0.7
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_is_his_own_last_reply_is_dropped_and_the_model_is_never_asked():
+    from app import bana0
+    anrop = []
+
+    async def stt(pcm, t):
+        return "Vilken dörr vill du låsa?"
+
+    async def aldrig(*a, **k):
+        anrop.append("modellen fragades")
+
+    async def kasta():
+        anrop.append("kastad")
+
+    svar_text = "Vilken dörr vill du låsa? Är det hallen du vill"
+    bana = await bana0.tur(b"\x00" * 3200, stt=stt, timeout_stt=1.0, timeout_comms=1.0,
+                           skicka_svar_till_modellen=aldrig, skapa_svar=aldrig,
+                           eko_veto=lambda t: eko_vakt.liknar_svar(t, svar_text), kasta_tur=kasta)
+    assert bana == "eko" and anrop == ["kastad"]
+    anrop.clear()
+    bana = await bana0.tur(b"\x00" * 3200, stt=stt, timeout_stt=1.0, timeout_comms=1.0,
+                           skicka_svar_till_modellen=aldrig, skapa_svar=aldrig,
+                           eko_veto=lambda t: False, kasta_tur=kasta)
+    assert bana == "modell" and "modellen fragades" in anrop and "kastad" not in anrop

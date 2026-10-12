@@ -14,7 +14,7 @@ import time
 MIN_ORD = 1             # fewer words than this is not speech
 LIKA = 0.75             # two words this alike are the same word (the local STT is not exact on his voice)
 LANGT = 7               # words shorter than this must match exactly: 'vänta' is not 'väntar', 'sluta' is not 'slutar', 'ja' is not 'jag' (A on #65)
-ANDEL = 0.6             # this share of the heard words found among his = echo
+ANDEL = 0.5             # this share of the heard words found among his = echo
 
 
 NIVA_DBFS = -36.0       # speech quieter than this (loudest 0.25 s) over his reply is room noise, not a person (measured 2026-10-12: echo -41..-52, Henrik -12..-20)
@@ -62,6 +62,18 @@ def ar_eko(hort: "str | None", hans: str) -> bool:
     return traffar / len(h) >= ANDEL
 
 
+ORD_PER_S = 1.0         # at least this many of his words per second of reply audio, once the transcript can have caught up
+SVAR_UNDANTAG_S = 2.0   # the transcript may trail the audio by about this long
+
+
+def utskrift_efter(nuvarande_ord: int, svar_sek: float) -> bool:
+    """His own transcript of THIS reply has not caught up with the audio already sent: what the mic hears over it is far
+    more likely to be him than a person. (Kontoret 2026-10-12: 'Vilken dörr.' heard over a reply whose text had not come.)"""
+    if svar_sek <= 0.3:
+        return False
+    return nuvarande_ord == 0 or nuvarande_ord < ORD_PER_S * max(0.0, svar_sek - SVAR_UNDANTAG_S)
+
+
 def dom(hort: "str | None", ok: bool, hans: str) -> bool:
     """The net's verdict: True = ignore (his own words, or clearly no words). In doubt it is the person: a speech-to-text
     that failed or timed out (ok False) must never throw a real interruption away (A on #65)."""
@@ -89,6 +101,9 @@ class Svar:
 
     def text(self) -> str:
         return " ".join(self.tidigare + [self.nu])
+
+    def nu_ord(self) -> int:
+        return len(ord_(self.nu))
 
 
 def i_svans(idle_sedan: float, nu: "float | None" = None) -> bool:

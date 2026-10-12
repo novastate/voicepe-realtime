@@ -1909,8 +1909,12 @@ class WebSocketHandler:
                     klockan=_klockan if klockan.klipp_paa() else None,
                     tider=tider,
                     avsluta=_avsluta if bana0.nej_stanger_paa() else None,
+                    eko_veto=(lambda t: eko_vakt.liknar_svar(
+                        t, openai_service.svar.text() if getattr(openai_service, "svar", None) is not None else ""))
+                    if eko_vakt.paa() and eko_vakt.nat_paa() else None,
+                    kasta_tur=openai_service.drop_turn if hasattr(openai_service, "drop_turn") else None,
                 )
-                if bana in ("bana0", "klockan", "nej"):
+                if bana in ("bana0", "klockan", "nej", "eko"):
                     await phase_emitter.force_idle(bana)
 
             openai_service.on_user_turn_end = _on_user_turn_end
@@ -1947,7 +1951,12 @@ class WebSocketHandler:
                         n = int(len(a) * 16000 / rate)
                         pcm = _np.interp(_np.linspace(0, len(a) - 1, n), _np.arange(len(a)), a).astype(_np.int16).tobytes()
                     hort, ok = await bana0.transkribera_tydligt(pcm, host, port, timeout_stt)
-                    hans = openai_service.svar.text() if getattr(openai_service, "svar", None) is not None else ""
+                    svar_obj = getattr(openai_service, "svar", None)
+                    hans = svar_obj.text() if svar_obj is not None else ""
+                    if ok and svar_obj is not None and eko_vakt.utskrift_efter(svar_obj.nu_ord(), serializer.svar_sek()):
+                        logger.info(f"🔊 over his reply: heard {hort!r}; his own transcript is behind the audio "
+                                    f"({svar_obj.nu_ord()} words, {serializer.svar_sek():.1f} s sent) -> his own words, ignored")
+                        return True
                     eko = eko_vakt.dom(hort, ok, hans)
                     logger.info(f"🔊 over his reply: heard {hort!r} -> {'his own words, ignored' if eko else 'a person, interrupts'}")
                     return eko

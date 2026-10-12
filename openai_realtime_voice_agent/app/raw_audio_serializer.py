@@ -400,21 +400,37 @@ class RawAudioSerializer(FrameSerializer):
         return pcm
 
     _tysta_tills = 0.0
+    _svar_sek = 0.0
+    _svar_sist = 0.0
+
+    def svar_sek(self) -> float:
+        """Seconds of reply audio sent since this reply began (a new one begins after 2.5 s without audio)."""
+        return self._svar_sek if time.monotonic() - self._svar_sist < 2.5 else 0.0
+
     eko_mat = None
 
-    def tysta_svar(self, sek: float = 3.0) -> None:
+    def tysta_svar(self, sek: float = 15.0) -> None:
         """A person talked over the reply (US-060): what is left of it must not be sent. The device flushes its own queue
         on "listening"; this stops the tail that is still on its way, until the next turn ends or `sek` has passed."""
         self._tysta_tills = time.monotonic() + sek
 
-    def tysta_slut(self) -> None:
-        self._tysta_tills = 0.0
+    def tysta_slut(self, efter_s: float = 0.7) -> None:
+        """The next turn is being decided: the old reply's tail (the model keeps generating until the new activity
+        interrupts it) is still on its way for a moment, so the cut lasts `efter_s` more. Measured live 2026-10-12
+        21:39: with the cut ending at the decision, the tail of the story played on and came back as user speech."""
+        nu = time.monotonic()
+        self._tysta_tills = nu + efter_s if self._tysta_tills > nu else 0.0
 
     async def serialize(self, frame: Frame) -> bytes:
         if isinstance(frame, OutputAudioRawFrame) and self._tysta_tills and time.monotonic() < self._tysta_tills:
             return b""
         if isinstance(frame, OutputAudioRawFrame):
             self._reply_audio_since_wake = True
+            nu = time.monotonic()
+            if nu - self._svar_sist >= 2.5:
+                self._svar_sek = 0.0
+            self._svar_sek += len(frame.audio) / (2.0 * (getattr(frame, "sample_rate", 24000) or 24000))
+            self._svar_sist = nu
             if self.aec is not None:
                 self.aec.ref(frame.audio, getattr(frame, "sample_rate", 24000) or 24000)
             if self.tider is not None:
