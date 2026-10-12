@@ -1956,7 +1956,16 @@ class WebSocketHandler:
                     openai_service.eko_vakt = lambda: (phase_emitter.phase == "replying"
                                                        or eko_vakt.i_svans(getattr(phase_emitter, "idle_since", 0.0)))
                     openai_service.eko_dom = _eko_dom
-                openai_service.on_barge_in = lambda: (serializer.tysta_svar(), logger.info("🔊 interrupted: his reply is cut"))[0]
+                def _barge():
+                    connection.barge_in_t = time.monotonic()
+                    serializer.tysta_svar()
+                    logger.info("🔊 interrupted: his reply is cut")
+
+                openai_service.on_barge_in = _barge
+                openai_service.verktygsvakt = lambda: eko_vakt.vakt_verktyg(
+                    getattr(connection, "bana0_heard", "") or "",
+                    openai_service.svar.text() if getattr(openai_service, "svar", None) is not None else "",
+                    (time.monotonic() - connection.barge_in_t) if getattr(connection, "barge_in_t", None) else None)
             if hasattr(openai_service, "on_user_turn_pre_end"):
                 openai_service.on_user_turn_pre_end = _pre_end
             serializer.is_replying = lambda: phase_emitter.phase == "replying"

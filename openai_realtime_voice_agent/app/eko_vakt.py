@@ -94,3 +94,29 @@ class Svar:
 def i_svans(idle_sedan: float, nu: "float | None" = None) -> bool:
     """`idle_sedan` is when the phase last turned idle (monotonic); False when it never has."""
     return bool(idle_sedan) and (nu if nu is not None else time.monotonic()) - idle_sedan <= svans_s()
+
+
+TOOL_VAKT_S = float(os.environ.get("TOOL_VAKT_S", "8"))
+
+
+def liknar_svar(turtext: "str | None", hans: str) -> bool:
+    """The turn's own words are (mostly) what he said himself a moment ago: his voice came back through the mic.
+    Needs MIN_ORD words, so a short real command ("tänd lampan") is never taken for an echo."""
+    h = ord_(turtext)
+    sina = set(ord_(hans))
+    if len(h) < MIN_ORD or not sina:
+        return False
+    traffar = sum(1 for w in h if w in sina or (len(w) >= LANGT and difflib.get_close_matches(w, sina, n=1, cutoff=LIKA)))
+    return traffar / len(h) >= ANDEL
+
+
+def vakt_verktyg(turtext: "str | None", hans: str, sedan_barge_s: "float | None", x_s: "float | None" = None) -> "str | None":
+    """Why a tool call must NOT run, or None. (1) The turn sounds like his own last reply: his echo, not an order.
+    (2) The turn was started by an interruption less than `x_s` seconds ago and we have no text for it: unknown
+    speech that came right after his own voice is not allowed to open a door."""
+    x_s = TOOL_VAKT_S if x_s is None else x_s
+    if liknar_svar(turtext, hans):
+        return "ignored: this sounded like your own last reply, not an order. Do nothing."
+    if sedan_barge_s is not None and sedan_barge_s <= x_s and not (turtext or "").strip():
+        return "ignored: unclear speech right after an interruption. Do nothing; ask if it was meant."
+    return None

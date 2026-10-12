@@ -18,6 +18,7 @@ Safe by construction: if the library is missing or anything throws, the mic goes
 import logging
 import os
 import time
+import wave
 from typing import Callable, List, Optional, Tuple
 
 import numpy as np
@@ -38,19 +39,32 @@ def soft_aec_paa() -> bool:
     return os.environ.get("SOFT_AEC", "0") == "1"
 
 
+def aec_spara_paa() -> bool:
+    return os.environ.get("AEC_SPARA", "0") == "1"
+
+
 class MjukAec:
     def __init__(self, klocka: Callable[[], float] = time.monotonic) -> None:
-        from aec_audio_processing import AudioProcessor
-
         self.klocka = klocka
-        self.ap = AudioProcessor(enable_aec=True, enable_ns=False, enable_agc=False, enable_vad=False)
-        self.ap.set_stream_format(RATE, 1)
-        self.ap.set_reverse_stream_format(RATE, 1)
-        self.ap.set_stream_delay(0)
+        self.ap = None
+        if soft_aec_paa():
+            from aec_audio_processing import AudioProcessor
+
+            self.ap = AudioProcessor(enable_aec=True, enable_ns=False, enable_agc=False, enable_vad=False)
+            self.ap.set_stream_format(RATE, 1)
+            self.ap.set_reverse_stream_format(RATE, 1)
+            self.ap.set_stream_delay(0)
         self.tidslinje: List[Tuple[float, np.ndarray]] = []   # (start time, 16 kHz samples) of what the speaker plays
         self.ref_slut = 0.0
         self.rest = np.zeros(0, dtype=np.int16)               # mic samples that did not fill a 10 ms frame yet
         self.trasig = False
+        self.aec_pa = soft_aec_paa()                  # False = only record (AEC_SPARA), the mic passes untouched
+        self.spara = aec_spara_paa()
+        self.spar_katalog = os.environ.get("AEC_SPARA_KATALOG", "/data/aec_spara")
+        self.spar_max = int(os.environ.get("AEC_SPARA_MAX", "30"))
+        self.spar_mic: List[np.ndarray] = []
+        self.spar_ref: List[np.ndarray] = []
+        self.spar_full = False
         self.agc_max_db = float(os.environ.get("SOFT_AGC_DB", "24"))
         self.agc_db = 0.0                 # the gain now
         self.golv_db = -50.0              # noise floor estimate (slow minimum of the frame levels)
@@ -73,10 +87,23 @@ class MjukAec:
         g = 10 ** (self.agc_db / 20)
         return np.clip(x * g, -32768, 32767).astype(np.int16)
 
+    _per_enhet: dict = {}
+
+    @classmethod
+    def for_enhet(cls, enhet: str) -> Optional["MjukAec"]:
+        """One canceller per device, kept across reconnects: what it has learnt of the room is not thrown away every time
+        the link drops (a cold canceller let the first reply through as an interruption in the offline test)."""
+        if enhet not in cls._per_enhet or cls._per_enhet[enhet] is None:
+            cls._per_enhet[enhet] = cls.skapa()
+        a = cls._per_enhet[enhet]
+        if a is not None:
+            a.rest = np.zeros(0, dtype=np.int16)
+        return a
+
     @classmethod
     def skapa(cls) -> Optional["MjukAec"]:
         """The canceller, or None when the flag is off or the library is not there (never an error)."""
-        if not soft_aec_paa():
+        if not (soft_aec_paa() or aec_spara_paa()):
             return None
         try:
             return cls()
@@ -128,21 +155,56 @@ class MjukAec:
             ut: List[bytes] = []
             i = 0
             while i + FRAME <= tot:
+                ram = a[i:i + FRAME]
+                refr = None
+                if aktiv and (self.aec_pa or self.spara):
+                    refr = self._ref_ram(t - (tot - i) / RATE)
+                if self.spara and refr is not None:
+                    self.spar_mic.append(ram.copy())
+                    self.spar_ref.append(refr)
+                if not self.aec_pa:
+                    ut.append(ram.tobytes())
+                    i += FRAME
+                    continue
                 if aktiv:
-                    t_i = t - (tot - i) / RATE
-                    self.ap.process_reverse_stream(self._ref_ram(t_i).tobytes())
-                    ren = self.ap.process_stream(a[i:i + FRAME].tobytes())
+                    self.ap.process_reverse_stream(refr.tobytes())
+                    ren = self.ap.process_stream(ram.tobytes())
                 else:
-                    ren = a[i:i + FRAME].tobytes()
+                    ren = ram.tobytes()
                 if self.agc_max_db > 0:
                     ren = self._agc(np.frombuffer(ren, dtype=np.int16)).tobytes()
                 ut.append(ren)
                 i += FRAME
+            if self.spara:
+                self._spara_flush(aktiv)
             self.rest = a[i:]
             return b"".join(ut)
         except Exception as e:
             self._fel(e)
             return pcm
+
+    def _spara_flush(self, aktiv: bool) -> None:
+        """AEC_SPARA=1: the raw mic (left) and the reference as the canceller saw it (right), 16 kHz stereo wav, one
+        file per spell of playback. For replaying a live test offline. The mic is a person's voice: delete after use."""
+        n = len(self.spar_mic)
+        if n == 0 or (aktiv and n < 9000):      # keep collecting while it plays, up to 90 s
+            return
+        mic, ref = np.concatenate(self.spar_mic), np.concatenate(self.spar_ref)
+        self.spar_mic, self.spar_ref = [], []
+        if len(mic) < 2 * RATE or self.spar_full:
+            return
+        try:
+            os.makedirs(self.spar_katalog, exist_ok=True)
+            if len([f for f in os.listdir(self.spar_katalog) if f.endswith(".wav")]) >= self.spar_max:
+                self.spar_full = True
+                logger.info("AEC_SPARA: the folder is full; nothing more is saved")
+                return
+            namn = os.path.join(self.spar_katalog, time.strftime("aec_%Y%m%d_%H%M%S.wav"))
+            with wave.open(namn, "wb") as w:
+                w.setnchannels(2), w.setsampwidth(2), w.setframerate(RATE)
+                w.writeframes(np.stack([mic, ref], axis=1).astype(np.int16).tobytes())
+        except Exception as e:
+            logger.warning(f"AEC_SPARA: could not save ({e!r})")
 
     def _fel(self, e: Exception) -> None:
         if not self.trasig:

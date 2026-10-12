@@ -7,6 +7,11 @@ from app.mjuk_aec import FRAME, RATE, MjukAec
 pytest.importorskip("aec_audio_processing")
 
 
+@pytest.fixture(autouse=True)
+def _flaggan(monkeypatch):
+    monkeypatch.setenv("SOFT_AEC", "1")
+
+
 def _tal(sek, seed=1):
     """Speech-like: band-limited noise with syllable-rate amplitude changes."""
     r = np.random.default_rng(seed)
@@ -55,6 +60,7 @@ def test_the_echo_is_taken_down_when_the_reference_leads():
 
 def test_it_is_only_off_by_flag(monkeypatch):
     monkeypatch.delenv("SOFT_AEC", raising=False)
+    monkeypatch.delenv("AEC_SPARA", raising=False)
     assert MjukAec.skapa() is None
     monkeypatch.setenv("SOFT_AEC", "1")
     assert MjukAec.skapa() is not None
@@ -94,3 +100,32 @@ def test_the_agc_lifts_distant_speech_but_not_the_noise_floor():
     aec3 = MjukAec(klocka=lambda: 0.0)
     aec3.agc_max_db = 0
     assert np.array_equal(np.frombuffer(aec3.process(mix.tobytes(), 3.0), dtype=np.int16)[:RATE], mix[:RATE])
+
+
+def test_aec_spara_saves_mic_and_reference_as_a_stereo_wav(monkeypatch, tmp_path):
+    import wave
+    monkeypatch.setenv("SOFT_AEC", "0")
+    monkeypatch.setenv("AEC_SPARA", "1")
+    monkeypatch.setenv("AEC_SPARA_KATALOG", str(tmp_path))
+    klock = [0.0]
+    aec = MjukAec.skapa()
+    assert aec is not None and aec.ap is None            # record only: no canceller, the mic passes untouched
+    aec.klocka = lambda: klock[0]
+    ref = _tal(3.0)
+    mic = _eko(ref)
+    steg = int(0.02 * RATE)
+    for i in range(0, len(ref) - steg, steg):
+        t = i / RATE
+        aec.ref(ref[i:i + steg].tobytes(), RATE, t)
+        aec.process(mic[i:i + steg].tobytes(), t + 0.02)
+    aec.process(b"\x00\x00" * steg, 20.0)               # long after: the spell is over, the file is written
+    filer = list(tmp_path.glob("aec_*.wav"))
+    assert len(filer) == 1
+    with wave.open(str(filer[0])) as w:
+        assert w.getnchannels() == 2 and w.getframerate() == RATE and w.getnframes() >= 2 * RATE
+
+
+def test_the_canceller_is_kept_per_device_across_reconnects(monkeypatch):
+    monkeypatch.setattr(MjukAec, "_per_enhet", {})
+    a = MjukAec.for_enhet("kontoret")
+    assert a is not None and MjukAec.for_enhet("kontoret") is a and MjukAec.for_enhet("koket") is not a

@@ -38,7 +38,7 @@ class RawAudioSerializer(FrameSerializer):
         self._device_id = device_id
         # Software echo canceller (SOFT_AEC=1, raawr US-060): None when off or the library is missing.
         from app.mjuk_aec import MjukAec
-        self.aec = MjukAec.skapa()
+        self.aec = MjukAec.for_enhet(device_id)
         # The Home Assistant Voice PE firmware (va_client) streams 16 kHz PCM16
         # mono from the XMOS mic. We tag incoming frames with the device's true
         # rate. NOTE: pipecat 0.0.97's input transport does NOT resample — the
