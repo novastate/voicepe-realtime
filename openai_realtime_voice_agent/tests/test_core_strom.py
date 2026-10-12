@@ -367,3 +367,28 @@ async def test_gemini_tjansten_raknar_ljud_och_vaeckar_den_som_vantar():
     assert t.skickat == {"text": "hej"} and await t.vanta_forsta_ljud(0.05) is False
     t._forsta_ljud.set()
     assert await t.vanta_forsta_ljud(0.05) is True
+
+
+def test_en_hjarna_tar_bort_kunskapsverktygen_bara_med_vag_till_core(monkeypatch):
+    verktyg = [{"name": n} for n in ("web_search", "ask_openclaw", "recall_memory", "HassTurnOn", "fraga_core")]
+    monkeypatch.setenv("CORE_STROM_URL", "http://x/fraga")
+    monkeypatch.delenv("EN_HJARNA", raising=False)
+    assert core_strom.en_hjarna_aktiv() is False
+    monkeypatch.setenv("EN_HJARNA", "1")
+    assert core_strom.en_hjarna_aktiv() is True
+    assert core_strom.core_stream_tala_paa() is True  # implies the stream, no second flag
+    assert [t["name"] for t in core_strom.utan_kunskapsverktyg(verktyg)] == ["HassTurnOn", "fraga_core"]
+    monkeypatch.delenv("CORE_STROM_URL")
+    monkeypatch.delenv("HA_API_URL", raising=False)
+    assert core_strom.en_hjarna_aktiv() is False  # no road to Core: the model keeps its own tools
+
+
+def test_gemini_google_sokning_stangs_av_under_en_hjarna(monkeypatch):
+    from app.providers import gemini_live
+
+    monkeypatch.setenv("CORE_STROM_URL", "http://x/fraga")
+    monkeypatch.delenv("GEMINI_GOOGLE_SEARCH", raising=False)
+    monkeypatch.delenv("EN_HJARNA", raising=False)
+    assert gemini_live._google_search_on("gemini-3.8-live") is True
+    monkeypatch.setenv("EN_HJARNA", "1")
+    assert gemini_live._google_search_on("gemini-3.8-live") is False

@@ -13,7 +13,10 @@ from app import ha_api, tool_selection
 from app.core_strom import (
     LiveMatare,
     core_stream_tala_paa,
+    EN_HJARNA_TILLAGG,
+    en_hjarna_aktiv,
     get_fraga_core_definition,
+    utan_kunskapsverktyg,
     register_fraga_core,
     strom_url,
 )
@@ -906,9 +909,10 @@ class Application:
         # No EARLY_ACK_INSTRUCTION: Grok said "Jag kollar." before every answer,
         # jokes included (owner 2026-10-02 23:07). The slow tools' descriptions
         # carry it instead (early_ack.with_ack_hint, 0.25.6).
+        tillagg = EN_HJARNA_TILLAGG if en_hjarna_aktiv() else ""  # E-07/D-21; också i väg c (skills.lage)
         if skills.lage():  # memory is a skill in comms then, not the agent's own tools (US-098)
-            return self.instructions + SPRAKLAS + avbrott_for(rum) + self.skills_text.get(rum, "") + self.idag.block()
-        return self.instructions + SPRAKLAS + avbrott_for(rum) + memory_instructions() + self.idag.block()
+            return self.instructions + SPRAKLAS + avbrott_for(rum) + self.skills_text.get(rum, "") + tillagg + self.idag.block()
+        return self.instructions + SPRAKLAS + avbrott_for(rum) + memory_instructions() + tillagg + self.idag.block()
 
     async def _idag_loop(self) -> None:
         """Keep the Idag block fresh: refetch, then let Gemini reconnect when quiet.
@@ -1036,6 +1040,8 @@ class Application:
             # below so the model sees exactly one ask_openclaw.
             if core_stream_tala_paa() and strom_url() and connection.provider == "gemini":  # only Live can be fed text
                 all_tools.append(get_fraga_core_definition())
+                if en_hjarna_aktiv():
+                    all_tools = utan_kunskapsverktyg(all_tools)
             if openclaw_url():
                 all_tools.append(get_openclaw_tool_definition())
                 all_tools.append(get_recall_tool_definition())

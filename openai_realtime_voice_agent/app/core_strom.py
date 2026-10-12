@@ -32,8 +32,36 @@ FORKORTNINGAR = ("t.ex", "bl.a", "m.m", "m.fl", "o.s.v", "osv", "dvs", "ca", "kl
 _GRANS = re.compile(r"[.!?…]+[\"')]*\s+(?=[A-ZÅÄÖ0-9\"'(])")
 
 
+def en_hjarna_paa() -> bool:
+    """EN_HJARNA=1 (raawr E-07/D-21): the speaker is only ears and mouth. Every question that is not
+    about running the house goes to Core through `fraga_core`; the model's own search and memory
+    tools are gone and it is told never to answer a fact itself."""
+    return os.environ.get("EN_HJARNA", "0") == "1"
+
+
 def core_stream_tala_paa() -> bool:
-    return os.environ.get("CORE_STREAM_TALA", "0") == "1"
+    return en_hjarna_paa() or os.environ.get("CORE_STREAM_TALA", "0") == "1"
+
+
+def en_hjarna_aktiv() -> bool:
+    """On AND with a road to Core: without the road the model keeps its own tools."""
+    return en_hjarna_paa() and bool(strom_url())
+
+
+# Tools that answer a fact from somewhere else than Core. Under EN_HJARNA only `fraga_core` does.
+KUNSKAPSVERKTYG = frozenset({"web_search", "ask_openclaw", "recall_memory"})
+
+
+def utan_kunskapsverktyg(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [t for t in tools if t.get("name") not in KUNSKAPSVERKTYG]
+
+
+EN_HJARNA_TILLAGG = (
+    "\n\nDu är husets öron och mun, inte dess hjärna. Gäller frågan något annat än att styra huset "
+    "(ljus, media, scener, timers) - fakta, tider, matcher, väder utanför huset, minne, research, "
+    "råd - så anropar du fraga_core med frågan och säger inget själv: svaret läses upp åt dig. "
+    "Svara aldrig på en sakfråga ur eget huvud och gissa aldrig."
+)
 
 
 class Meningsdelare:
@@ -210,8 +238,8 @@ def get_fraga_core_definition() -> dict:
         "type": "function",
         "name": "fraga_core",
         "description": (
-            "Ask the house's brain (memory of the owner and the family, research, sub-agents) when a "
-            "house tool and recall_memory cannot answer. Returns at once; the answer is then spoken "
+            "Ask the house's brain (memory of the owner and the family, facts, search, research, "
+            "sub-agents) for anything that is not about running the house. Returns at once; the answer is then spoken "
             "for you, sentence by sentence, in your voice. After calling it say nothing more yourself."
         ),
         "parameters": {
