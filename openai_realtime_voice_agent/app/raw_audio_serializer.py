@@ -18,7 +18,7 @@ TURN_PCM_CAP = 16000 * 2 * 30  # 30 s of 16 kHz PCM16 mono
 def _ms(namn: str, standard: int) -> int:
     """An env value in ms; a misspelt one must not stop the agent starting (B on #62/#63)."""
     try:
-        return max(0, int(os.environ.get(namn, str(standard))))
+        return min(3000, max(0, int(os.environ.get(namn, str(standard)))))  # 0-3 s; more is a typo, not a wish
     except ValueError:
         return standard
 
