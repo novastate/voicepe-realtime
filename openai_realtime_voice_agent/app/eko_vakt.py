@@ -14,6 +14,9 @@ import time
 MIN_ORD = 1             # fewer words than this is not speech
 LIKA = 0.75             # two words this alike are the same word (the local STT is not exact on his voice)
 LANGT = 7               # words shorter than this must match exactly: 'vänta' is not 'väntar', 'sluta' is not 'slutar', 'ja' is not 'jag' (A on #65)
+LAGST_ORD = 3           # fewer non-matching words than this over his reply count as echo unless one is a stop word
+STOPPORD = {"vänta", "stopp", "stop", "sluta", "tyst", "nej", "björn", "hallå", "paus", "avbryt", "tack"}
+LIKNAR_MIN = 3          # liknar_svar needs this many words: "köket" / "tänd köket" answering his own question is never an echo (A on #70)
 ANDEL = 0.5             # this share of the heard words found among his = echo
 
 
@@ -81,7 +84,12 @@ def dom(hort: "str | None", ok: bool, hans: str) -> bool:
         return False
     if any(l in (hort or "").lower() for l in LUDD):
         return True  # what it writes of noise
-    return ar_eko(hort, hans)
+    if ar_eko(hort, hans):
+        return True
+    # A real interruption over his reply is a stop word or a sentence. One or two odd words ('Fåla.') are what the
+    # local STT writes of his own voice coming back (Kontoret 2026-10-12 live test): not allowed to cut him.
+    h = ord_(hort)
+    return len(h) < LAGST_ORD and not any(w in STOPPORD for w in h)
 
 
 class Svar:
@@ -119,7 +127,7 @@ def liknar_svar(turtext: "str | None", hans: str) -> bool:
     Needs MIN_ORD words, so a short real command ("tänd lampan") is never taken for an echo."""
     h = ord_(turtext)
     sina = set(ord_(hans))
-    if len(h) < MIN_ORD or not sina:
+    if len(h) < LIKNAR_MIN or not sina:
         return False
     traffar = sum(1 for w in h if w in sina or (len(w) >= LANGT and difflib.get_close_matches(w, sina, n=1, cutoff=LIKA)))
     return traffar / len(h) >= ANDEL

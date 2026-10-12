@@ -93,3 +93,20 @@ async def test_a_turn_that_is_his_own_last_reply_is_dropped_and_the_model_is_nev
                            skicka_svar_till_modellen=aldrig, skapa_svar=aldrig,
                            eko_veto=lambda t: False, kasta_tur=kasta)
     assert bana == "modell" and "modellen fragades" in anrop and "kastad" not in anrop
+
+
+def test_answering_his_choice_question_with_a_word_from_it_is_not_an_echo():
+    """A on #70: 'Vilket rum vill du tända, köket eller sovrummet?' -> 'köket' / 'tänd köket' must reach him and the house."""
+    fraga = "Vilket rum vill du tända, köket eller sovrummet?"
+    for svar in ("köket", "tänd köket", "ja köket tack"):
+        assert not eko_vakt.liknar_svar(svar, fraga)
+        assert eko_vakt.vakt_verktyg(svar, fraga, None) is None
+    assert eko_vakt.liknar_svar("Vilket rum vill du tända", fraga)   # his own sentence back is still caught
+
+
+def test_one_or_two_odd_words_over_his_reply_do_not_cut_him_but_a_stop_word_does():
+    """Kontoret 2026-10-12 live test: 'Fåla.' (the STT's spelling of his own voice) cut his reply."""
+    hans = "en räv gick i skogen"
+    assert eko_vakt.dom("Fåla.", True, hans)           # ignored
+    assert not eko_vakt.dom("Vänta.", True, hans)      # a person
+    assert not eko_vakt.dom("släck lampan nu", True, hans)

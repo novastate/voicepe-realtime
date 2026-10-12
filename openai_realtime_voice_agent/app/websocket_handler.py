@@ -1909,7 +1909,7 @@ class WebSocketHandler:
                     klockan=_klockan if klockan.klipp_paa() else None,
                     tider=tider,
                     avsluta=_avsluta if bana0.nej_stanger_paa() else None,
-                    eko_veto=(lambda t: eko_vakt.liknar_svar(
+                    eko_veto=(lambda t: (phase_emitter.phase == "replying" or eko_vakt.i_svans(getattr(phase_emitter, "idle_since", 0.0))) and eko_vakt.liknar_svar(
                         t, openai_service.svar.text() if getattr(openai_service, "svar", None) is not None else ""))
                     if eko_vakt.paa() and eko_vakt.nat_paa() else None,
                     kasta_tur=openai_service.drop_turn if hasattr(openai_service, "drop_turn") else None,
@@ -1971,7 +1971,7 @@ class WebSocketHandler:
                     logger.info("🔊 interrupted: his reply is cut")
 
                 openai_service.on_barge_in = _barge
-                openai_service.verktygsvakt = lambda: eko_vakt.vakt_verktyg(
+                openai_service.verktygsvakt = lambda: None if not (phase_emitter.phase == "replying" or eko_vakt.i_svans(getattr(phase_emitter, "idle_since", 0.0))) else eko_vakt.vakt_verktyg(
                     getattr(connection, "bana0_heard", "") or "",
                     openai_service.svar.text() if getattr(openai_service, "svar", None) is not None else "",
                     (time.monotonic() - connection.barge_in_t) if getattr(connection, "barge_in_t", None) else None)
