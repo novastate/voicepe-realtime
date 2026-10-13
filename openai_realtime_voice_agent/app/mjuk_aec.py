@@ -57,6 +57,9 @@ def aec_spara_paa() -> bool:
     return os.environ.get("AEC_SPARA", "0") == "1"
 
 
+ALLT_MAX_S = 900.0
+
+
 class MjukAec:
     def __init__(self, klocka: Callable[[], float] = time.monotonic) -> None:
         self.klocka = klocka
@@ -103,6 +106,18 @@ class MjukAec:
             self.rest_s = max(0.0, float(os.environ.get("SOFT_AEC_REST", "0")))
         except ValueError:
             self.rest_s = 0.0
+        # Test only (AEC_SPARA_ALLT=1): everything, not only the replies -- mic, reference and what is passed on, three
+        # int16 channels at 16 kHz in one raw file, at most ALLT_MAX_S. To see afterwards what the engine was given.
+        self.allt = None
+        self.allt_kvar = 0
+        if os.environ.get("AEC_SPARA_ALLT", "0") == "1":
+            try:
+                os.makedirs(self.spar_katalog, exist_ok=True)
+                self.allt = open(os.path.join(self.spar_katalog, f"allt_{time.strftime('%Y%m%d_%H%M%S')}_{id(self) % 10000}.pcm"), "wb")
+                self.allt_kvar = int(ALLT_MAX_S * RATE / FRAME)
+                logger.info(f"🎙️ AEC_SPARA_ALLT: writing mic, reference and output to {self.allt.name} (clock {self.klocka():.3f} = {time.time():.3f})")
+            except Exception as e:
+                logger.warning(f"⚠️ AEC_SPARA_ALLT: no file ({e!r})")
         self.matt_max = 400
         self.mic_sist: Optional[float] = None     # when the last mic packet came
         self.mic_ankare: Optional[float] = None   # our clock at sample 0 of this stretch of the mic stream
@@ -335,6 +350,12 @@ class MjukAec:
                     if self.agc_max_db > 0:
                         ren = self._agc(np.frombuffer(ren, dtype=np.int16)).tobytes()
                 ut.append(ren)
+                if self.allt is not None and self.allt_kvar > 0:
+                    self.allt_kvar -= 1
+                    self.allt.write(np.stack([ram, refr if refr is not None else np.zeros(FRAME, np.int16),
+                                              np.frombuffer(ren, dtype=np.int16)], axis=1).astype(np.int16).tobytes())
+                    if self.allt_kvar % 100 == 0:
+                        self.allt.flush()
                 i += FRAME
             if self.spara:
                 self._spara_flush(aktiv)
