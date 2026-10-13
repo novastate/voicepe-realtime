@@ -154,6 +154,9 @@ class MjukAec:
         a = cls._per_enhet[enhet]
         if a is not None:
             a.rest = np.zeros(0, dtype=np.int16)
+            from app import eko_vakt
+            if eko_vakt.egen_tur(enhet):
+                a.agc_max_db = 0.0   # the engine runs the turns in this room: it gets the room as it is
         return a
 
     @classmethod

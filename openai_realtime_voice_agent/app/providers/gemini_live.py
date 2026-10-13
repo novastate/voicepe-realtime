@@ -192,14 +192,7 @@ def _resolve_language(language: str) -> Language:
         return FALLBACK_LANGUAGE
 
 
-def egen_tur(rum: str = "") -> bool:
-    """GEMINI_EGEN_TUR=1: Google's own activity detection and barge-in run the conversation (raawr US-060, Henrik
-    2026-10-13: "varför bygga det själva när Google redan gjort researchen"). The mic audio -- echo-cancelled here first
-    (SOFT_AEC) -- is streamed as it comes; no local turn detection, no bana 0, no stop-word or level rules. What is left
-    of ours is the tool guard, and the gate that sends nothing when nobody woke him. "1" = every room; else room names
-    ("kontoret,koket"): the other rooms keep local turns and bana 0."""
-    v = os.environ.get("GEMINI_EGEN_TUR", "0").strip().lower()
-    return v == "1" or (bool(rum) and rum.lower() in [r.strip() for r in v.split(",")])
+egen_tur = _eko.egen_tur
 
 
 def _build_vad_params(options) -> GeminiVADParams:

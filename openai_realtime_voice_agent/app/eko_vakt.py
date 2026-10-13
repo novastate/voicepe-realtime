@@ -44,6 +44,17 @@ def nat_paa() -> bool:
     return os.environ.get("ANTI_EKO", "1") != "0"
 
 
+def egen_tur(rum: str = "") -> bool:
+    """GEMINI_EGEN_TUR=1: Google's own activity detection and barge-in run the conversation (raawr US-060, Henrik
+    2026-10-13: "varför bygga det själva när Google redan gjort researchen"). The mic audio -- echo-cancelled here first
+    (SOFT_AEC) -- is streamed as it comes; no local turn detection, no bana 0, no stop-word or level rules. What is left
+    of ours is the tool guard, and the gate that sends nothing when nobody woke him. "1" = every room; else room names
+    ("kontoret,koket"): the other rooms keep local turns and bana 0. In such a room the mic is not amplified between
+    replies either (MjukAec.for_enhet): our gain lifted the room's noise 18 dB before the engine got it (2026-10-13)."""
+    v = os.environ.get("GEMINI_EGEN_TUR", "0").strip().lower()
+    return v == "1" or (bool(rum) and rum.lower() in [r.strip() for r in v.split(",")])
+
+
 def svans_s() -> float:
     """Seconds after his reply ended during which the room still carries it."""
     try:

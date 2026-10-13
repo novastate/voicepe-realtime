@@ -281,3 +281,11 @@ def test_the_noise_suppressor_is_only_on_by_flag(monkeypatch):
     assert MjukAec().ap.ns_enabled() is False
     monkeypatch.setenv("SOFT_AEC_NS", "3")
     assert MjukAec().ap.ns_enabled() is True
+
+
+def test_in_a_room_where_the_engine_runs_the_turns_the_mic_is_not_amplified(monkeypatch):
+    monkeypatch.setenv("GEMINI_EGEN_TUR", "kontoret")
+    MjukAec._per_enhet.clear()
+    assert MjukAec.for_enhet("kontoret").agc_max_db == 0.0
+    assert MjukAec.for_enhet("koket").agc_max_db > 0.0
+    MjukAec._per_enhet.clear()
