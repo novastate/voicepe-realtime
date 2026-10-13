@@ -65,6 +65,49 @@ def tur_utan_vackning(sedan_idle_s: float, sedan_vakning_s: float, grans_s: "flo
     return grans_s > 0 and sedan_idle_s > grans_s and sedan_vakning_s > grans_s and sedan_svar_s > grans_s
 
 
+TUR_TEXT_VANTA_S = 1.0   # GEMINI_EGEN_TUR: a tool call just after an interruption waits this long for the engine's own text of the turn
+
+
+def koppla_egen_tur(service, connection, phase_emitter, serializer) -> None:
+    """GEMINI_EGEN_TUR (the engine runs the turns in this room): what is still ours.
+
+    - Nothing is sent to the engine when nobody woke him and no reply is recent (tur_utan_vackning): the room is not
+      his business.
+    - The tool guard knows when the engine cut him, and reads the turn's words from the engine's own transcript (bana 0
+      does not run here). That transcript can come after the tool call: a real order that cuts him off would then be
+      refused as "unclear speech right after an interruption" (B on #74). So the guard waits up to TUR_TEXT_VANTA_S
+      for the text before it says no. No text by then: still no (unknown speech after his own voice opens no door).
+    """
+    def _vaken() -> bool:
+        sedan_idle = time.monotonic() - phase_emitter.idle_since if getattr(phase_emitter, "idle_since", 0.0) else -1.0
+        rec = getattr(connection, "recovery", None)   # not there yet while the pipeline is being built
+        sedan_vakning = time.monotonic() - rec._last_wake if rec is not None else 0.0
+        return not tur_utan_vackning(sedan_idle, sedan_vakning, None, serializer.sedan_svar())
+
+    def _motor_avbrott() -> None:
+        connection.barge_in_t = time.monotonic()
+        connection.barge_tur = True
+
+    def _dom():
+        t = getattr(connection, "barge_in_t", None)
+        return eko_vakt.veto_verktyg(
+            phase_emitter.phase, getattr(phase_emitter, "idle_since", 0.0), (time.monotonic() - t) if t else None,
+            service.tur_text() or "", service.svar.text() if getattr(service, "svar", None) is not None else "")
+
+    async def _verktygsvakt():
+        skal = _dom()
+        slut = time.monotonic() + TUR_TEXT_VANTA_S
+        while skal and not (service.tur_text() or "").strip() and time.monotonic() < slut:
+            await asyncio.sleep(0.05)
+            skal = _dom()
+        return skal
+
+    service.slapp_ljud = _vaken
+    service.svarar = lambda: phase_emitter.phase == "replying"
+    service.on_motor_avbrott = _motor_avbrott
+    service.verktygsvakt = _verktygsvakt
+
+
 VANTA_LYSSNAR_S = float(os.environ.get("VANTA_LYSSNAR_S", "10"))  # after a bare "vänta" over his reply: silent, mic open, this long
 VANTA_TYST_S = 90.0  # ...and the rest of the reply that was cut, which the engine goes on generating, is not spoken (until the next turn ends)
 from app.raw_audio_serializer import RawAudioSerializer
@@ -2060,28 +2103,12 @@ class WebSocketHandler:
                     logger.info("🔊 interrupted: his reply is cut")
 
                 openai_service.on_barge_in = _barge
-                if getattr(openai_service, "_fas_vad", None) is not None:
-                    # GEMINI_EGEN_TUR=1: the engine runs the turns. Ours: nothing is sent when nobody woke him (the
-                    # room is not his business), and the tool guard knows when the engine cut him.
-                    def _vaken():
-                        em = phase_emitter
-                        sedan_idle = time.monotonic() - em.idle_since if getattr(em, "idle_since", 0.0) else -1.0
-                        rec = getattr(connection, "recovery", None)   # not there yet while the pipeline is being built
-                        sedan_vakning = time.monotonic() - rec._last_wake if rec is not None else 0.0
-                        return not tur_utan_vackning(sedan_idle, sedan_vakning, None, serializer.sedan_svar())
-
-                    def _motor_avbrott():
-                        connection.barge_in_t = time.monotonic()
-                        connection.barge_tur = True
-
-                    openai_service.slapp_ljud = _vaken
-                    openai_service.svarar = lambda: phase_emitter.phase == "replying"
-                    openai_service.on_motor_avbrott = _motor_avbrott
                 openai_service.verktygsvakt = lambda: eko_vakt.veto_verktyg(
                     phase_emitter.phase, getattr(phase_emitter, "idle_since", 0.0), _sedan_barge(),
-                    (openai_service.tur_text() if getattr(openai_service, "_fas_vad", None) is not None
-                     else getattr(connection, "bana0_heard", "")) or "",
+                    getattr(connection, "bana0_heard", "") or "",
                     openai_service.svar.text() if getattr(openai_service, "svar", None) is not None else "")
+                if getattr(openai_service, "_fas_vad", None) is not None:
+                    koppla_egen_tur(openai_service, connection, phase_emitter, serializer)
             if hasattr(openai_service, "on_user_turn_pre_end"):
                 openai_service.on_user_turn_pre_end = _pre_end
             serializer.is_replying = lambda: phase_emitter.phase == "replying"

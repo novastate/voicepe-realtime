@@ -193,6 +193,7 @@ def _resolve_language(language: str) -> Language:
 
 
 egen_tur = _eko.egen_tur
+AVBROTT_UTAN_TAL_S = 1.2   # the engine said "interrupted" and the local detector heard no speech for this long: back to thinking
 
 
 def _build_vad_params(options) -> GeminiVADParams:
@@ -503,6 +504,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
     # (its follow-up window closes unless it hears "listening" in time); it decides nothing about the turn.
     _fas_vad: Optional[LocalTurns] = None
     _fas_talar = False
+    _avbrott_t = 0.0         # when the engine cut him on something the local detector does not (yet) call speech
     slapp_ljud = None        # set by the handler: False = nobody woke him and no reply is recent: the room is not sent
     svarar = None            # set by the handler: True while his reply is playing
     on_motor_avbrott = None  # called (plain) when the engine says it was interrupted
@@ -518,12 +520,19 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             if event != "start" or not await self._vaken_for_tur():
                 return
             frame = type(frame)(audio=self._take_preroll(), sample_rate=frame.sample_rate, num_channels=frame.num_channels)
+        if event == "start":
+            self._avbrott_t = 0.0   # the local detector hears the speech too: its own "end" closes it
         if event == "start" and not (self.svarar is not None and self.svarar()):
             # Over his own reply only the engine may say that somebody spoke (_motor_avbrott).
             self._fas_talar = True
             await self.push_frame(UserStartedSpeakingFrame())
-        elif event == "end" and self._fas_talar:
+        elif self._fas_talar and (event == "end" or (
+                self._avbrott_t and not getattr(self._fas_vad, "_speaking", False)
+                and time.monotonic() - self._avbrott_t > AVBROTT_UTAN_TAL_S)):
+            # The speech ended -- or the engine cut him on a sound the local detector never took for speech (a thump):
+            # then no "end" is coming, and the device would stay in "listening" (B on #74).
             self._fas_talar = False
+            self._avbrott_t = 0.0
             self._tider_start()
             await self.push_frame(UserStoppedSpeakingFrame())
         await super()._send_user_audio(frame)
@@ -538,6 +547,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         await self._handle_interruption()
         await self.push_frame(InterruptionFrame())
         self._fas_talar = True
+        self._avbrott_t = 0.0 if getattr(self._fas_vad, "_speaking", False) else time.monotonic()
         await self.push_frame(UserStartedSpeakingFrame())
 
     # Full duplex, layer 2 (US-060, D-22). eko_vakt(): True while he replies or just after. eko_dom(pcm): True = the
