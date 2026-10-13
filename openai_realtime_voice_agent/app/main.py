@@ -1033,6 +1033,7 @@ class Application:
                 except Exception as e:
                     logger.warning(f"⚠️ Idag: no weather/calendar for this session ({e!r})")
                 options = self.provider_options(provider)
+            options.rum = getattr(connection, "device_id", "") or ""
             service = build_service(provider, options, all_tools)
             if provider == GEMINI:
                 # Rendered again on every (re)connect: a fresh time and block.

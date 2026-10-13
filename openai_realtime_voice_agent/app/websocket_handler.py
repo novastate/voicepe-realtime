@@ -2060,9 +2060,27 @@ class WebSocketHandler:
                     logger.info("🔊 interrupted: his reply is cut")
 
                 openai_service.on_barge_in = _barge
+                if getattr(openai_service, "_fas_vad", None) is not None:
+                    # GEMINI_EGEN_TUR=1: the engine runs the turns. Ours: nothing is sent when nobody woke him (the
+                    # room is not his business), and the tool guard knows when the engine cut him.
+                    def _vaken():
+                        em = phase_emitter
+                        sedan_idle = time.monotonic() - em.idle_since if getattr(em, "idle_since", 0.0) else -1.0
+                        rec = getattr(connection, "recovery", None)   # not there yet while the pipeline is being built
+                        sedan_vakning = time.monotonic() - rec._last_wake if rec is not None else 0.0
+                        return not tur_utan_vackning(sedan_idle, sedan_vakning, None, serializer.sedan_svar())
+
+                    def _motor_avbrott():
+                        connection.barge_in_t = time.monotonic()
+                        connection.barge_tur = True
+
+                    openai_service.slapp_ljud = _vaken
+                    openai_service.svarar = lambda: phase_emitter.phase == "replying"
+                    openai_service.on_motor_avbrott = _motor_avbrott
                 openai_service.verktygsvakt = lambda: eko_vakt.veto_verktyg(
                     phase_emitter.phase, getattr(phase_emitter, "idle_since", 0.0), _sedan_barge(),
-                    getattr(connection, "bana0_heard", "") or "",
+                    (openai_service.tur_text() if getattr(openai_service, "_fas_vad", None) is not None
+                     else getattr(connection, "bana0_heard", "")) or "",
                     openai_service.svar.text() if getattr(openai_service, "svar", None) is not None else "")
             if hasattr(openai_service, "on_user_turn_pre_end"):
                 openai_service.on_user_turn_pre_end = _pre_end

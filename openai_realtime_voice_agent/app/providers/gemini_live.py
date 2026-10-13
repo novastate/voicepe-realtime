@@ -24,7 +24,7 @@ from google.genai.types import (
     StartSensitivity,
     ThinkingConfig,
 )
-from pipecat.frames.frames import OutputAudioRawFrame, UserStartedSpeakingFrame, UserStoppedSpeakingFrame
+from pipecat.frames.frames import InterruptionFrame, OutputAudioRawFrame, UserStartedSpeakingFrame, UserStoppedSpeakingFrame
 from pipecat.services.google.gemini_live.llm import (
     GeminiLiveLLMService,
     GeminiModalities,
@@ -190,6 +190,16 @@ def _resolve_language(language: str) -> Language:
             f"⚠️ Unknown Gemini language {language!r}; falling back to {FALLBACK_LANGUAGE}"
         )
         return FALLBACK_LANGUAGE
+
+
+def egen_tur(rum: str = "") -> bool:
+    """GEMINI_EGEN_TUR=1: Google's own activity detection and barge-in run the conversation (raawr US-060, Henrik
+    2026-10-13: "varför bygga det själva när Google redan gjort researchen"). The mic audio -- echo-cancelled here first
+    (SOFT_AEC) -- is streamed as it comes; no local turn detection, no bana 0, no stop-word or level rules. What is left
+    of ours is the tool guard, and the gate that sends nothing when nobody woke him. "1" = every room; else room names
+    ("kontoret,koket"): the other rooms keep local turns and bana 0."""
+    v = os.environ.get("GEMINI_EGEN_TUR", "0").strip().lower()
+    return v == "1" or (bool(rum) and rum.lower() in [r.strip() for r in v.split(",")])
 
 
 def _build_vad_params(options) -> GeminiVADParams:
@@ -406,7 +416,9 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         """With local turns: send audio only inside an activity we opened."""
         turns = self._turns
         if turns is None:
-            return await super()._send_user_audio(frame)
+            if self._fas_vad is None:
+                return await super()._send_user_audio(frame)
+            return await self._egen_tur_ljud(frame)
         event = turns.feed(frame.audio)
         if self.eko_vakt is not None and await self._eko_kandidat(frame, event):
             return
@@ -493,6 +505,47 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             self._tider_start()
             await self.push_frame(UserStoppedSpeakingFrame())
             await self._end_activity()
+
+    # GEMINI_EGEN_TUR=1 (see egen_tur). _fas_vad is a local detector used ONLY to tell the device "listening"/"thinking"
+    # (its follow-up window closes unless it hears "listening" in time); it decides nothing about the turn.
+    _fas_vad: Optional[LocalTurns] = None
+    _fas_talar = False
+    slapp_ljud = None        # set by the handler: False = nobody woke him and no reply is recent: the room is not sent
+    svarar = None            # set by the handler: True while his reply is playing
+    on_motor_avbrott = None  # called (plain) when the engine says it was interrupted
+
+    async def _egen_tur_ljud(self, frame):
+        if self.slapp_ljud is not None and not self.slapp_ljud():
+            return
+        event = self._fas_vad.feed(frame.audio)
+        if getattr(self, "sover", False):
+            # The engine was put to sleep and somebody speaks (a follow-up; the wake word wakes it by itself): wake it
+            # at the first speech and send what was said meanwhile (kitchen 2026-10-09: a turn into a sleeping engine).
+            self._keep_preroll(frame)
+            if event != "start" or not await self._vaken_for_tur():
+                return
+            frame = type(frame)(audio=self._take_preroll(), sample_rate=frame.sample_rate, num_channels=frame.num_channels)
+        if event == "start" and not (self.svarar is not None and self.svarar()):
+            # Over his own reply only the engine may say that somebody spoke (_motor_avbrott).
+            self._fas_talar = True
+            await self.push_frame(UserStartedSpeakingFrame())
+        elif event == "end" and self._fas_talar:
+            self._fas_talar = False
+            self._tider_start()
+            await self.push_frame(UserStoppedSpeakingFrame())
+        await super()._send_user_audio(frame)
+
+    async def _motor_avbrott(self) -> None:
+        """serverContent.interrupted: the engine heard speech over its reply and stopped. pipecat 0.0.97 does nothing
+        with that message, so the reply's queued audio (the engine sends about four times faster than it is played)
+        would play on. Drop it here, and tell the device: "listening" makes it flush its own buffer."""
+        logger.info("🔊 interrupted by the engine: it heard speech over his reply")
+        if self.on_motor_avbrott is not None:
+            self.on_motor_avbrott()
+        await self._handle_interruption()
+        await self.push_frame(InterruptionFrame())
+        self._fas_talar = True
+        await self.push_frame(UserStartedSpeakingFrame())
 
     # Full duplex, layer 2 (US-060, D-22). eko_vakt(): True while he replies or just after. eko_dom(pcm): True = the
     # speech heard is his own words. Both are set by the handler when BARGE_IN=1; None = this does nothing.
@@ -911,6 +964,20 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         self._preroll = bytearray()
         if self._turns is not None:
             self._turns.reset()
+        if self._fas_vad is not None:
+            self._fas_vad.reset()
+            self._fas_talar = False
+            ta_emot = session.receive
+
+            def receive():
+                async def lyssna():
+                    async for m in ta_emot():
+                        if m.server_content and m.server_content.interrupted:
+                            await self._motor_avbrott()
+                        yield m
+                return lyssna()
+
+            session.receive = receive
         await super()._handle_session_ready(session)
 
     async def end_audio_stream(self, keep_speech: bool = False) -> None:
@@ -1083,7 +1150,7 @@ def build(options, tools: List[Dict[str, Any]]) -> GeminiLiveLLMService:
     if search:
         gemini_tools.append({"google_search": {}})
     language = _resolve_language(options.language or "sv-SE")
-    turns = LocalTurns.create(int(options.gemini_turn_silence_ms), pre_ms=PRE_END_MS)
+    turns = None if egen_tur(options.rum) else LocalTurns.create(int(options.gemini_turn_silence_ms), pre_ms=PRE_END_MS)
     vad = GeminiVADParams(disabled=True) if turns else _build_vad_params(options)
     proactivity, affective, http_options = _native_audio_features(options, model)
     native = NATIVE_AUDIO_MODEL_MARKER in model
@@ -1132,6 +1199,8 @@ def build(options, tools: List[Dict[str, Any]]) -> GeminiLiveLLMService:
         http_options=http_options,
     )
     service._turns = turns
+    if egen_tur(options.rum):
+        service._fas_vad = LocalTurns.create(int(options.gemini_turn_silence_ms) or 800)
     if drop_language:
         logger.info(
             f"🌍 {model} refuses an explicit '{language}' — sending no language code "
