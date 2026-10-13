@@ -341,9 +341,10 @@ def brus(text: Optional[str]) -> bool:
 
 
 # The speech-to-text is given a hint of common house phrases (the wyoming-raawr bridge, STT_INITIAL_PROMPT, HEN-362),
-# and Whisper hands the hint back when what it hears is noise or his own voice from the speaker. Seen on recordings
-# 2026-10-12/13: 'Tänd i köket.' four times, 'Tänd i követ.', 'Vad är klockan?' and 'Björn.' written of echo and noise,
-# and once live 'Tänd i köket.' -> HA turned the light on. A text that is the hint and nothing else is therefore no
+# and Whisper hands the hint back when what it hears is noise or his own voice from the speaker. Written of his
+# own echo where nobody said it, 2026-10-12/13: 'Tänd i köket.' / 'Tänd i követ.' three times in replays of live
+# recordings and once live (07:04:17), 'Vad är klockan?' twice, 'Björn.' once. And live 2026-10-12 21:40
+# 'Tänd i köket.' -> HA 'Slog på lampan' (whether anyone said it is not known). A text that is the hint and nothing else is therefore no
 # proof that anyone said it. The same default as the bridge; set STT_INITIAL_PROMPT here too if the bridge's is changed.
 STT_LEDTRAD = os.environ.get("STT_INITIAL_PROMPT", "Vad är klockan? Tänd i köket. Björn.")
 LEDTRAD_LIKA = 0.8      # 'Tänd i követ.' is still the hint; 'Tänd i köket och hallen' is not

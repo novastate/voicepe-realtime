@@ -1,8 +1,9 @@
 """Bana 0 must not touch the house on a command the speech-to-text made up.
 
 The bridge gives Whisper a hint of common house phrases ("Vad är klockan? Tänd i köket. Björn.", HEN-362) and Whisper
-hands it back on noise and on his own voice from the speaker. Recordings 2026-10-12/13: 'Tänd i köket.' four times,
-'Tänd i követ.', 'Vad är klockan?', 'Björn.'; and live 2026-10-12 21:40 'Tänd i köket.' -> 'Slog på lampan'."""
+hands it back on noise and on his own voice from the speaker. Written of his echo 2026-10-12/13: 'Tänd i köket.' /
+'Tänd i követ.' four times (three in replays, one live), 'Vad är klockan?' twice, 'Björn.' once; and live 2026-10-12
+21:40 'Tänd i köket.' -> 'Slog på lampan'."""
 import httpx
 import pytest
 
