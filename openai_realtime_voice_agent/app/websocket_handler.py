@@ -1955,13 +1955,19 @@ class WebSocketHandler:
                     stt_s = time.monotonic() - t_stt
                     svar_obj = getattr(openai_service, "svar", None)
                     hans = svar_obj.text() if svar_obj is not None else ""
-                    if ok and svar_obj is not None and eko_vakt.utskrift_efter(svar_obj.nu_ord(), serializer.svar_sek()):
+                    under = eko_vakt.under_tal(serializer.sedan_svar(), len(pcm) / 32000.0, phase_emitter.phase == "replying")
+                    # While he speaks only a stop word gets through anyway, and the engine's transcript of a reply often
+                    # comes after the reply (0 words 8.4 s in, Kontoret 2026-10-13 12:08: Henrik's "vänta" was thrown
+                    # away here). So this guard is for the moment just after he stopped, where any words interrupt.
+                    if not under and ok and svar_obj is not None and eko_vakt.utskrift_efter(svar_obj.nu_ord(), serializer.svar_sek()):
                         logger.info(f"🔊 over his reply: heard {hort!r}; his own transcript is behind the audio "
                                     f"({svar_obj.nu_ord()} words, {serializer.svar_sek():.1f} s sent) -> his own words, ignored")
                         return True
-                    under = eko_vakt.under_tal(serializer.sedan_svar(), len(pcm) / 32000.0, phase_emitter.phase == "replying")
                     erle = None
-                    if under and serializer.aec is not None:   # how well was his echo taken out just before this began?
+                    # EKO_TILLIT_TEXT=1: with the canceller working, any words over the floor interrupt him, not only a
+                    # stop word. Off: when the device's playback slips mid-reply the canceller was working until that
+                    # moment, and what the speech-to-text then writes of his echo is not his words (see MjukAec.person).
+                    if under and serializer.aec is not None and os.environ.get("EKO_TILLIT_TEXT", "0") == "1":
                         borjan = time.monotonic() - stt_s - len(pcm) / 32000.0
                         erle = serializer.aec.erle(borjan - eko_vakt.ERLE_TILLIT_S, borjan, eko_vakt.ERLE_TILLIT_RAMAR, eko_vakt.ERLE_TILLIT_SISTA)
                     eko = eko_vakt.dom(hort, ok, hans, under, erle)
@@ -1974,6 +1980,9 @@ class WebSocketHandler:
                     openai_service.eko_vakt = lambda: (phase_emitter.phase == "replying"
                                                        or eko_vakt.i_svans(getattr(phase_emitter, "idle_since", 0.0)))
                     openai_service.eko_dom = _eko_dom
+                if os.environ.get("NIVA_KLIPP", "1") == "1":
+                    openai_service.niva_person = lambda: (phase_emitter.phase == "replying" and serializer.aec is not None
+                                                          and serializer.aec.person(eko_vakt.niva_dbfs(), eko_vakt.ERLE_TILLIT_DB))
                 def _barge():
                     connection.barge_in_t = time.monotonic()
                     serializer.tysta_svar()

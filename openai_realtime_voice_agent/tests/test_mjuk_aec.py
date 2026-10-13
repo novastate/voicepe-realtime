@@ -192,3 +192,43 @@ def test_mic_packets_that_arrive_in_clumps_do_not_move_the_reference():
         sen = float(r.choice([0.0, 0.0, 0.012, 0.025, 0.04]))          # the network holds some packets back
         aec.process(mic[i:i + steg].tobytes(), t + steg / RATE + sen)
     assert aec.erle(5.0, 9.5) >= 12, f"only {aec.erle(5.0, 9.5):.1f} dB"
+
+
+def _matt(aec, n, mic, ren, ref=-18.0, t0=0.0):
+    aec.matt += [(t0 + (len(aec.matt) + 1) * 0.01, mic, ren, ref) for _ in range(n)]
+
+
+def test_louder_than_his_own_echo_over_a_working_canceller_is_a_person():
+    def laget(ren_fore, ren_nu, svar_start=-10.0):
+        aec = MjukAec(klocka=lambda: 0.0)
+        aec.svar_start = svar_start
+        _matt(aec, 300, -25.0, ren_fore)          # 3 s of his echo: -25 in the mic, this much left after the canceller
+        _matt(aec, 20, -15.0, ren_nu)             # then 0.2 s of this out of the canceller
+        return aec
+
+    assert laget(-55.0, -15.0).person(-36.0) is True       # 30 dB taken off before it, and louder than his echo gets
+    assert laget(-55.0, -30.0).person(-36.0) is False      # over the fixed floor but not over his echo: it may be him, slipped through
+    assert laget(-28.0, -15.0).person(-36.0) is False      # the canceller was not working: no trust
+    assert laget(-55.0, -15.0, svar_start=2.0).person(-36.0) is False   # the reply began (or broke) 1.2 s ago
+    assert laget(-55.0, -50.0).person(-36.0) is False      # nothing loud
+
+
+def test_a_hole_in_what_was_sent_or_a_hold_on_the_device_starts_the_wait_over():
+    aec = MjukAec(klocka=lambda: 0.0)
+    ljud = (np.ones(FRAME * 2) * 1000).astype(np.int16).tobytes()
+    aec.ref(ljud, RATE, 10.0)
+    assert aec.svar_start == 10.0                 # a reply begins
+    aec.ref(ljud, RATE, 10.02)
+    assert aec.svar_start == 10.0                 # back to back: the same reply
+    aec.ref(ljud, RATE, 10.2)
+    assert aec.svar_start == 10.2                 # a hole of 0.16 s
+    aec.spelstart(0.3, 11.0)
+    assert aec.svar_start == 11.0                 # the device held the audio
+
+
+def test_a_word_of_the_persons_in_the_window_does_not_hide_that_the_canceller_works():
+    aec = MjukAec(klocka=lambda: 0.0)
+    _matt(aec, 100, -25.0, -55.0)
+    _matt(aec, 40, -12.0, -12.0)                  # the person's first word: loud in, loud out
+    _matt(aec, 60, -25.0, -55.0)
+    assert aec.erle(0.0, 2.0, 80, 150) >= 29.0    # as an energy sum this was 4 dB

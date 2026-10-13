@@ -11,6 +11,8 @@ What runs is the agent's own code, in the agent's order:
          speech-to-text and judged by eko_vakt.dom(); too quiet (eko_vakt.niva_dbfs) is ignored
       -> ignored: dropped, the engine never gets it.  A person: his reply is cut (a barge-in) and the turn goes on to
          the engine.
+      -> and before any of that: louder than his own echo over a working canceller (MjukAec.person) cuts him at once,
+         on the level alone ("person (nivå)").
 What is NOT here: the cloud engine, the device, bana 0's own answers, and his live transcript -- his words are taken
 from the speech-to-text of the right channel (the whole file), which is a little kinder than the live transcript that
 trails his voice. The transcript-lag guard (eko_vakt.utskrift_efter) is therefore left out: it can only ignore more.
@@ -66,6 +68,7 @@ async def kor_fil(post, aec, turns, svar, stt, t_bas, utan_aec=False):
     kand = None            # {"t0", "pcm", "slut"}
     tur = None             # {"t0", "pcm", "avbrott"}
     ref_sist = -1e9
+    niva_sist = -1e9
     turns.reset()
     nz = np.nonzero(ref)[0]
     stampel_vid = (nz[0] / 16000 + post["spelstart_ms"] / 1000 + 0.03) if post.get("spelstart_ms") and len(nz) else None
@@ -84,8 +87,24 @@ async def kor_fil(post, aec, turns, svar, stt, t_bas, utan_aec=False):
             continue
         nu = t + STEG / 16000 - t_bas               # file time
         event = turns.feed(ren)
+        if (tur is None and not utan_aec and (t + STEG / 16000 - ref_sist) <= FAS_SVARAR_S and nu - niva_sist > 2.0
+                and aec.person(eko_vakt.niva_dbfs(), eko_vakt.ERLE_TILLIT_DB)):
+            # Louder than his own echo over a working canceller: cut on the level alone (MjukAec.person), no text.
+            niva_sist = nu
+            pcm0 = bytes(kand["pcm"]) if kand else bytes(preroll)
+            ut["kandidater"].append({"t": round(nu - 0.2, 2), "tal_fran": round(nu - 0.2, 2), "dom_vid": round(nu, 2), "stt_s": 0.0,
+                                     "hort": None, "ok": False, "under_tal": True, "niva": round(topp_dbfs(ren * 13), 1),
+                                     "dom": "person (nivå)", "erle_fore": None})
+            tur = {"t0": nu - len(pcm0) / 32000, "pcm": bytearray(pcm0) + bytearray(ren), "avbrott": True,
+                   "niva_slut": nu + turns.silence_s + 0.6}
+            kand, preroll = None, bytearray()
+            continue
         if tur is not None:                         # a turn on its way to the engine: collect to its end
             tur["pcm"] += ren
+            if event == "start" or turns._speaking:
+                tur.pop("niva_slut", None)          # the turn detector has the speech: its own end comes
+            elif tur.get("niva_slut") and nu >= tur["niva_slut"]:
+                event = "end"
             if event == "end":
                 text, ok = await stt(bytes(tur["pcm"]))
                 ut["turer"].append({"t": round(tur["t0"], 2), "s": round(len(tur["pcm"]) / 32000, 2), "text": text,
@@ -118,7 +137,7 @@ async def kor_fil(post, aec, turns, svar, stt, t_bas, utan_aec=False):
         sedan = (t + STEG / 16000) - ref_sist
         under = eko_vakt.under_tal(sedan, len(pcm) / 32000.0, sedan <= FAS_SVARAR_S)
         erle_t = None if utan_aec else aec.erle(t_bas + kand["t0"] - eko_vakt.ERLE_TILLIT_S, t_bas + kand["t0"], eko_vakt.ERLE_TILLIT_RAMAR, eko_vakt.ERLE_TILLIT_SISTA)
-        eko = eko_vakt.dom(hort, ok, hans, under, erle_t if under else None)
+        eko = eko_vakt.dom(hort, ok, hans, under, erle_t if under and os.environ.get("EKO_TILLIT_TEXT", "0") == "1" else None)
         niva = topp_dbfs(pcm)
         skal = "ignorerad" if eko else "person"
         if not eko and niva < eko_vakt.niva_dbfs():
@@ -148,7 +167,7 @@ def summera(resultat):
     sjalv, hans_till_motor, person_rader = 0, 0, []
     for r in resultat:
         p = r["person"]
-        avbrott = [k for k in r["kandidater"] if k["dom"] == "person"]
+        avbrott = [k for k in r["kandidater"] if k["dom"].startswith("person")]
         if p is None:
             sjalv += len(avbrott)
             hans_till_motor += sum(1 for t in r["turer"] if t["hans_ord"])

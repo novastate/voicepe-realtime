@@ -410,6 +410,12 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         event = turns.feed(frame.audio)
         if self.eko_vakt is not None and await self._eko_kandidat(frame, event):
             return
+        if self._niva_slut:
+            if event in ("start", "end") or getattr(turns, "_speaking", False):
+                self._niva_slut = 0.0  # the turn detector has the speech: its own end comes
+            elif time.monotonic() >= self._niva_slut:
+                self._niva_slut = 0.0
+                event = "end"
         if event == "end" and self._tidigt:
             self._tidigt = False  # this turn was ended early (end_early); this is only its normal end
             event = None
@@ -507,8 +513,25 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         what he said. Echo is dropped; a person is let in as a normal turn start. True = this frame was taken."""
         turns = self._turns
         kand = self._kandidat
+        nu = time.monotonic()
+        if self.niva_person is not None and nu - self._niva_sist > 2.0 and self.niva_person():
+            # Loud over a canceller that works: a person, now. No waiting for the turn detector or the text.
+            self._niva_sist = nu
+            if kand is None:
+                pre = self._take_preroll()
+                kand = [type(frame)(audio=pre, sample_rate=frame.sample_rate, num_channels=frame.num_channels)]
+            if self._kandidat_task is not None:
+                self._kandidat_task.cancel()
+            self._kandidat = self._kandidat_task = None
+            self._kandidat_slut = False
+            logger.info("🔊 over his reply: loud over a working canceller -> a person, interrupts")
+            # The turn detector may never call a shouted "stopp" speech; then nothing would end the turn either.
+            self._niva_slut = nu + getattr(turns, "silence_s", 0.8) + 0.6
+            await self._slapp_in(kand + [frame], False)
+            return True
         if kand is None:
-            if event != "start" or not self.eko_vakt():
+            # _niva_slut: the turn is already open, on level; the detector's late "start" is the same speech.
+            if event != "start" or self._niva_slut or not self.eko_vakt():
                 return False
             pre = self._take_preroll()
             self._kandidat = [type(frame)(audio=pre, sample_rate=frame.sample_rate, num_channels=frame.num_channels), frame]
@@ -539,6 +562,15 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         if eko:
             turns.reset()
             return True
+        await self._slapp_in(frames, slut)
+        return True
+
+    niva_person = None  # set by the handler: True = a loud sound over a working canceller, right now, while he replies
+    _niva_sist = 0.0
+    _niva_slut = 0.0    # a turn opened on level alone ends here unless the turn detector takes it over
+
+    async def _slapp_in(self, frames, slut) -> None:
+        """A person spoke over his reply: cut him and let the speech in as a normal turn start."""
         if self.on_barge_in is not None:
             self.on_barge_in()
         await self.push_frame(UserStartedSpeakingFrame())
@@ -551,7 +583,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
                 self._tider_start()
                 await self.push_frame(UserStoppedSpeakingFrame())
                 self._decide_turn()
-            return True
+            return
         self._activity_open = True
         await self._send_activity(activity_start=ActivityStart())
         for f in frames:
@@ -560,7 +592,6 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             self._tider_start()
             await self.push_frame(UserStoppedSpeakingFrame())
             await self._end_activity()
-        return True
 
     async def _end_activity(self) -> None:
         self._activity_open = False
