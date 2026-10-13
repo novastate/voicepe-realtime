@@ -195,3 +195,17 @@ def veto_verktyg(fas: str, idle_sedan: float, sedan_barge_s: "float | None", tur
     if not vakt_oppen(fas, idle_sedan, sedan_barge_s):
         return None
     return vakt_verktyg(turtext, hans, sedan_barge_s)
+
+
+# Words that, alone or together, only tell him to hold on: "vänta lite", "stopp stopp", "nej vänta".
+BARA_AVBROTT_ORD = STOPPORD | {"lite", "nu", "nej", "nä", "okej", "ok", "björn", "tack", "ett", "tag", "en", "sekund", "stund", "du"}
+
+
+def bara_avbrott(turtext: "str | None") -> bool:
+    """The turn that cut him off said nothing to answer: no words the speech-to-text could write, one word, or only
+    hold-on words. He stops and listens; nothing is said back. One word of any spelling counts, because the
+    speech-to-text can not be trusted on a short word over his voice: Henrik's "vänta" was written 'Tack.', 'Välta!',
+    'Merda.' and 'Stå.' (Kontoret 2026-10-13). Henrik the same day, when he answered the word three seconds later:
+    "det flyter inte på som ett samtal"."""
+    h = ord_(turtext)
+    return len(h) <= 1 or all(w in BARA_AVBROTT_ORD for w in h)

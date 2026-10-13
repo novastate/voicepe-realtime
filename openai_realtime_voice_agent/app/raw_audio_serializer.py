@@ -430,6 +430,10 @@ class RawAudioSerializer(FrameSerializer):
         on "listening"; this stops the tail that is still on its way, until the next turn ends or `sek` has passed."""
         self._tysta_tills = time.monotonic() + sek
 
+    def tystad(self) -> bool:
+        """What he says now is not sent to the speaker (tysta_svar): to the room he is not speaking."""
+        return bool(self._tysta_tills) and time.monotonic() < self._tysta_tills
+
     def tysta_slut(self, efter_s: float = 0.7) -> None:
         """The next turn is being decided: the old reply's tail (the model keeps generating until the new activity
         interrupts it) is still on its way for a moment, so the cut lasts `efter_s` more. Measured live 2026-10-12

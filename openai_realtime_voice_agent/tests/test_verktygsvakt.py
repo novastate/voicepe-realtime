@@ -183,3 +183,50 @@ def test_the_handler_asks_the_guards_through_the_window_that_covers_an_interrupt
     src = inspect.getsource(websocket_handler)
     assert "eko_vakt.veto_tur(" in src and "eko_vakt.veto_verktyg(" in src
     assert "eko_vakt.vakt_verktyg(" not in src and "eko_vakt.liknar_svar(" not in src
+
+
+@pytest.mark.parametrize("text", ["Vänta.", "Välta!", "Tack.", "Stå.", "Merda.", "Stopp stopp", "Nej vänta lite", "vänta nu Björn", "", None])
+def test_a_word_that_only_cuts_him_off_asks_for_nothing(text):
+    assert eko_vakt.bara_avbrott(text)
+
+
+@pytest.mark.parametrize("text", ["Men vad är status på huset?", "Tänd lampan", "Vänta, vad sa du om huset?", "nästa låt"])
+def test_a_sentence_said_over_him_is_a_turn_to_answer(text):
+    assert not eko_vakt.bara_avbrott(text)
+
+
+@pytest.mark.asyncio
+async def test_a_bare_interruption_stops_him_and_nothing_is_answered_or_closed():
+    """Kontoret 2026-10-13 16:20: "vänta" cut him, was written 'Tack.' / 'Välta!', and three seconds later he answered
+    the word (or the session closed on the 'Tack.'). Henrik: "det flyter inte på som ett samtal"."""
+    from app import bana0
+    hant = []
+
+    async def stt(pcm, timeout):
+        return "Tack."
+
+    async def fel(*a):
+        raise AssertionError("the turn went on")
+
+    async def vanta():
+        hant.append("vanta")
+
+    async def avsluta():
+        hant.append("stangd")
+
+    def tur(avbrott):
+        return bana0.tur(b"\0" * 3200, stt=stt, timeout_stt=1.0, timeout_comms=1.0, skicka_svar_till_modellen=fel,
+                         skapa_svar=fel, avsluta=avsluta, bara_avbrott=lambda t: avbrott and eko_vakt.bara_avbrott(t),
+                         vanta=vanta)
+    assert await tur(True) == "vanta" and hant == ["vanta"]          # he was cut: silent, listening, the session stays
+    assert await tur(False) == "nej" and hant == ["vanta", "stangd"]  # nobody cut him: "tack" closes, as before
+
+
+def test_a_muted_reply_is_not_him_speaking():
+    from app.raw_audio_serializer import RawAudioSerializer
+    s = RawAudioSerializer.__new__(RawAudioSerializer)
+    assert s.tystad() is False
+    s.tysta_svar(5.0)
+    assert s.tystad() is True
+    s._tysta_tills = 1.0
+    assert s.tystad() is False
