@@ -35,7 +35,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 STEG = 320                     # 20 ms at 16 kHz, the device's frame
 FAS_SVARAR_S = 0.35            # the phase stays "replying" about this long after the last audio (pipecat's bot-stopped)
-EKO_MIN_S = 0.7                # ResilientGeminiLiveService.EKO_MIN_S
+EKO_MIN_S = float(os.environ.get("REPLAY_EKO_MIN_S", "0.5"))   # ResilientGeminiLiveService.EKO_MIN_S, speech after the start
+MIN_EFTER_START = int(os.environ.get("REPLAY_EFTER_START", "1"))  # 0 = as before 2026-10-13: the pre-roll counted too
 PREROLL_S = 1.0                # LocalTurnsMixin.PREROLL_S
 
 
@@ -96,7 +97,8 @@ async def kor_fil(post, aec, turns, svar, stt, t_bas, utan_aec=False):
         if kand is None:
             vakt = (t + STEG / 16000 - ref_sist) <= FAS_SVARAR_S + eko_vakt.svans_s()
             if event == "start" and vakt:
-                kand = {"t0": nu - len(preroll) / 32000, "pcm": bytearray(preroll) + bytearray(ren), "slut": False}
+                kand = {"t0": nu - len(preroll) / 32000, "pcm": bytearray(preroll) + bytearray(ren), "slut": False,
+                        "fore": len(preroll)}
                 preroll = bytearray()
             elif event == "start":                  # speech with no reply near it: an ordinary turn
                 tur = {"t0": nu - len(preroll) / 32000, "pcm": bytearray(preroll) + bytearray(ren), "avbrott": False}
@@ -107,7 +109,7 @@ async def kor_fil(post, aec, turns, svar, stt, t_bas, utan_aec=False):
         kand["pcm"] += ren
         if event == "end":
             kand["slut"] = True
-        if not (kand["slut"] or len(kand["pcm"]) >= EKO_MIN_S * 32000):
+        if not (kand["slut"] or len(kand["pcm"]) - kand["fore"] * MIN_EFTER_START >= EKO_MIN_S * 32000):
             continue
         pcm = bytes(kand["pcm"])
         t_stt = time.monotonic()
@@ -115,13 +117,14 @@ async def kor_fil(post, aec, turns, svar, stt, t_bas, utan_aec=False):
         stt_s = time.monotonic() - t_stt
         sedan = (t + STEG / 16000) - ref_sist
         under = eko_vakt.under_tal(sedan, len(pcm) / 32000.0, sedan <= FAS_SVARAR_S)
-        eko = eko_vakt.dom(hort, ok, hans, under)
+        erle_t = None if utan_aec else aec.erle(t_bas + kand["t0"] - eko_vakt.ERLE_TILLIT_S, t_bas + kand["t0"], eko_vakt.ERLE_TILLIT_RAMAR, eko_vakt.ERLE_TILLIT_SISTA)
+        eko = eko_vakt.dom(hort, ok, hans, under, erle_t if under else None)
         niva = topp_dbfs(pcm)
         skal = "ignorerad" if eko else "person"
         if not eko and niva < eko_vakt.niva_dbfs():
             eko, skal = True, "ignorerad (för tyst)"
-        erle = None if utan_aec else aec.erle(t_bas + kand["t0"] - 1.5, t_bas + kand["t0"])
-        ut["kandidater"].append({"t": round(kand["t0"], 2), "dom_vid": round(nu, 2), "stt_s": round(stt_s, 2), "hort": hort,
+        erle = erle_t
+        ut["kandidater"].append({"t": round(kand["t0"], 2), "tal_fran": round(kand["t0"] + kand["fore"] / 32000, 2), "dom_vid": round(nu, 2), "stt_s": round(stt_s, 2), "hort": hort,
                                  "ok": ok, "under_tal": under, "niva": round(niva, 1), "dom": skal,
                                  "erle_fore": None if erle is None else round(erle, 1)})
         if eko:
@@ -188,7 +191,7 @@ async def main():
         resultat.append(r)
         print(f"== {r['fil']} ({r['s']} s) han: {r['hans']!r}" + (f" | person: {r['person']}" if r["person"] else ""))
         for k in r["kandidater"]:
-            print(f"   kandidat {k['t']:5.2f} s, dom vid {k['dom_vid']:5.2f} s (+{k['stt_s']:.2f} s stt), {k['niva']:6.1f} dBFS, "
+            print(f"   kandidat, tal från {k['tal_fran']:5.2f} s, dom vid {k['dom_vid']:5.2f} s (+{k['stt_s']:.2f} s stt), {k['niva']:6.1f} dBFS, "
                   f"ERLE före {k['erle_fore']} dB, {'medan han talar' if k['under_tal'] else 'strax efter'}: {k['hort']!r} -> {k['dom']}")
         for t in r["turer"]:
             print(f"   TILL MOTORN {t['t']:5.2f} s ({t['s']} s){' efter avbrott' if t['efter_avbrott'] else ''}: {t['text']!r}"

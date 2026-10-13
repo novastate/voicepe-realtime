@@ -485,8 +485,12 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
     eko_vakt = None
     eko_dom = None
     on_barge_in = None  # called once when a person's speech is confirmed over his reply
-    EKO_MIN_S = 0.7
+    # Speech AFTER the turn detector said "speech", before the candidate is written out and judged. The pre-roll (up to
+    # 1 s from before he spoke) used to count too, so the speech-to-text got the first 0.02-0.3 s of the word: Henrik's
+    # "vänta" was written 'Tack.' twice (Kontoret 2026-10-13 09:48). Replayed: 0.3 s 'Välta?', 0.5 s and 0.7 s 'Vänta.'
+    EKO_MIN_S = 0.5
     _kandidat = None
+    _kandidat_fore = 0
     _kandidat_task = None
     _kandidat_slut = False
 
@@ -508,13 +512,14 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
                 return False
             pre = self._take_preroll()
             self._kandidat = [type(frame)(audio=pre, sample_rate=frame.sample_rate, num_channels=frame.num_channels), frame]
+            self._kandidat_fore = len(pre)
             self._kandidat_slut, self._kandidat_task = False, None
             return True
         kand.append(frame)
         if event == "end":
             self._kandidat_slut = True
         if self._kandidat_task is None:
-            if self._kandidat_slut or sum(len(f.audio) for f in kand) >= self.EKO_MIN_S * frame.sample_rate * 2:
+            if self._kandidat_slut or sum(len(f.audio) for f in kand) - self._kandidat_fore >= self.EKO_MIN_S * frame.sample_rate * 2:
                 pcm = b"".join(f.audio for f in kand)
                 self._kandidat_task = asyncio.get_running_loop().create_task(self.eko_dom(pcm, frame.sample_rate))
             return True

@@ -1950,7 +1950,9 @@ class WebSocketHandler:
                         a = _np.frombuffer(pcm, dtype=_np.int16).astype(_np.float32)
                         n = int(len(a) * 16000 / rate)
                         pcm = _np.interp(_np.linspace(0, len(a) - 1, n), _np.arange(len(a)), a).astype(_np.int16).tobytes()
+                    t_stt = time.monotonic()
                     hort, ok = await bana0.transkribera_tydligt(pcm, host, port, timeout_stt)
+                    stt_s = time.monotonic() - t_stt
                     svar_obj = getattr(openai_service, "svar", None)
                     hans = svar_obj.text() if svar_obj is not None else ""
                     if ok and svar_obj is not None and eko_vakt.utskrift_efter(svar_obj.nu_ord(), serializer.svar_sek()):
@@ -1958,8 +1960,13 @@ class WebSocketHandler:
                                     f"({svar_obj.nu_ord()} words, {serializer.svar_sek():.1f} s sent) -> his own words, ignored")
                         return True
                     under = eko_vakt.under_tal(serializer.sedan_svar(), len(pcm) / 32000.0, phase_emitter.phase == "replying")
-                    eko = eko_vakt.dom(hort, ok, hans, under)
-                    logger.info(f"🔊 over his reply: heard {hort!r} ({'while he speaks' if under else 'just after'}) -> "
+                    erle = None
+                    if under and serializer.aec is not None:   # how well was his echo taken out just before this began?
+                        borjan = time.monotonic() - stt_s - len(pcm) / 32000.0
+                        erle = serializer.aec.erle(borjan - eko_vakt.ERLE_TILLIT_S, borjan, eko_vakt.ERLE_TILLIT_RAMAR, eko_vakt.ERLE_TILLIT_SISTA)
+                    eko = eko_vakt.dom(hort, ok, hans, under, erle)
+                    logger.info(f"🔊 over his reply: heard {hort!r} ({'while he speaks' if under else 'just after'}, "
+                                f"echo {'not measured' if erle is None else f'{erle:.0f} dB down'}) -> "
                                 f"{'ignored' if eko else 'a person, interrupts'}")
                     return eko
 

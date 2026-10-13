@@ -131,3 +131,20 @@ def test_the_candidate_started_while_his_voice_was_in_the_room():
     assert eko_vakt.under_tal(99.0, 1.0, True)        # he is replying now
     assert eko_vakt.under_tal(1.5, 0.8, False)        # 0.8 s of speech that began 0.7 s after his last audio
     assert not eko_vakt.under_tal(3.0, 0.8, False)    # began 2.2 s after he went quiet: a person answering
+
+
+def test_when_the_canceller_works_a_loud_sound_is_a_person_whatever_it_is_written_as():
+    """Henrik 2026-10-13 09:48: his "vänta" over the reply was written 'Tack.' and 'Tack så mycket.' and ignored. The
+    canceller had taken his echo 30 and 34 dB down just before; what was loud then was not Björn."""
+    hans = "Jag är inte här för att berätta sagor. Jag är här för att hålla ordning på huset."
+    assert not eko_vakt.dom("Tack.", True, hans, under_tal=True, erle_fore=29.9)
+    assert not eko_vakt.dom("Tack så mycket.", True, hans, under_tal=True, erle_fore=34.8)
+    assert not eko_vakt.dom(None, False, hans, under_tal=True, erle_fore=30.0)        # the speech-to-text failed: still a person
+    assert eko_vakt.dom("hålla ordning på huset", True, hans, under_tal=True, erle_fore=30.0)   # his own words stay his
+    assert not eko_vakt.dom("Tack till elever och personer som hjälpte med videon.", True, hans, under_tal=True, erle_fore=33.8)
+    # not measured (the start of a reply) or poorly cancelled: the stop-word rule, as before
+    for erle in (None, 4.0, 19.9):
+        assert eko_vakt.dom("Tack.", True, hans, under_tal=True, erle_fore=erle)
+        assert not eko_vakt.dom("Vänta.", True, hans, under_tal=True, erle_fore=erle)
+    # and it only counts while he speaks
+    assert not eko_vakt.dom("köket", True, hans, under_tal=False, erle_fore=30.0)

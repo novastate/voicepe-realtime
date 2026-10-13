@@ -90,23 +90,36 @@ def under_tal(sedan_svar_s: float, kandidat_s: float, fas_svarar: bool) -> bool:
     return fas_svarar or sedan_svar_s <= kandidat_s + UNDER_TAL_S
 
 
-def dom(hort: "str | None", ok: bool, hans: str, under_tal: bool = False) -> bool:
+ERLE_TILLIT_DB = 20.0   # the canceller took this much off his echo in the seconds before the speech: what is loud now is not him
+ERLE_TILLIT_RAMAR = 80  # ...measured over at least 0.8 s of his voice (the first second of a reply is never trusted)
+ERLE_TILLIT_S = 4.0     # ...the last 1.5 s of it (ERLE_TILLIT_SISTA) within this long before the speech began: he pauses between sentences
+ERLE_TILLIT_SISTA = 150
+
+
+def dom(hort: "str | None", ok: bool, hans: str, under_tal: bool = False, erle_fore: "float | None" = None) -> bool:
     """The net's verdict: True = ignore (his own words, or clearly no words).
 
-    `under_tal` (the speech started while his own voice was in the room): only a stop word interrupts him. Everything
-    else the local STT writes there is his own voice coming back through the mic, however it is spelt -- 'Fåla.',
-    'Lämmar sa mord.', 'Det är en klockan.', 'Välkommen till mig.' all cut him and started a new reply on top of the
-    old one (Kontoret live 2026-10-12 21:01 and 2026-10-13 07:03). A speech-to-text that failed says nothing about a
-    stop word, so it does not interrupt him either: he talks on and the person says it again.
+    `under_tal` (the speech started while his own voice was in the room). Two cases:
+    - The canceller is doing its work (`erle_fore` >= ERLE_TILLIT_DB): his echo is some 30 dB down, far under the floor
+      the caller sets (eko_vakt.niva_dbfs). A sound over that floor is a person, whatever the speech-to-text makes of it
+      -- Henrik's second, louder "vänta" was written 'Tack.' (2026-10-13 09:48). Only his own words are still ignored.
+    - It is not, or nobody knows (the start of a reply, a cold canceller): then only a stop word interrupts him.
+      Everything else the speech-to-text writes there is his own voice coming back, however it is spelt -- 'Fåla.',
+      'Lämmar sa mord.', 'Det är en klockan.', 'Välkommen till mig.' all cut him and started a new reply on top of
+      the old one (live 2026-10-12 21:01 and 2026-10-13 07:03). A speech-to-text that failed says nothing about a stop
+      word, so it does not interrupt him either.
 
     Just after he stopped (not `under_tal`) it is the old rule: his own words are ignored, anything else is a person,
     and in doubt (ok False) it is the person -- a short answer to his question ("köket") must get through (A on #65, #70)."""
+    slacker = under_tal and erle_fore is not None and erle_fore >= ERLE_TILLIT_DB
     if not ok:
-        return under_tal
-    if any(l in (hort or "").lower() for l in LUDD):
-        return True  # what it writes of noise
+        return under_tal and not slacker
     if ar_eko(hort, hans):
         return True
+    if slacker:
+        return False  # also when the text is one of the LUDD phrases: Henrik's shouted "vänta" was written as one
+    if any(l in (hort or "").lower() for l in LUDD):
+        return True  # what it writes of noise
     return under_tal and not har_stoppord(hort)
 
 

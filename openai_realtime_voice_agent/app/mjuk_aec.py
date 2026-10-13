@@ -167,18 +167,19 @@ class MjukAec:
         except Exception as e:
             self._fel(e)
 
-    def erle(self, t0: float, t1: float) -> Optional[float]:
+    def erle(self, t0: float, t1: float, minst: int = ERLE_MIN_RAMAR, sista: Optional[int] = None) -> Optional[float]:
         """How many dB the canceller took off his echo between t0 and t1 (energy in / energy out over the frames where
-        the speaker played and the mic heard it). None = too little to tell. Measured BEFORE a candidate starts it says
-        whether a loud sound after the canceller can be trusted to be a person."""
-        inn = ut = 0.0
-        n = 0
-        for t, mic_db, ren_db, ref_db in self.matt:
-            if t0 <= t <= t1 and ref_db > ERLE_REF_DB and mic_db > ERLE_MIC_DB:
-                inn += 10 ** (mic_db / 10)
-                ut += 10 ** (ren_db / 10)
-                n += 1
-        if n < ERLE_MIN_RAMAR or ut <= 0:
+        the speaker played and the mic heard it). `sista`: only the last so many of those frames (he pauses between
+        sentences, and the first second of a reply is before the canceller found its place). None = fewer than `minst`
+        frames, too little to tell. Measured BEFORE a candidate starts it says whether a loud sound after the canceller
+        can be trusted to be a person."""
+        ramar = [(mic_db, ren_db) for t, mic_db, ren_db, ref_db in self.matt
+                 if t0 <= t <= t1 and ref_db > ERLE_REF_DB and mic_db > ERLE_MIC_DB]
+        if sista:
+            ramar = ramar[-sista:]
+        inn = sum(10 ** (m / 10) for m, _ in ramar)
+        ut = sum(10 ** (r / 10) for _, r in ramar)
+        if len(ramar) < minst or ut <= 0:
             return None
         return float(10 * np.log10(inn / ut))
 
