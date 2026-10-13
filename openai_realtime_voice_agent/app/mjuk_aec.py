@@ -43,7 +43,9 @@ ERLE_MIN_RAMAR = 30           # fewer frames than this (0.3 s) is no measurement
 NIVA_FONSTER = 20             # person(): the last 0.2 s...
 NIVA_HOGA = 12                # ...with at least 0.12 s of it loud
 NIVA_OVER_EKO_DB = float(os.environ.get("NIVA_OVER_EKO_DB", "-2"))   # ...over his echo's loudest frames (95th percentile) plus this
+NIVA_OVER_REST_DB = float(os.environ.get("NIVA_OVER_REST_DB", "8"))   # ...or, with a device that reports underruns: over what the canceller leaves of them plus this
 NIVA_HAL_S = 0.03             # a hole this long in what was sent is a break (shorter ones the canceller rides out)
+NIVA_UNDERRUN_S = 3.0          # ...and this long after the device said its playback broke (42 simulated breaks: 2-3 false cuts at 2 s, 0 at 3 s)
 NIVA_SVAR_S = 2.0             # ...and not in the first seconds of a reply, or after a break in it
 
 
@@ -85,6 +87,7 @@ class MjukAec:
         self.tal_db = float(os.environ.get("SOFT_TAL_DB", "0"))
         self.matt: List[Tuple[float, float, float, float]] = []   # (frame end, mic dBFS, cleaned dBFS, ref dBFS), last 4 s
         self.svar_start = -1e9   # when what is sent to the speaker last began, or broke (a hole, a hold on the device)
+        self.underrun_stod = False   # the device's firmware reports underruns (play_stamp carries "ur": 1)
         self.matt_max = 400
         self.mic_sist: Optional[float] = None     # when the last mic packet came
         self.mic_ankare: Optional[float] = None   # our clock at sample 0 of this stretch of the mic stream
@@ -193,7 +196,13 @@ class MjukAec:
         # Henrik's second "vänta" was taken for echo).
         return float(np.median([m - r for m, r in ramar]))
 
-    def person(self, niva_db: float, tillit_db: float = 20.0, over_db: Optional[float] = None) -> bool:
+    def underrun(self, t: Optional[float] = None) -> None:
+        """The device says its speaker ran out of audio mid-reply (firmware "underrun"): what it plays from here on
+        comes later than the reference says, and the canceller needs a moment to find it again."""
+        self.svar_start = (self.klocka() if t is None else t) + NIVA_UNDERRUN_S - NIVA_SVAR_S
+
+    def person(self, niva_db: float, tillit_db: float = 20.0, over_db: Optional[float] = None,
+               rest_db: Optional[float] = None) -> bool:
         """A person is talking over him, right now, told by the level alone: at least NIVA_HOGA of the last NIVA_FONSTER
         frames out of the canceller are louder than his own echo gets in the mic (its 95th percentile over the last
         seconds, plus `over_db`), and never under `niva_db`. The canceller must have been working just before (the
@@ -219,11 +228,19 @@ class MjukAec:
                     if t1 - 4.0 <= t <= t1 and ref > ERLE_REF_DB and mic > ERLE_MIC_DB and mic - ren >= 10.0]
             if len(fore) < 80:
                 return False
-            golv = max(niva_db, float(np.percentile(fore, 95)) + (NIVA_OVER_EKO_DB if over_db is None else over_db))
-            if sum(1 for _, _, ren, _ in m[-NIVA_FONSTER:] if ren > golv) < NIVA_HOGA:
-                return False
             e = self.erle(t1 - 4.0, t1, 80, 150)
-            return e is not None and e >= tillit_db
+            if e is None or e < tillit_db:
+                return False
+            topp = float(np.percentile(fore, 95))
+            if self.underrun_stod and over_db is None:
+                # The device says when its playback breaks (underrun -> svar_start), so a slip is known by its cause
+                # and the floor need not be his whole echo: it is what the canceller leaves of his loudest frames
+                # right now, plus a margin. A canceller at 30 dB leaves the fixed floor; one still finding its place
+                # after a break (20-25 dB) gets a higher one.
+                golv = max(niva_db, topp - e + (NIVA_OVER_REST_DB if rest_db is None else rest_db))
+            else:
+                golv = max(niva_db, topp + (NIVA_OVER_EKO_DB if over_db is None else over_db))
+            return sum(1 for _, _, ren, _ in m[-NIVA_FONSTER:] if ren > golv) >= NIVA_HOGA
         except Exception as e:
             self._fel(e)
             return False

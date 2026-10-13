@@ -452,6 +452,14 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             # Bana 0 holds this turn; keep collecting until it decides. Speech
             # that resumes during the decision belongs to the same turn.
             held.append(frame)
+            if self._vantar and event == "start":
+                # The turn that cut him off was only "vänta" (fortsatt_tur): this is the person going on. The engine
+                # gets it all as one turn; everything else is told that speech has begun, as at any turn start.
+                self._vantar = False
+                self._avgjord = False
+                await self.push_frame(UserStartedSpeakingFrame())
+                if self.on_user_turn_start is not None:
+                    self.on_user_turn_start()
             if event == "preend" and self.on_user_turn_pre_end is not None:
                 self.on_user_turn_pre_end()
             if event == "end":
@@ -514,7 +522,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         turns = self._turns
         kand = self._kandidat
         nu = time.monotonic()
-        if self.niva_person is not None and nu - self._niva_sist > 2.0 and self.niva_person():
+        if self.niva_person is not None and not self._vantar and nu - self._niva_sist > 2.0 and self.niva_person():
             # Loud over a canceller that works: a person, now. No waiting for the turn detector or the text.
             self._niva_sist = nu
             if kand is None:
@@ -531,8 +539,8 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             return True
         if kand is None:
             # _niva_slut: the turn is already open, on level; the detector's late "start" is the same speech.
-            if event != "start" or self._niva_slut or not self.eko_vakt():
-                return False
+            if event != "start" or self._niva_slut or self._vantar or not self.eko_vakt():
+                return False  # _vantar: the turn is held open after "vänta"; this is the person going on
             pre = self._take_preroll()
             self._kandidat = [type(frame)(audio=pre, sample_rate=frame.sample_rate, num_channels=frame.num_channels), frame]
             self._kandidat_fore = len(pre)
@@ -686,12 +694,24 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         if self._turn_end_task is None or self._turn_end_task.done():
             self._turn_end_task = asyncio.get_running_loop().create_task(self._run_turn_end())
 
+    _vantar = False  # the held turn only cut him off ("vänta"): it stays held, and what the person says next joins it
+
+    def fortsatt_tur(self) -> bool:
+        """The turn just ended asked for nothing ("vänta"): do not answer it, keep it, and let the person go on. What
+        is said next is added to the same turn, which then ends and is decided as usual. True = it is being held."""
+        if not getattr(self, "_held", None) or self._turns is None:
+            return False
+        self._vantar = True
+        self._tidigt = False
+        self._turns.reset()
+        return True
+
     async def _run_turn_end(self) -> None:
         try:
             await self.on_user_turn_end()
         finally:
             # A hook that died without deciding must not strand the turn.
-            if getattr(self, "_held", None):
+            if getattr(self, "_held", None) and not self._vantar:
                 await self.answer_turn()
 
     async def _vaken_for_tur(self) -> bool:
@@ -780,6 +800,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             logger.info("🧽 open Gemini activity abandoned (device dropped the input)")
         forts, self._forts = getattr(self, "_forts", None), None
         self._held = None
+        self._vantar = False
         self._turn_rescue = None
         self._activity_open = False
         # A continuation being collected (see _fortsatt) is not the dropped turn: the reset below makes the

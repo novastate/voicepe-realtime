@@ -202,10 +202,15 @@ BARA_AVBROTT_ORD = STOPPORD | {"lite", "nu", "nej", "nä", "okej", "ok", "björn
 
 
 def bara_avbrott(turtext: "str | None") -> bool:
-    """The turn that cut him off said nothing to answer: no words the speech-to-text could write, one word, or only
-    hold-on words. He stops and listens; nothing is said back. One word of any spelling counts, because the
-    speech-to-text can not be trusted on a short word over his voice: Henrik's "vänta" was written 'Tack.', 'Välta!',
-    'Merda.' and 'Stå.' (Kontoret 2026-10-13). Henrik the same day, when he answered the word three seconds later:
-    "det flyter inte på som ett samtal"."""
+    """The turn that cut him off said nothing to answer: no words the speech-to-text could write, only hold-on words
+    ("vänta lite", "nej tack"), or one word that is a hold-on word misspelt ('Välta!', 'Änta!' for "vänta"). He stops
+    and listens; nothing is said back.
+
+    Any OTHER word is something to answer, also alone: "hjälp", "tänd". Henrik 2026-10-13: "ett enda ord som avbryter
+    Björn får inte tvingas till 'vänta'. Han ska tystna, lyssna och svara på det jag faktiskt säger, som en människa."
+    (The first version took every single word for "vänta", because the speech-to-text also writes his "vänta" as
+    'Råd.' or 'Stå.'; those now go to the engine, which hears the audio and answers what was said.)"""
     h = ord_(turtext)
-    return len(h) <= 1 or all(w in BARA_AVBROTT_ORD for w in h)
+    if not h or all(w in BARA_AVBROTT_ORD for w in h):
+        return True
+    return len(h) == 1 and bool(difflib.get_close_matches(h[0], STOPPORD, n=1, cutoff=0.75))

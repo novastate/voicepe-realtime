@@ -195,7 +195,8 @@ def test_mic_packets_that_arrive_in_clumps_do_not_move_the_reference():
 
 
 def _matt(aec, n, mic, ren, ref=-18.0, t0=0.0):
-    aec.matt += [(t0 + (len(aec.matt) + 1) * 0.01, mic, ren, ref) for _ in range(n)]
+    k = len(aec.matt)
+    aec.matt += [(t0 + (k + i + 1) * 0.01, mic, ren, ref) for i in range(n)]
 
 
 def test_louder_than_his_own_echo_over_a_working_canceller_is_a_person():
@@ -232,3 +233,23 @@ def test_a_word_of_the_persons_in_the_window_does_not_hide_that_the_canceller_wo
     _matt(aec, 40, -12.0, -12.0)                  # the person's first word: loud in, loud out
     _matt(aec, 60, -25.0, -55.0)
     assert aec.erle(0.0, 2.0, 80, 150) >= 29.0    # as an energy sum this was 4 dB
+
+
+def test_a_device_that_reports_underruns_lets_a_normal_voice_through_but_not_right_after_a_break():
+    """Kontoret 2026-10-13 16:21: Henrik spoke over him for six seconds at -22 to -30 dBFS, 25-35 dB over what the
+    canceller left, and nothing cut him: the floor was his whole echo, because a playback break could not be told."""
+    def laget(stod, ren_nu, bruten_for_s=None):
+        aec = MjukAec(klocka=lambda: 0.0)
+        aec.svar_start = -10.0
+        aec.underrun_stod = stod
+        _matt(aec, 300, -25.0, -57.0)             # 3 s of his echo, 32 dB taken off
+        if bruten_for_s is not None:
+            aec.underrun(aec.matt[-1][0] - bruten_for_s)
+        _matt(aec, 20, -24.0, ren_nu)             # then 0.2 s of this out of the canceller
+        return aec
+
+    assert laget(False, -27.0).person(-36.0) is False              # no reports: not louder than his echo, it may be him
+    assert laget(True, -27.0).person(-36.0) is True                # reports: 30 dB over what the canceller leaves
+    assert laget(True, -27.0, bruten_for_s=1.5).person(-36.0) is False   # the playback broke 1.5 s ago
+    assert laget(True, -27.0, bruten_for_s=3.5).person(-36.0) is True    # and has had time to be found again
+    assert laget(True, -45.0).person(-36.0) is False               # under the fixed floor

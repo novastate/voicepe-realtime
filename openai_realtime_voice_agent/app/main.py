@@ -1664,6 +1664,8 @@ class Application:
             c = self.websocket_handler.resolve_device(body["rum"])
             if c is None or c.task is None or c.maskin is None:
                 return JSONResponse({"error": "okand_enhet"})
+            if getattr(c, "recovery", None) is not None:
+                c.recovery._last_wake = time.monotonic()   # this stands in for the wake word (see tur_utan_vackning)
             await c.maskin.phase("listening", "fraga-prov")
             if c.serializer is not None:  # only the question reaches the pipeline: mixed frame by frame with the live mic it is no speech
                 c.serializer.suppress_inbound_until = time.monotonic() + len(pcm) / 32000 + 0.9
@@ -1673,6 +1675,39 @@ class Application:
                 await c.task.queue_frame(InputAudioRawFrame(audio=chunk, sample_rate=16000, num_channels=1))
                 await asyncio.sleep(0.02)
             return JSONResponse({"ok": True, "s": round(len(pcm) / 32000, 1)})
+
+        @web_app.post("/glapp-prov")
+        async def glapp_prov(request: Request):
+            """Test only (EKO_PROV=1, loopback): hold his reply audio for `ms` once, so the device's speaker runs dry
+            mid-reply. For measuring that the device reports it ("underrun") and that nothing cuts him off then."""
+            if (request.client.host if request.client else "") not in ("127.0.0.1", "::1"):
+                return JSONResponse({"error": "loopback_only"}, status_code=403)
+            if os.environ.get("EKO_PROV", "0") != "1":
+                return JSONResponse({"error": "eko_prov_off"}, status_code=404)
+            body = await request.json()
+            c = self.websocket_handler.resolve_device(body["rum"])
+            if c is None or c.transport is None:
+                return JSONResponse({"error": "okand_enhet"})
+            c.transport.output().prov_glapp_s = min(2.0, max(0.0, float(body.get("ms", 200)) / 1000))
+            return JSONResponse({"ok": True})
+
+        @web_app.post("/rost-prov")
+        async def rost_prov(request: Request):
+            """Test only (EKO_PROV=1, loopback): add a recorded voice (16 kHz mono pcm) to the device's live mic, as if a
+            person spoke in the room while he replies. The echo is the real one; the canceller, the cut and the device
+            are the real chain. For measuring the time from a voice to his silence without a person in the room."""
+            if (request.client.host if request.client else "") not in ("127.0.0.1", "::1"):
+                return JSONResponse({"error": "loopback_only"}, status_code=403)
+            if os.environ.get("EKO_PROV", "0") != "1":
+                return JSONResponse({"error": "eko_prov_off"}, status_code=404)
+            import base64
+            body = await request.json()
+            c = self.websocket_handler.resolve_device(body["rum"])
+            if c is None or c.serializer is None:
+                return JSONResponse({"error": "okand_enhet"})
+            c.serializer.prov_rost_t = 0.0
+            c.serializer.prov_rost = base64.b64decode(body["pcm_b64"])
+            return JSONResponse({"ok": True})
 
         @web_app.post("/svar-prov")
         async def svar_prov(request: Request):

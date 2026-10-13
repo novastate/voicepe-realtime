@@ -49,7 +49,24 @@ SPEC_STT_KONTROLL = os.environ.get("SPEC_STT_KONTROLL", "1") != "0"  # 0 = off
 OFFLINE_PROBE_S = 1.0
 # After a hit the model confirms in its own words; past this, the cached "Klart.".
 OK_VANTA_S = 2.5
-VANTA_TYST_S = 12.0  # after a bare "vänta" over his reply: what the engine answers to it is not spoken, for this long at most
+TUR_UTAN_VACKNING_S = float(os.environ.get("TUR_UTAN_VACKNING_S", "60"))  # 0 = off
+
+
+def tur_utan_vackning(sedan_idle_s: float, sedan_vakning_s: float, grans_s: "float | None" = None,
+                      sedan_svar_s: float = 1e9) -> bool:
+    """A turn is starting although nobody woke him and the last reply ended long ago: the device's mic was left open
+    and this is the room, not a question. The session closes itself after 30 s of quiet, so a turn that starts more than
+    `grans_s` after both the last idle and the last wake has no way of being meant for him.
+
+    Kontoret 2026-10-13 18:08 and 18:35 (the test firmware with the mic open during replies, left on after a test):
+    turns started 2944 s and 1430 s after idle, with no wake, and he answered the talk in the room five times."""
+    grans_s = TUR_UTAN_VACKNING_S if grans_s is None else grans_s
+    # sedan_svar_s: he is speaking, or just was (a turn that cuts a long reply off starts long after the last idle too).
+    return grans_s > 0 and sedan_idle_s > grans_s and sedan_vakning_s > grans_s and sedan_svar_s > grans_s
+
+
+VANTA_LYSSNAR_S = float(os.environ.get("VANTA_LYSSNAR_S", "10"))  # after a bare "vänta" over his reply: silent, mic open, this long
+VANTA_TYST_S = 90.0  # ...and the rest of the reply that was cut, which the engine goes on generating, is not spoken (until the next turn ends)
 from app.raw_audio_serializer import RawAudioSerializer
 from app.session_manager import SessionManager
 from app.audio_recording_service import AudioRecordingService
@@ -1889,15 +1906,29 @@ class WebSocketHandler:
                         logger.warning(f"⚠️ {lage} — the engine has more, a question may have been cut")
                     else:
                         logger.info(f"⚡ {lage}")
+                if getattr(connection, "utan_vackning", False):   # the turn ended before it was dropped: it is still not his
+                    connection.utan_vackning = False
+                    serializer.take_turn_audio()
+                    if hasattr(openai_service, "drop_turn"):
+                        await openai_service.drop_turn()
+                    await phase_emitter.force_idle("a turn with no wake")
+                    return
                 barge_tur, connection.barge_tur = getattr(connection, "barge_tur", False), False
 
                 async def _vanta():
-                    """He was cut off by a word that asks for nothing ("vänta"): the engine gets the turn, so it knows
-                    it was interrupted and stops generating the old reply, but what it answers is not spoken and it
-                    runs no tool on it (no text for the tool guard). He is silent and the mic is open."""
+                    """He was cut off by a word that asks for nothing yet ("vänta"): he is silent, the mic stays open and
+                    the turn is kept, so what the person says next is the same turn ("vänta ... berätta om huset i
+                    stället") and is answered. What the engine goes on generating of the old reply is not spoken. Nothing
+                    more said in VANTA_LYSSNAR_S: the turn is dropped and the device closes its mic."""
+                    if not getattr(openai_service, "fortsatt_tur", lambda: False)():
+                        raise RuntimeError("the engine can not hold a turn")
                     connection.bana0_heard = ""
                     serializer.tysta_svar(VANTA_TYST_S)
-                    await bana0_miss(provider, openai_service)
+
+                    async def _inget_mer():
+                        serializer.take_turn_audio()
+                        await openai_service.drop_turn()
+                    await phase_emitter.hall_lyssnar(VANTA_LYSSNAR_S, _inget_mer, VANTA_TYST_S)
 
                 async def _avsluta():
                     """A nej in the window: drop what the engine heard, then sleep it (like stopp)."""
@@ -1937,6 +1968,18 @@ class WebSocketHandler:
                 t = getattr(connection, "barge_in_t", None)
                 return (time.monotonic() - t) if t else None
 
+            async def _somna_utan_vackning():
+                """Drop the turn nobody asked for and close the device's mic: an idle that comes while the device is in
+                `listening` closes its orphaned mic gate (firmware, set_phase_)."""
+                try:
+                    await asyncio.sleep(0.4)   # after the `listening` this turn start is about to send the device
+                    if hasattr(openai_service, "drop_turn"):
+                        await openai_service.drop_turn()
+                    serializer.take_turn_audio()
+                except Exception as e:
+                    logger.warning(f"⚠️ dropping the turn with no wake failed: {e!r}")
+                await phase_emitter.force_idle("a turn with no wake")
+
             def _tur_borjar():
                 _spec_rensa()
                 avbryt = getattr(connection, "avbryt_core", None)
@@ -1954,6 +1997,11 @@ class WebSocketHandler:
                     sedan_vakning = time.monotonic() - connection.recovery._last_wake
                     logger.info(f"📏 turn start level {dbfs(serializer.peek_turn_audio()):.1f} dBFS, "
                                 f"{sedan_idle:.1f} s since idle, {sedan_vakning:.1f} s since wake")
+                    if tur_utan_vackning(sedan_idle, sedan_vakning, None, serializer.sedan_svar()):
+                        logger.warning(f"🚫 a turn with no wake, {sedan_idle:.0f} s after the last reply: the mic was left "
+                                       "open and this is the room. Dropped; the device is told to close its mic")
+                        connection.utan_vackning = True
+                        asyncio.get_running_loop().create_task(_somna_utan_vackning())
                 except Exception as e:  # a log line must never break a turn
                     logger.debug(f"turn start level not logged: {e!r}")
 
