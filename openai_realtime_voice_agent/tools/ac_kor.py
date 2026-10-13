@@ -36,6 +36,7 @@ class Stt:
         self.nya = {}
         self.sttd = sttd if sttd and os.path.exists(sttd) else None
         self.tmp = tmp or tempfile.gettempdir()
+        os.makedirs(self.tmp, exist_ok=True)
         self.p = None
         self.lock = None
         self.saknas = 0       # frågor som varken cachen eller sttd kunde svara på

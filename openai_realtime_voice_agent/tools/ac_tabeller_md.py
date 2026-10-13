@@ -153,7 +153,7 @@ def ac6(m, h, jpi, korn, inj, pass_):
     if not rs:
         return s + "_Inga injektionskörningar än._\n", {}
     s += (f"Röst inlagd 3 s in i ett svar; baser = inspelningar där journalen visar eko utan inlagd röst och utan klipp (känt före utfallet), svaret minst 5,5 s. "
-          "Ekosläckaren värms av de två föregående inspelningarna i passet. `*` textvägens tid är AUDIO som behövs plus lokal WhisperKit på Macen, inte core:s bana 0.\n\n")
+          "Ekosläckaren värms av den närmast föregående inspelningen i passet (högst 15 min före; saknas den är den kall). `*` textvägens tid är AUDIO som behövs plus lokal WhisperKit på Macen, inte core:s bana 0.\n\n")
     kol = ["pass", "underrun-rapporter"] + KOL_INJ
     rader = []
     for p in m["pass"]:
@@ -410,7 +410,7 @@ def ac10(m, h, jpi, korn, pass_):
                                 detalj.append([x["id"], passetikett(p), f"{k['t']:.1f}", k["via"], repr(k["hort"]), f"{k['niva']:.1f}"])
     s += ("Varje inspelning är ett fall; ingen volym- eller mikrofonskalning (verklig högtalarvolym 0,2/0,4/0,6 går inte att mappa: den loggas inte, och mikrofonskalning är inte volym). "
           "'varm' = en delad ekosläckare per pass i tidsordning (som live), 'kall' = ny per inspelning (värsta fallet). 'hans ord' = turtext där de flesta orden finns i HANS eget svar enligt lokal avskrift av referenskanalen "
-          "(det agenten skickade) — det är facit, och det är hans ord, inte Geminis avskrift. 'ej justerad' = inspelningen gick inte att lägga på journalen (okänt om röst var inlagd).\n\n")
+          "(det agenten skickade) — det är facit, och det är hans ord, inte Geminis avskrift. 'ej justerad' = inspelningen gick inte att lägga på journalen (okänt om röst var inlagd). **'Bara eko enligt journalen' betyder bara att journalen inte visar någon inlagd röst eller något klipp**: en person som talade utan att bygget klippte syns inte (Henriks egna prov 12:07 lokal ligger bland dem), så ett replay-klipp där är inte säkert ett självavbrott; raderna listas nedan så att de går att granska.\n\n")
     s += tabell(["pass", "ekosläckare", "underrun-rapporter", "journalens klassning (känd före utfallet)", "inspelningar", "inspelningar med klipp i replay", "turer till motorn", "…med hans ord", "kandidater", "…ignorerade"], rader)
     s += "\nKälla: inlagd röst offline betyder här att ingen röst lagts in; det är eko genom kedjan (bara kod+inspelning). Replay-klipp i inspelningar som journalen kallar 'bara eko' (varm, underrun som live), spårbara:\n\n"
     s += tabell(["inspelning (aec_ÅÅÅÅMMDD_TTMMSS)", "pass", "klipp vid s", "väg", "hörde", "nivå dBFS"], detalj)

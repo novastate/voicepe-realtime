@@ -26,7 +26,25 @@ def kor(args, T):
         jobb = T.bygg_jobb(m, jpi)
     elif not args.bara_journal:
         jobb = T.bygg_jobb(m, jpi)
-        korn = T.kor_jobb(jobb, kf, args)
+        att_kora = jobb
+        if args.bara:
+            pre = tuple(args.bara.split(","))
+            att_kora = [j for j in jobb if j["id"].startswith(pre)]
+        if args.max_baser:
+            sett, kept = {}, []
+            for j in att_kora:
+                if j["typ"] != "injektion":
+                    kept.append(j)
+                    continue
+                satsen = sett.setdefault(j["id"].split("|")[1], [])
+                if j["bas"]["id"] not in satsen and len(satsen) < args.max_baser:
+                    satsen.append(j["bas"]["id"])
+                if j["bas"]["id"] in satsen:
+                    kept.append(j)
+            att_kora = kept
+        korn = T.kor_jobb(att_kora, kf, args)
+        if att_kora is not jobb:
+            korn = json.load(open(kf)) if os.path.exists(kf) else korn
     args.jobb_totalt = len(jobb)
     args.jobb_klara = sum(1 for j in jobb if j["id"] in korn)
     try:

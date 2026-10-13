@@ -9,6 +9,7 @@
        python tools/ac_tabeller.py --manifest manifest.json --ut KATALOG [--sttd SOKVAG] [--stt-cache FIL] [--jobb 4] [--ny]
        -> KATALOG/tabeller.md, tabeller.json, korningar.json
 
+Jobb-ordning om tiden tar slut: rena pass, AC-6, AC-8, kall ekosläckare, AC-13. `--bara 'inj|ac8,inj|ac13' --max-baser 8 --max-min 10` kör en delmängd.
 Läs `tabeller.md` uppifrån: första avsnittet säger vad materialet är och vad verktyget INTE kan mäta.
 Regler som gäller alla tabeller (kritiken av förra mätningen, 2026-10-13):
   - Delning av rader sker bara på sådant som är känt FÖRE utfallet (passets turtagningsläge, om firmware rapporterar underrun,
@@ -164,6 +165,7 @@ def kor_jobb(jobb: list, ut_fil: str, args) -> dict:
                     K.spara_cache(cache, dict(stt.nya))
                     stt.nya.clear()
     req_q.put(None)
+    server.join(timeout=60)
     json.dump(res, open(ut_fil, "w"), ensure_ascii=False)
     if stt.nya:
         K.spara_cache(cache, dict(stt.nya))
@@ -191,6 +193,8 @@ def main(argv=None):
     ap.add_argument("--ny", action="store_true", help="gör om alla körningar")
     ap.add_argument("--rendera-bara", action="store_true", help="kör inga nya jobb: rendera ur det som redan ligger i korningar.json")
     ap.add_argument("--max-min", type=float, default=0, help="stoppa jobben efter så här många minuter (0 = kör klart); resten redovisas som ej körda")
+    ap.add_argument("--bara", help="kör bara jobb vars id börjar med något av dessa (komma-separerat), t.ex. 'inj|ac8,inj|ac13'")
+    ap.add_argument("--max-baser", type=int, default=0, help="högst så här många baser (de första i tidsordning) per injektionssats")
     ap.add_argument("--bara-journal", action="store_true", help="hoppa över ljudkörningarna (bara tabeller ur journalerna och koden)")
     a = ap.parse_args(argv)
     if a.kommando == "manifest":
