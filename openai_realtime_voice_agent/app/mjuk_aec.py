@@ -64,7 +64,12 @@ class MjukAec:
         if soft_aec_paa():
             from aec_audio_processing import AudioProcessor
 
-            self.ap = AudioProcessor(enable_aec=True, enable_ns=False, enable_agc=False, enable_vad=False)
+            # SOFT_AEC_NS=0..3: WebRTC's noise suppressor after the canceller. Offline on the replies of 2026-10-13 (one
+            # canceller for the evening, as live): what is left of his voice after the first 2 s of a reply goes from
+            # median -58 to -79 dBFS at level 3, and Henrik's voice over the reply keeps its level (4 of 4 clips).
+            ns = os.environ.get("SOFT_AEC_NS", "")
+            self.ap = AudioProcessor(enable_aec=True, enable_ns=ns in ("0", "1", "2", "3"), ns_level=int(ns) if ns in ("0", "1", "2", "3") else 0,
+                                     enable_agc=False, enable_vad=False)
             self.ap.set_stream_format(RATE, 1)
             self.ap.set_reverse_stream_format(RATE, 1)
             self.ap.set_stream_delay(0)
@@ -88,6 +93,16 @@ class MjukAec:
         self.matt: List[Tuple[float, float, float, float]] = []   # (frame end, mic dBFS, cleaned dBFS, ref dBFS), last 4 s
         self.svar_start = -1e9   # when what is sent to the speaker last began, or broke (a hole, a hold on the device)
         self.underrun_stod = False   # the device's firmware reports underruns (play_stamp carries "ur": 1)
+        # SOFT_AEC_REST=<seconds> (0 = off): nothing is passed on while the canceller has not locked on this reply --
+        # its first seconds, and after a hole or an underrun (svar_start). The echo's delay differs from reply to reply
+        # (102-137 ms measured), so the canceller finds it anew every time, and until it has his own voice gets through:
+        # over -40 dBFS in the first 2 s of 9 of 11 replies (up to -16), in 2 of 11 after that (20-30 ms at -37).
+        # ponytail: a hard gate, so nobody can cut him off in the first seconds of a reply; let through what is louder
+        # than his own echo (as person() does) if that turns out to matter.
+        try:
+            self.rest_s = max(0.0, float(os.environ.get("SOFT_AEC_REST", "0")))
+        except ValueError:
+            self.rest_s = 0.0
         self.matt_max = 400
         self.mic_sist: Optional[float] = None     # when the last mic packet came
         self.mic_ankare: Optional[float] = None   # our clock at sample 0 of this stretch of the mic stream
@@ -311,7 +326,9 @@ class MjukAec:
                     self.matt.append((slut, self._db(ram), self._db(renad), self._db(refr)))
                     if len(self.matt) > self.matt_max:
                         del self.matt[:-self.matt_max]
-                    if self.tal_db:
+                    if self.rest_s and slut - self.svar_start < self.rest_s:
+                        ren = bytes(len(ren))
+                    elif self.tal_db:
                         ren = np.clip(renad.astype(np.float32) * 10 ** (self.tal_db / 20), -32768, 32767).astype(np.int16).tobytes()
                 else:
                     ren = ram.tobytes()

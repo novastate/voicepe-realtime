@@ -253,3 +253,31 @@ def test_a_device_that_reports_underruns_lets_a_normal_voice_through_but_not_rig
     assert laget(True, -27.0, bruten_for_s=1.5).person(-36.0) is False   # the playback broke 1.5 s ago
     assert laget(True, -27.0, bruten_for_s=3.5).person(-36.0) is True    # and has had time to be found again
     assert laget(True, -45.0).person(-36.0) is False               # under the fixed floor
+
+
+def _svar_vid(t0, sek=6.0, steg_s=0.02):
+    """One reply that starts at clock time t0 (not 0: a reply starts after silence), through the canceller."""
+    ref = _tal(sek); mic = _eko(ref); klock = [t0]; aec = MjukAec(klocka=lambda: klock[0]); ut = []; steg = int(steg_s * RATE)
+    for i in range(0, len(ref) - steg, steg):
+        t = t0 + i / RATE
+        klock[0] = t
+        aec.ref(ref[i:i + steg].tobytes(), RATE, t)
+        klock[0] = t + steg_s
+        ut.append(aec.process(mic[i:i + steg].tobytes(), t + steg_s))
+    return np.frombuffer(b"".join(ut), dtype=np.int16)
+
+
+def test_nothing_is_passed_on_until_the_canceller_has_locked_on_the_reply(monkeypatch):
+    """SOFT_AEC_REST=2: the first two seconds of a reply are silence to the engine, then what the canceller left."""
+    monkeypatch.setenv("SOFT_AEC_REST", "2")
+    ut = _svar_vid(100.0)
+    assert not ut[int(0.1 * RATE):int(1.9 * RATE)].any()        # shut: his own voice at the start goes nowhere
+    assert ut[int(3.0 * RATE):int(5.0 * RATE)].any()            # open again
+    monkeypatch.setenv("SOFT_AEC_REST", "0")
+    assert _svar_vid(100.0)[int(0.1 * RATE):int(1.9 * RATE)].any()   # off: as before
+
+
+def test_the_noise_suppressor_is_only_on_by_flag(monkeypatch):
+    assert MjukAec().ap.ns_enabled() is False
+    monkeypatch.setenv("SOFT_AEC_NS", "3")
+    assert MjukAec().ap.ns_enabled() is True
