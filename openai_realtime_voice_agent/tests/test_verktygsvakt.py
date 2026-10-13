@@ -104,9 +104,30 @@ def test_answering_his_choice_question_with_a_word_from_it_is_not_an_echo():
     assert eko_vakt.liknar_svar("Vilket rum vill du tända", fraga)   # his own sentence back is still caught
 
 
-def test_one_or_two_odd_words_over_his_reply_do_not_cut_him_but_a_stop_word_does():
-    """Kontoret 2026-10-12 live test: 'Fåla.' (the STT's spelling of his own voice) cut his reply."""
-    hans = "en räv gick i skogen"
-    assert eko_vakt.dom("Fåla.", True, hans)           # ignored
-    assert not eko_vakt.dom("Vänta.", True, hans)      # a person
-    assert not eko_vakt.dom("släck lampan nu", True, hans)
+def test_while_he_speaks_only_a_stop_word_cuts_him():
+    """Kontoret live 2026-10-12 21:01 and 2026-10-13 07:03: every one of these was his own voice coming back, was taken
+    for a person, cut his reply and started a new one on top of it."""
+    hans = "Räven rymde från jägaren och hittade en jävla massa mat. Slut."
+    for eko in ("Fåla.", "Lämmar sa mord.", "Det finns där.", "Det är en stor.", "Tänd i köket.", "Det är en klockan.",
+                "Tack till elever och personer som hjälpte med videon.", "Välkommen till mig."):
+        assert eko_vakt.dom(eko, True, hans, under_tal=True), eko
+    for eko in ("Björn.", "Vad sluts?", "Tack.", "Tack så mycket.", "Hör du?"):   # written of his echo in the replay
+        assert eko_vakt.dom(eko, True, hans, under_tal=True), eko
+    for person in ("Vänta.", "vänta lite", "Stopp!", "Björn, vänta", "sluta", "Tyst!"):
+        assert not eko_vakt.dom(person, True, hans, under_tal=True), person
+    assert eko_vakt.dom(None, False, hans, under_tal=True)        # a failed speech-to-text does not cut him
+
+
+def test_just_after_he_stopped_a_short_answer_still_gets_through():
+    """A on #65 and #70: the rule above must not eat the answer to his own question."""
+    fraga = "Vilket rum vill du tända, köket eller sovrummet?"
+    assert not eko_vakt.dom("badrummet", True, fraga)              # a person
+    assert not eko_vakt.dom("släck lampan nu", True, fraga)
+    assert not eko_vakt.dom(None, False, fraga)                    # in doubt it is the person
+    assert eko_vakt.dom("Vilket rum vill du tända", True, fraga)   # his own words are still his own
+
+
+def test_the_candidate_started_while_his_voice_was_in_the_room():
+    assert eko_vakt.under_tal(99.0, 1.0, True)        # he is replying now
+    assert eko_vakt.under_tal(1.5, 0.8, False)        # 0.8 s of speech that began 0.7 s after his last audio
+    assert not eko_vakt.under_tal(3.0, 0.8, False)    # began 2.2 s after he went quiet: a person answering

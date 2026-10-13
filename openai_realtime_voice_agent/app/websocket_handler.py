@@ -1957,8 +1957,10 @@ class WebSocketHandler:
                         logger.info(f"🔊 over his reply: heard {hort!r}; his own transcript is behind the audio "
                                     f"({svar_obj.nu_ord()} words, {serializer.svar_sek():.1f} s sent) -> his own words, ignored")
                         return True
-                    eko = eko_vakt.dom(hort, ok, hans)
-                    logger.info(f"🔊 over his reply: heard {hort!r} -> {'his own words, ignored' if eko else 'a person, interrupts'}")
+                    under = eko_vakt.under_tal(serializer.sedan_svar(), len(pcm) / 32000.0, phase_emitter.phase == "replying")
+                    eko = eko_vakt.dom(hort, ok, hans, under)
+                    logger.info(f"🔊 over his reply: heard {hort!r} ({'while he speaks' if under else 'just after'}) -> "
+                                f"{'ignored' if eko else 'a person, interrupts'}")
                     return eko
 
                 if eko_vakt.nat_paa():

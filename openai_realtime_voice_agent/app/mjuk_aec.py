@@ -33,6 +33,10 @@ AGC_ATTACK_S = 0.05           # gain goes DOWN this fast (a loud word must not c
 AGC_RELEASE_S = 0.25          # and UP this slowly (a word is short; the hold below keeps it between words)
 AGC_GOLV_MARGINAL_DB = 9.0    # a frame this far over the noise floor counts as speech
 AGC_MIN_DB = -44.0            # ...but never a frame quieter than this
+SPELSTART_MIN_S = 0.06        # the device waited at least this long before it played a burst: move the reference with it
+ERLE_REF_DB = -45.0           # a frame counts for the ERLE only when the speaker was this loud...
+ERLE_MIC_DB = -50.0           # ...and the mic heard at least this much of it
+ERLE_MIN_RAMAR = 30           # fewer frames than this (0.3 s) is no measurement
 
 
 def soft_aec_paa() -> bool:
@@ -66,6 +70,13 @@ class MjukAec:
         self.spar_ref: List[np.ndarray] = []
         self.spar_full = False
         self.agc_max_db = float(os.environ.get("SOFT_AGC_DB", "24"))
+        # While he speaks the AGC stands still: it lifted what was left of his echo by up to 24 dB and the turn detector
+        # took it for speech (live 2026-10-13). SOFT_TAL_DB is a fixed gain for that time instead, 0 = none. It is 0
+        # until the canceller takes his echo down on live replies: replayed with 12 dB the echo it leaves today got
+        # louder and the speech-to-text wrote stop words out of it.
+        self.tal_db = float(os.environ.get("SOFT_TAL_DB", "0"))
+        self.matt: List[Tuple[float, float, float, float]] = []   # (frame end, mic dBFS, cleaned dBFS, ref dBFS), last 4 s
+        self.matt_max = 400
         self.agc_db = 0.0                 # the gain now
         self.golv_db = -50.0              # noise floor estimate (slow minimum of the frame levels)
 
@@ -129,6 +140,44 @@ class MjukAec:
         except Exception as e:
             self._fel(e)
 
+    def spelstart(self, forsening_s: float, t: Optional[float] = None) -> None:
+        """The device says it held a burst `forsening_s` before the speaker took it (its jitter buffer at the start of
+        a reply, ~0.33 s; firmware play_stamp). The echo comes that much later, for the whole burst: move the reference
+        with it. Without this the first reply after a wake is not cancelled at all (measured 2026-10-13: 470 ms from
+        reference to echo on the first reply, 120-170 ms on the following)."""
+        try:
+            if forsening_s < SPELSTART_MIN_S or forsening_s > 2.0:
+                return
+            t = self.klocka() if t is None else t
+            fran = t - forsening_s - 0.15            # the burst began about this long ago
+            for i, (start, a) in enumerate(self.tidslinje):
+                if start >= fran:
+                    self.tidslinje[i] = (start + forsening_s, a)
+            if self.ref_slut >= fran:
+                self.ref_slut += forsening_s
+        except Exception as e:
+            self._fel(e)
+
+    def erle(self, t0: float, t1: float) -> Optional[float]:
+        """How many dB the canceller took off his echo between t0 and t1 (energy in / energy out over the frames where
+        the speaker played and the mic heard it). None = too little to tell. Measured BEFORE a candidate starts it says
+        whether a loud sound after the canceller can be trusted to be a person."""
+        inn = ut = 0.0
+        n = 0
+        for t, mic_db, ren_db, ref_db in self.matt:
+            if t0 <= t <= t1 and ref_db > ERLE_REF_DB and mic_db > ERLE_MIC_DB:
+                inn += 10 ** (mic_db / 10)
+                ut += 10 ** (ren_db / 10)
+                n += 1
+        if n < ERLE_MIN_RAMAR or ut <= 0:
+            return None
+        return float(10 * np.log10(inn / ut))
+
+    @staticmethod
+    def _db(x: np.ndarray) -> float:
+        x = x.astype(np.float32)
+        return float(20 * np.log10(max(float(np.sqrt(np.mean(x * x))), 1.0) / 32768))
+
     def _ref_ram(self, t0: float) -> np.ndarray:
         ram = np.zeros(FRAME, dtype=np.int16)
         t1 = t0 + FRAME / RATE
@@ -169,10 +218,17 @@ class MjukAec:
                 if aktiv:
                     self.ap.process_reverse_stream(refr.tobytes())
                     ren = self.ap.process_stream(ram.tobytes())
+                    renad = np.frombuffer(ren, dtype=np.int16)
+                    slut = t - (tot - i - FRAME) / RATE
+                    self.matt.append((slut, self._db(ram), self._db(renad), self._db(refr)))
+                    if len(self.matt) > self.matt_max:
+                        del self.matt[:-self.matt_max]
+                    if self.tal_db:
+                        ren = np.clip(renad.astype(np.float32) * 10 ** (self.tal_db / 20), -32768, 32767).astype(np.int16).tobytes()
                 else:
                     ren = ram.tobytes()
-                if self.agc_max_db > 0:
-                    ren = self._agc(np.frombuffer(ren, dtype=np.int16)).tobytes()
+                    if self.agc_max_db > 0:
+                        ren = self._agc(np.frombuffer(ren, dtype=np.int16)).tobytes()
                 ut.append(ren)
                 i += FRAME
             if self.spara:

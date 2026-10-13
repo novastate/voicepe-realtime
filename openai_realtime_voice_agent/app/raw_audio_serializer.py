@@ -222,6 +222,8 @@ class RawAudioSerializer(FrameSerializer):
                 logger.info(f"⏱ device: audio burst rx_ms={data.get('rx_ms')} play_ms={data.get('play_ms')} "
                             f"(rx->play {int(data.get('play_ms', 0)) - int(data.get('rx_ms', 0))} ms), "
                             f"first {data.get('first_bytes')} B")
+                if self.aec is not None:   # the device held the burst this long (jitter buffer): the echo comes that much later
+                    self.aec.spelstart((int(data.get("play_ms", 0)) - int(data.get("rx_ms", 0))) / 1000.0)
                 if self.eko_stamp is not None:
                     self.eko_stamp.append(("play", time.monotonic(), self.eko_pos() if self.eko_pos else None, data))
             elif isinstance(data, dict) and data.get("type") == "flush":
@@ -410,6 +412,10 @@ class RawAudioSerializer(FrameSerializer):
     _tysta_tills = 0.0
     _svar_sek = 0.0
     _svar_sist = 0.0
+
+    def sedan_svar(self) -> float:
+        """Seconds since reply audio was last sent to the speaker (a very large number when none has been)."""
+        return time.monotonic() - self._svar_sist if self._svar_sist else 1e9
 
     def svar_sek(self) -> float:
         """Seconds of reply audio sent since this reply began (a new one begins after 2.5 s without audio)."""

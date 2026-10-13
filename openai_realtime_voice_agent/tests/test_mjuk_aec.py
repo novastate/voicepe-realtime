@@ -51,11 +51,56 @@ def _db(x):
     return 20 * np.log10(max(np.sqrt(np.mean(x.astype(np.float64) ** 2)), 1e-3) / 32768)
 
 
-def test_the_echo_is_taken_down_when_the_reference_leads():
+def test_the_echo_is_taken_down_when_the_reference_leads(monkeypatch):
+    monkeypatch.setenv("SOFT_TAL_DB", "0")
     mic, ut = _kor(True)
     a, b = 6 * RATE, 11 * RATE
     erle = _db(mic[a:b]) - _db(ut[a - FRAME * 3:b - FRAME * 3])
     assert erle >= 12, f"only {erle:.1f} dB"
+
+
+def _tva_svar(med_stampel, hall_s=0.33):
+    """Two replies 10 s apart. The device plays the first at once and holds the second `hall_s` (its jitter buffer)."""
+    ref = _tal(16.0)
+    n8, steg = 8 * RATE, 320
+    mic = np.concatenate([_eko(ref[:n8]), _eko(ref[n8:], tap_ms=tuple(ms + int(hall_s * 1000) for ms in (150, 190, 240)))])
+    klock = [0.0]
+    aec = MjukAec(klocka=lambda: klock[0])
+    aec.matt_max = 10 ** 6                                             # keep every frame: the test asks afterwards
+    for i in range(0, len(ref) - steg, steg):
+        t = i / RATE + (10.0 if i >= n8 else 0.0)
+        klock[0] = t
+        aec.ref(ref[i:i + steg].tobytes(), RATE, t)
+        if med_stampel and i == n8 + (int((hall_s + 0.03) * RATE) // steg) * steg:
+            aec.spelstart(hall_s, t)                                   # the device's play_stamp arrives
+        aec.process(mic[i:i + steg].tobytes(), t + steg / RATE)
+    return aec, 18.0
+
+
+def test_the_reference_moves_with_the_device_when_it_holds_the_start_of_a_reply():
+    """Kontoret 2026-10-13 07:03: the first reply after the wake came 470 ms after the reference (120-170 ms on the
+    following ones) and was not cancelled at all. The device reports the wait (play_stamp)."""
+    utan, t0 = _tva_svar(False)
+    med, _ = _tva_svar(True)
+    e_utan, e_med = utan.erle(t0 + 0.6, t0 + 2.6), med.erle(t0 + 0.6, t0 + 2.6)
+    assert e_med is not None and e_med >= 12, f"with the stamp only {e_med} dB"
+    assert e_utan is None or e_med >= e_utan + 6, f"the stamp did not help: {e_utan:.1f} -> {e_med:.1f} dB"
+
+
+def test_erle_says_how_much_was_taken_off_and_nothing_when_nothing_played():
+    aec, _ = _tva_svar(False, hall_s=0.0)
+    assert aec.erle(4.0, 8.0) >= 12
+    assert aec.erle(9.0, 17.5) is None             # the pause between the replies: no measurement
+
+
+def test_while_he_speaks_the_gain_is_fixed_and_the_agc_stands_still(monkeypatch):
+    """Live 2026-10-13: the AGC lifted what was left of his echo by up to 24 dB and the turn detector took it for speech."""
+    monkeypatch.setenv("SOFT_TAL_DB", "12")
+    mic, ut = _kor(True)
+    monkeypatch.setenv("SOFT_TAL_DB", "0")
+    _, utan = _kor(True)
+    a, b = 6 * RATE, 11 * RATE
+    assert 11.0 <= _db(ut[a:b]) - _db(utan[a:b]) <= 13.0
 
 
 def test_it_is_only_off_by_flag(monkeypatch):
