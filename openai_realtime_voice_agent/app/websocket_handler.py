@@ -2154,6 +2154,9 @@ class WebSocketHandler:
             _aec = getattr(getattr(connection, "serializer", None), "aec", None)
             if _aec is not None:  # clips and announcements are in the room too: the canceller must know them
                 _aec.ref(data, 24000)
+            ser = getattr(connection, "serializer", None)
+            if ser is not None and ser.eko_stamp is not None:  # delay study: when each chunk really left
+                ser.eko_stamp.append(("send", time.monotonic(), ser.eko_pos() if ser.eko_pos else None, len(data)))
             if getattr(connection, "tider", None) is not None:
                 connection.tider.mark("enhet")  # bana 0's own clips and the receipts go this way (B, #34)
             return True
