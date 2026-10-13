@@ -70,6 +70,12 @@ async def kor_fil(post, aec, turns, svar, stt, t_bas, utan_aec=False):
     ref_sist = -1e9
     niva_sist = -1e9
     turns.reset()
+    # Valfritt (tools/ac_tabeller.py): enhetens underrun-rapporter (journalen) matas in på sin tid, som raw_audio_serializer gör live,
+    # och ERLE mäts vid givna tider (erle_vid) så att den går att redovisa FÖRE ett utfall.
+    ur_kvar = sorted(post.get("underruns", []))
+    erle_vid = sorted(post.get("erle_vid", []))
+    if post.get("underrun_stod"):
+        aec.underrun_stod = True
     nz = np.nonzero(ref)[0]
     stampel_vid = (nz[0] / 16000 + post["spelstart_ms"] / 1000 + 0.03) if post.get("spelstart_ms") and len(nz) else None
     for i in range(0, len(mic) - STEG + 1, STEG):
@@ -77,6 +83,9 @@ async def kor_fil(post, aec, turns, svar, stt, t_bas, utan_aec=False):
         if stampel_vid is not None and i / 16000 >= stampel_vid:
             aec.spelstart(post["spelstart_ms"] / 1000, t)      # the device's play_stamp, as it came live
             stampel_vid = None
+        while ur_kvar and i / 16000 >= ur_kvar[0]:
+            ur_kvar.pop(0)
+            aec.underrun(t)
         r = ref[i:i + STEG]
         if np.any(r):
             aec.ref(r.tobytes(), 16000, t)
@@ -86,6 +95,10 @@ async def kor_fil(post, aec, turns, svar, stt, t_bas, utan_aec=False):
         if not ren:
             continue
         nu = t + STEG / 16000 - t_bas               # file time
+        while erle_vid and nu >= erle_vid[0]:
+            tv = erle_vid.pop(0)
+            e = None if utan_aec else aec.erle(t + STEG / 16000 - eko_vakt.ERLE_TILLIT_S, t + STEG / 16000, eko_vakt.ERLE_TILLIT_RAMAR, eko_vakt.ERLE_TILLIT_SISTA)
+            ut.setdefault("erle_vid", {})[str(tv)] = None if e is None else round(e, 1)
         event = turns.feed(ren)
         if (tur is None and not utan_aec and (t + STEG / 16000 - ref_sist) <= FAS_SVARAR_S and nu - niva_sist > 2.0
                 and aec.person(eko_vakt.niva_dbfs(), eko_vakt.ERLE_TILLIT_DB)):
