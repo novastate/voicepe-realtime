@@ -174,3 +174,21 @@ def test_the_canceller_is_kept_per_device_across_reconnects(monkeypatch):
     monkeypatch.setattr(MjukAec, "_per_enhet", {})
     a = MjukAec.for_enhet("kontoret")
     assert a is not None and MjukAec.for_enhet("kontoret") is a and MjukAec.for_enhet("koket") is not a
+
+
+def test_mic_packets_that_arrive_in_clumps_do_not_move_the_reference():
+    """Kontoret 2026-10-13 09:35, a clip through the reply path: the canceller took 2.3 dB with each mic packet timed
+    by its arrival and 32 dB with a steady reference. The mic's time is counted from its own samples."""
+    ref = _tal(10.0)
+    mic = _eko(ref)
+    steg = 320
+    klock = [0.0]
+    aec = MjukAec(klocka=lambda: klock[0])
+    aec.matt_max = 10 ** 6
+    r = np.random.default_rng(3)
+    for i in range(0, len(ref) - steg, steg):
+        t = i / RATE
+        aec.ref(ref[i:i + steg].tobytes(), RATE, t)
+        sen = float(r.choice([0.0, 0.0, 0.012, 0.025, 0.04]))          # the network holds some packets back
+        aec.process(mic[i:i + steg].tobytes(), t + steg / RATE + sen)
+    assert aec.erle(5.0, 9.5) >= 12, f"only {aec.erle(5.0, 9.5):.1f} dB"
