@@ -1909,8 +1909,9 @@ class WebSocketHandler:
                     klockan=_klockan if klockan.klipp_paa() else None,
                     tider=tider,
                     avsluta=_avsluta if bana0.nej_stanger_paa() else None,
-                    eko_veto=(lambda t: (phase_emitter.phase == "replying" or eko_vakt.i_svans(getattr(phase_emitter, "idle_since", 0.0))) and eko_vakt.liknar_svar(
-                        t, openai_service.svar.text() if getattr(openai_service, "svar", None) is not None else ""))
+                    eko_veto=(lambda t: eko_vakt.veto_tur(
+                        phase_emitter.phase, getattr(phase_emitter, "idle_since", 0.0), _sedan_barge(), t,
+                        openai_service.svar.text() if getattr(openai_service, "svar", None) is not None else ""))
                     if eko_vakt.paa() and eko_vakt.nat_paa() else None,
                     kasta_tur=openai_service.drop_turn if hasattr(openai_service, "drop_turn") else None,
                 )
@@ -1918,6 +1919,11 @@ class WebSocketHandler:
                     await phase_emitter.force_idle(bana)
 
             openai_service.on_user_turn_end = _on_user_turn_end
+            def _sedan_barge():
+                """Seconds since his reply was last cut by an interruption; None when it never was."""
+                t = getattr(connection, "barge_in_t", None)
+                return (time.monotonic() - t) if t else None
+
             def _tur_borjar():
                 _spec_rensa()
                 avbryt = getattr(connection, "avbryt_core", None)
@@ -1989,10 +1995,10 @@ class WebSocketHandler:
                     logger.info("🔊 interrupted: his reply is cut")
 
                 openai_service.on_barge_in = _barge
-                openai_service.verktygsvakt = lambda: None if not (phase_emitter.phase == "replying" or eko_vakt.i_svans(getattr(phase_emitter, "idle_since", 0.0))) else eko_vakt.vakt_verktyg(
+                openai_service.verktygsvakt = lambda: eko_vakt.veto_verktyg(
+                    phase_emitter.phase, getattr(phase_emitter, "idle_since", 0.0), _sedan_barge(),
                     getattr(connection, "bana0_heard", "") or "",
-                    openai_service.svar.text() if getattr(openai_service, "svar", None) is not None else "",
-                    (time.monotonic() - connection.barge_in_t) if getattr(connection, "barge_in_t", None) else None)
+                    openai_service.svar.text() if getattr(openai_service, "svar", None) is not None else "")
             if hasattr(openai_service, "on_user_turn_pre_end"):
                 openai_service.on_user_turn_pre_end = _pre_end
             serializer.is_replying = lambda: phase_emitter.phase == "replying"

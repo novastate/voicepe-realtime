@@ -174,3 +174,24 @@ def vakt_verktyg(turtext: "str | None", hans: str, sedan_barge_s: "float | None"
     if sedan_barge_s is not None and sedan_barge_s <= x_s and not (turtext or "").strip():
         return "ignored: unclear speech right after an interruption. Do nothing; ask if it was meant."
     return None
+
+
+def vakt_oppen(fas: str, idle_sedan: float, sedan_barge_s: "float | None", nu: "float | None" = None) -> bool:
+    """The echo veto and the tool guard apply now: he is replying, he stopped a moment ago, or his reply was cut by an
+    interruption less than TOOL_VAKT_S ago. The last one is the turn an interruption starts: the phase goes listening ->
+    thinking and never idle, so the first two are both false exactly when that turn ends and the model calls a tool
+    (A on #72). An interruption on his own echo (the level alone cuts him, MjukAec.person) is then a turn made of his
+    own voice with the tools unguarded."""
+    return fas == "replying" or i_svans(idle_sedan, nu) or (sedan_barge_s is not None and sedan_barge_s <= TOOL_VAKT_S)
+
+
+def veto_tur(fas: str, idle_sedan: float, sedan_barge_s: "float | None", turtext: "str | None", hans: str) -> bool:
+    """Drop this turn before the model is asked: the guards apply and its words are his own last reply."""
+    return vakt_oppen(fas, idle_sedan, sedan_barge_s) and liknar_svar(turtext, hans)
+
+
+def veto_verktyg(fas: str, idle_sedan: float, sedan_barge_s: "float | None", turtext: "str | None", hans: str) -> "str | None":
+    """Why a tool call must not run now, or None (vakt_verktyg, inside the window where the guards apply)."""
+    if not vakt_oppen(fas, idle_sedan, sedan_barge_s):
+        return None
+    return vakt_verktyg(turtext, hans, sedan_barge_s)

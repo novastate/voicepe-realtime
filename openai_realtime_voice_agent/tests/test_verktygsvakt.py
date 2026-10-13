@@ -148,3 +148,38 @@ def test_when_the_canceller_works_a_loud_sound_is_a_person_whatever_it_is_writte
         assert not eko_vakt.dom("Vänta.", True, hans, under_tal=True, erle_fore=erle)
     # and it only counts while he speaks
     assert not eko_vakt.dom("köket", True, hans, under_tal=False, erle_fore=30.0)
+
+
+def test_the_guards_stay_on_for_the_turn_an_interruption_starts():
+    """A on #72: an interruption turns the phase to listening, then thinking, and never idle -- so "replying or just
+    after" was false exactly when that turn ended and the model called a tool. A cut on his own echo (the level alone
+    cuts him) was then a turn of his own voice with the tools unguarded."""
+    hans = "räven gick i skogen och sedan kom en uggla och sa åt honom"
+    eko = "räven gick i skogen och sedan"
+    # the phase is thinking, it never went idle, and he was cut 2 s ago
+    assert eko_vakt.vakt_oppen("thinking", 0.0, 2.0) is True
+    assert eko_vakt.veto_tur("thinking", 0.0, 2.0, eko, hans) is True                  # the turn is dropped
+    assert "your own last reply" in eko_vakt.veto_verktyg("thinking", 0.0, 2.0, eko, hans)   # a tool does not run on it
+    assert "unclear speech" in eko_vakt.veto_verktyg("thinking", 0.0, 2.0, "", hans)   # nor on speech nobody could write
+    assert "unclear speech" in eko_vakt.veto_verktyg("listening", 0.0, 0.3, None, hans)
+    # a real order after the interruption still runs
+    assert eko_vakt.veto_verktyg("thinking", 0.0, 2.0, "tänd lampan i köket", hans) is None
+    assert eko_vakt.veto_tur("thinking", 0.0, 2.0, "tänd lampan i köket", hans) is False
+    # no interruption, or one long ago: outside his reply the guards are off, as before (A on #70)
+    assert eko_vakt.vakt_oppen("thinking", 0.0, None) is False
+    assert eko_vakt.veto_verktyg("thinking", 0.0, None, eko, hans) is None
+    assert eko_vakt.veto_verktyg("thinking", 0.0, eko_vakt.TOOL_VAKT_S + 1, eko, hans) is None
+    assert eko_vakt.veto_tur("thinking", 0.0, eko_vakt.TOOL_VAKT_S + 1, eko, hans) is False
+    # while he replies and just after, as before
+    assert eko_vakt.veto_verktyg("replying", 0.0, None, eko, hans) is not None
+    import time as _t
+    assert eko_vakt.veto_tur("idle", _t.monotonic() - 0.5, None, eko, hans) is True
+
+
+def test_the_handler_asks_the_guards_through_the_window_that_covers_an_interruption():
+    """The two places that decide (the turn veto, the tool guard) must not carry a window of their own again."""
+    import inspect
+    from app import websocket_handler
+    src = inspect.getsource(websocket_handler)
+    assert "eko_vakt.veto_tur(" in src and "eko_vakt.veto_verktyg(" in src
+    assert "eko_vakt.vakt_verktyg(" not in src and "eko_vakt.liknar_svar(" not in src
