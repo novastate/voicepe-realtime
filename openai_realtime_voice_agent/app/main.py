@@ -39,6 +39,13 @@ AVBROTT = (
     "Annars svarar du på det som sades."
 )
 
+
+def avbrott_for(rum: str) -> str:
+    """AVBROTT only in a room where the engine runs the turns: elsewhere the mic is shut while he speaks, and a lone
+    'ja' after a finished reply must not make him go on (B on voicepe #74, 2026-10-14)."""
+    from app import eko_vakt
+    return AVBROTT if eko_vakt.egen_tur(rum) else ""
+
 # How long a quiet ends the user's turn (Silero, locally; Gemini and xAI). 1200 ms
 # before 0.27.12. Measured with a pause inside a sentence (tools/paustest.py): 800 ms
 # lets a pause of up to 0.8 s through, 700 ms cuts at 0.8 s. A cut turn can be undone
@@ -866,7 +873,7 @@ class Application:
         # No EARLY_ACK_INSTRUCTION: Grok said "Jag kollar." before every answer,
         # jokes included (owner 2026-10-02 23:07). The slow tools' descriptions
         # carry it instead (early_ack.with_ack_hint, 0.25.6).
-        return self.instructions + SPRAKLAS + AVBROTT + memory_instructions() + self.idag.block()
+        return self.instructions + SPRAKLAS + memory_instructions() + self.idag.block()
 
     async def _idag_loop(self) -> None:
         """Keep the Idag block fresh: refetch, then let Gemini reconnect when quiet.
@@ -1041,6 +1048,7 @@ class Application:
                     logger.warning(f"⚠️ Idag: no weather/calendar for this session ({e!r})")
                 options = self.provider_options(provider)
             options.rum = getattr(connection, "device_id", "") or ""
+            options.instructions += avbrott_for(options.rum)
             service = build_service(provider, options, all_tools)
             if provider == GEMINI:
                 # Rendered again on every (re)connect: a fresh time and block.

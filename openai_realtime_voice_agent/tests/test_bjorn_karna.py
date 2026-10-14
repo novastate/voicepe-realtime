@@ -126,7 +126,7 @@ async def test_sessionen_far_texten_och_sprakladset_sist_och_loggen_sager_kallan
         await app._uppdatera_karna()
     assert app.instructions == SJAL
     assert app._instructions().startswith(SJAL + SPRAKLAS)  # the language lock follows the text, as before
-    assert "fortsätt där du var" in app._instructions()     # a bare back-channel does not end his reply (US-060 AC-8)
+    assert "fortsätt där du var" not in app._instructions()  # AVBROTT is per room, added when the session is built
     assert any("källa=hämtad" in r.getMessage() for r in caplog.records)
 
 
@@ -169,3 +169,14 @@ async def test_bjorn_karna_av_hoppar_over_hamtningen(monkeypatch):
     monkeypatch.setenv("BJORN_KARNA", "av")
     assert (await Karna("MILJÖ").text()) == ("MILJÖ", "miljö")
     assert sedda == []
+
+
+def test_avbrott_bara_i_rum_dar_motorn_tar_turerna(monkeypatch):
+    """US-060 AC-8: a bare back-channel does not end his reply -- but only where the engine runs the turns. In the
+    kitchen the mic is shut while he speaks, and a lone 'ja' must not make him go on (B on voicepe #74)."""
+    from app.main import avbrott_for
+    monkeypatch.setenv("GEMINI_EGEN_TUR", "kontoret")
+    assert "fortsätt där du var" in avbrott_for("kontoret")
+    assert avbrott_for("koket") == ""
+    monkeypatch.setenv("GEMINI_EGEN_TUR", "0")
+    assert avbrott_for("kontoret") == ""
