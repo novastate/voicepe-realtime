@@ -271,3 +271,17 @@ def test_the_tracker_leaves_a_reference_that_already_leads_alone(monkeypatch):
     monkeypatch.setenv("SOFT_TAL_DB", "0")
     _, aec = _sen_ref(True, monkeypatch, sen_s=0.0)
     assert aec.skift_s == 0.0
+
+
+def test_an_earlier_move_that_now_leads_too_far_is_taken_back(monkeypatch):
+    """The canceller is kept per device across sessions: a move made for one stuttering reply must not stay when the next
+    session's echo is where it should be (it would then lead by the move plus its own 150 ms)."""
+    monkeypatch.setenv("SOFT_TAL_DB", "0")
+    monkeypatch.setenv("AEC_FOLJ", "1")
+    aec = MjukAec(klocka=lambda: 0.0)
+    aec.skift_s = 0.64
+    ref = _tal(5.0)
+    mic = np.concatenate([np.zeros(int(0.79 * RATE), np.int16), _eko(ref, tap_ms=(0, 40, 90))])[:len(ref)]   # echo 0.79 s after
+    for i in range(0, len(ref) - FRAME, FRAME):
+        aec._folj(mic[i:i + FRAME], ref[i:i + FRAME])
+    assert abs(aec.skift_s) < 0.05, f"still moved {aec.skift_s:.3f} s"
