@@ -285,3 +285,30 @@ def test_an_earlier_move_that_now_leads_too_far_is_taken_back(monkeypatch):
     for i in range(0, len(ref) - FRAME, FRAME):
         aec._folj(mic[i:i + FRAME], ref[i:i + FRAME])
     assert abs(aec.skift_s) < 0.05, f"still moved {aec.skift_s:.3f} s"
+
+
+def _skattningar(monkeypatch, lags):
+    """Feed the tracker frames while eko_lag answers from `lags`, one per estimate (an estimate every second)."""
+    import app.mjuk_aec as mj
+    monkeypatch.setenv("AEC_FOLJ", "1")
+    svar = list(lags)
+    monkeypatch.setattr(mj, "eko_lag", lambda mic, ref: svar.pop(0) if svar else None)
+    aec = MjukAec(klocka=lambda: 0.0)
+    ram = np.ones(FRAME, np.int16)
+    for _ in range(int((len(lags) + 1) * RATE / FRAME)):
+        aec._folj(ram, ram)
+    return aec
+
+
+def test_one_estimate_that_says_the_reference_lags_does_not_move_it(monkeypatch):
+    """One estimate is not trusted: a single one at -0.45 s amid normal echo leaves the reference where it is."""
+    assert _skattningar(monkeypatch, [0.15, -0.45, 0.15, 0.15]).skift_s == 0.0
+
+
+def test_two_estimates_that_disagree_do_not_move_it(monkeypatch):
+    assert _skattningar(monkeypatch, [-0.45, -0.30, 0.15]).skift_s == 0.0
+
+
+def test_two_estimates_in_a_row_that_agree_move_it(monkeypatch):
+    aec = _skattningar(monkeypatch, [-0.45, -0.46])
+    assert abs(aec.skift_s - (0.15 + 0.46)) < 1e-9, aec.skift_s
