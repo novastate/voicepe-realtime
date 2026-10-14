@@ -126,6 +126,7 @@ async def test_sessionen_far_texten_och_sprakladset_sist_och_loggen_sager_kallan
         await app._uppdatera_karna()
     assert app.instructions == SJAL
     assert app._instructions().startswith(SJAL + SPRAKLAS)  # the language lock follows the text, as before
+    assert "fortsätt där du var" in app._instructions()     # a bare back-channel does not end his reply (US-060 AC-8)
     assert any("källa=hämtad" in r.getMessage() for r in caplog.records)
 
 

@@ -31,6 +31,13 @@ SPRAKLAS = (
     "\n\nSPRÅK: Svara ALLTID på svenska, från första ordet. Det du hör kan vara brus, musik eller ett annat "
     "språk före det riktiga talet; det ändrar aldrig svarsspråket. Börja aldrig ett svar på ett annat språk."
 )
+# Over his reply the engine cuts him on any voice, a "ja" too (Kontoret 2026-10-14: "ja" cut him and he asked "...det?").
+# Telling a back-channel from an interruption is a matter of words, not of sound, so the words decide (raawr US-060 AC-8).
+AVBROTT = (
+    "\n\nAVBROTT: Blir du avbruten av bara ett medhåll ('ja', 'mm', 'okej', 'precis', 'aha'), fortsätt där du var, "
+    "utan att kommentera det. Blir du avbruten av bara 'vänta' eller 'stopp', säg ingenting och vänta. "
+    "Annars svarar du på det som sades."
+)
 
 # How long a quiet ends the user's turn (Silero, locally; Gemini and xAI). 1200 ms
 # before 0.27.12. Measured with a pause inside a sentence (tools/paustest.py): 800 ms
@@ -859,7 +866,7 @@ class Application:
         # No EARLY_ACK_INSTRUCTION: Grok said "Jag kollar." before every answer,
         # jokes included (owner 2026-10-02 23:07). The slow tools' descriptions
         # carry it instead (early_ack.with_ack_hint, 0.25.6).
-        return self.instructions + SPRAKLAS + memory_instructions() + self.idag.block()
+        return self.instructions + SPRAKLAS + AVBROTT + memory_instructions() + self.idag.block()
 
     async def _idag_loop(self) -> None:
         """Keep the Idag block fresh: refetch, then let Gemini reconnect when quiet.
