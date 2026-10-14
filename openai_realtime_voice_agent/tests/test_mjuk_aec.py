@@ -232,3 +232,42 @@ def test_a_word_of_the_persons_in_the_window_does_not_hide_that_the_canceller_wo
     _matt(aec, 40, -12.0, -12.0)                  # the person's first word: loud in, loud out
     _matt(aec, 60, -25.0, -55.0)
     assert aec.erle(0.0, 2.0, 80, 150) >= 29.0    # as an energy sum this was 4 dB
+
+
+def _sen_ref(folj, monkeypatch, sen_s=0.55):
+    """The echo comes `sen_s` before the reference says it was played (the reference lags it by sen_s - 0.15 s). The
+    reference is sent 1 s ahead of what the mic hears, as live."""
+    monkeypatch.setenv("AEC_FOLJ", "1" if folj else "0")
+    monkeypatch.setenv("SOFT_TAL_DB", "0")
+    ref = _tal(14.0)
+    s = int(sen_s * RATE)
+    mic = np.concatenate([_eko(ref)[s:], np.zeros(s, np.int16)])
+    klock = [0.0]
+    aec = MjukAec(klocka=lambda: klock[0])
+    steg, fore = 320, RATE
+    for i in range(0, fore, steg):
+        aec.ref(ref[i:i + steg].tobytes(), RATE, i / RATE)
+    ut = []
+    for i in range(0, len(ref) - fore - steg, steg):
+        klock[0] = i / RATE
+        aec.ref(ref[i + fore:i + fore + steg].tobytes(), RATE, (i + fore) / RATE)
+        ut.append(aec.process(mic[i:i + steg].tobytes(), (i + steg) / RATE))
+    ut = np.frombuffer(b"".join(ut), dtype=np.int16)
+    a, b = 8 * RATE, 12 * RATE
+    return _db(mic[a:b]) - _db(ut[a - FRAME * 3:b - FRAME * 3]), aec
+
+
+def test_a_reference_that_lags_his_echo_is_found_and_moved(monkeypatch):
+    """Kontoret 2026-10-14 08:07: after the playback stuttered, the reference sat 0.49 s after the echo for the rest of
+    the session and the canceller took 0-3 dB. The tracker finds the echo and moves the reference so it leads again."""
+    utan, _ = _sen_ref(False, monkeypatch)
+    med, aec = _sen_ref(True, monkeypatch)
+    assert utan < 6, f"the test does not reproduce the fault: {utan:.1f} dB without the tracker"
+    assert med >= 12, f"with the tracker only {med:.1f} dB"
+    assert 0.5 <= aec.skift_s <= 0.65, f"moved {aec.skift_s:.3f} s"
+
+
+def test_the_tracker_leaves_a_reference_that_already_leads_alone(monkeypatch):
+    monkeypatch.setenv("SOFT_TAL_DB", "0")
+    _, aec = _sen_ref(True, monkeypatch, sen_s=0.0)
+    assert aec.skift_s == 0.0
