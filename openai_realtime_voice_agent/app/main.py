@@ -869,6 +869,10 @@ class Application:
         self.instructions = text
         logger.info(f"📜 Björn-kärnan: källa={kalla} ({len(text)} tecken)")
 
+    def _instruktionskalla(self, rum: str):
+        """What Gemini renders on every (re)connect: the instruction for this device's room (AVBROTT per room)."""
+        return lambda: self._instructions(rum)
+
     def _instructions(self, rum: str = "") -> str:
         """The system instruction, Idag block last (the time is rendered now)."""
         # No EARLY_ACK_INSTRUCTION: Grok said "Jag kollar." before every answer,
@@ -1053,7 +1057,7 @@ class Application:
             service = build_service(provider, options, all_tools)
             if provider == GEMINI:
                 # Rendered again on every (re)connect: a fresh time and block.
-                service.instructions_provider = lambda: self._instructions(rum)
+                service.instructions_provider = self._instruktionskalla(rum)
             service.speaker_probe = None
             service.male_only_tools = set()
             connection.turn_liveness = TurnLiveness()

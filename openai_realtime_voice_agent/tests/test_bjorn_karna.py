@@ -195,7 +195,7 @@ def test_avbrott_nar_gemini_vid_varje_uppkoppling(monkeypatch):
         o = _options(model=NATIVE)
         o.instructions = app.provider_options(GEMINI, rum).instructions
         service = build_service(GEMINI, o, OPENAI_SHAPE)
-        service.instructions_provider = lambda r=rum: app._instructions(r)   # as main.py wires it
+        service.instructions_provider = app._instruktionskalla(rum)   # what main.py wires
         assert ("fortsätt där du var" in _connect_config(service).system_instruction) is med, rum
         service._session = None   # a reconnect renders it again
         assert ("fortsätt där du var" in _connect_config(service).system_instruction) is med, rum
