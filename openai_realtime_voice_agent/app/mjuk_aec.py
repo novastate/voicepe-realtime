@@ -47,14 +47,17 @@ NIVA_OVER_REST_DB = float(os.environ.get("NIVA_OVER_REST_DB", "8"))   # ...or, w
 NIVA_HAL_S = 0.03             # a hole this long in what was sent is a break (shorter ones the canceller rides out)
 NIVA_UNDERRUN_S = 3.0          # ...and this long after the device said its playback broke (42 simulated breaks: 2-3 false cuts at 2 s, 0 at 3 s)
 NIVA_SVAR_S = 2.0             # ...and not in the first seconds of a reply, or after a break in it
-# Echo tracker (AEC_FOLJ, on by default with SOFT_AEC): once a second, find where his echo sits in the mic against the
-# reference over the last FOLJ_S, and move the reference when the echo is not FOLJ_MIN_S-FOLJ_MAX_S behind it. Kontoret
+# Echo tracker (AEC_FOLJ, on by default with SOFT_AEC): every FOLJ_S / 2, over the last FOLJ_S, find where his echo sits in the mic against the
+# reference, and when it sits BEFORE it (less than FOLJ_MIN_S behind) twice in a row, move the reference so it leads by
+# FOLJ_MAL_S. A reference that leads AEC3 finds itself; only an earlier move that now leads by more than FOLJ_MAX_S is
+# taken back (the canceller is kept per device across sessions). One estimate alone is not trusted (replayed
+# over a whole morning with one canceller, single estimates at +0.7..+0.9 s from similar replies sent it astray). Kontoret
 # 2026-10-14 08:07: after the playback stuttered (a dozen underruns in 4 s) the reference sat 0.49 s AFTER the echo for the
 # rest of the session; AEC3 cannot work on a reference that lags, took 0-3 dB, and his own voice reached the engine at
 # -21..-24 dBFS (16 of 26 cuts with nobody speaking). Replayed: 0.5-2 dB -> 7-19 dB on 11 of 11 such recordings,
 # the 15 good ones untouched.
 FOLJ_S = 2.0
-FOLJ_MIN_S, FOLJ_MAX_S, FOLJ_MAL_S = 0.03, 0.45, 0.15
+FOLJ_MIN_S, FOLJ_MAX_S, FOLJ_MAL_S, FOLJ_SAMMA_S = 0.03, 0.6, 0.15, 0.04
 FOLJ_SKARPA = 8.0             # the correlation peak over its mean: below this his voice is not clearly in the mic
 
 
@@ -151,6 +154,7 @@ class MjukAec:
         self.skift_s = 0.0                # the reference is read this much later than its timeline says (the tracker)
         self.folj_mic: List[np.ndarray] = []
         self.folj_ref: List[np.ndarray] = []
+        self.folj_forra: Optional[float] = None   # the last estimate that said the reference lags
 
     def _agc(self, ram: np.ndarray) -> np.ndarray:
         """Gain one 10 ms frame (int16). Up only when the frame is speech-like, else hold and drift back to 0 dB."""
@@ -406,11 +410,19 @@ class MjukAec:
             return
         mic = np.concatenate(self.folj_mic).astype(np.float64)
         ref = np.concatenate(self.folj_ref).astype(np.float64)
-        self.folj_mic, self.folj_ref = [], []
+        halv = len(self.folj_mic) // 2           # a sliding window: an estimate every FOLJ_S / 2
+        self.folj_mic, self.folj_ref = self.folj_mic[halv:], self.folj_ref[halv:]
         lag = eko_lag(mic, ref)
-        if lag is not None and not (FOLJ_MIN_S <= lag <= FOLJ_MAX_S):
-            self.skift_s += FOLJ_MAL_S - lag
-            logger.info(f"🎯 echo canceller: his echo sat {lag * 1000:+.0f} ms behind the reference; reference moved "
+        if lag is None or FOLJ_MIN_S <= lag <= FOLJ_MAX_S or (lag > FOLJ_MAX_S and self.skift_s <= 0):
+            self.folj_forra = None          # where AEC3 finds it; too far ahead only undoes an earlier move
+            return
+        if self.folj_forra is None or abs(lag - self.folj_forra) > FOLJ_SAMMA_S:
+            self.folj_forra = lag           # once is not enough
+            return
+        self.folj_forra = None
+        self.folj_mic, self.folj_ref = [], []     # what was collected was read at the old place
+        self.skift_s += FOLJ_MAL_S - lag
+        logger.info(f"🎯 echo canceller: his echo sat {lag * 1000:+.0f} ms behind the reference; reference moved "
                         f"{(FOLJ_MAL_S - lag) * 1000:+.0f} ms (total {self.skift_s * 1000:+.0f} ms)")
 
     def _spara_flush(self, aktiv: bool) -> None:
