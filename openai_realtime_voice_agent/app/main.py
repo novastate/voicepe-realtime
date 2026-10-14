@@ -781,11 +781,12 @@ class Application:
         probe = getattr(connection, "speaker_probe", None)
         return probe.name_for(probe.gate_speaker()) if probe else None
     
-    def provider_options(self, provider: str):
+    def provider_options(self, provider: str, rum: str = ""):
         """The knobs for one engine, from the add-on options.
 
         Args:
             provider: "openai" or "gemini".
+            rum: the device's room; AVBROTT only goes to a room where the engine runs the turns.
 
         Returns:
             A ProviderOptions. The instructions are the same for both engines,
@@ -793,7 +794,7 @@ class Application:
         """
         from app.providers import GEMINI, OPENAI_LIVE, XAI, ProviderOptions
 
-        instructions = self._instructions()
+        instructions = self._instructions(rum)
         if provider == OPENAI_LIVE:
             return ProviderOptions(
                 api_key=self.openai_api_key,
@@ -868,12 +869,12 @@ class Application:
         self.instructions = text
         logger.info(f"📜 Björn-kärnan: källa={kalla} ({len(text)} tecken)")
 
-    def _instructions(self) -> str:
+    def _instructions(self, rum: str = "") -> str:
         """The system instruction, Idag block last (the time is rendered now)."""
         # No EARLY_ACK_INSTRUCTION: Grok said "Jag kollar." before every answer,
         # jokes included (owner 2026-10-02 23:07). The slow tools' descriptions
         # carry it instead (early_ack.with_ack_hint, 0.25.6).
-        return self.instructions + SPRAKLAS + memory_instructions() + self.idag.block()
+        return self.instructions + SPRAKLAS + avbrott_for(rum) + memory_instructions() + self.idag.block()
 
     async def _idag_loop(self) -> None:
         """Keep the Idag block fresh: refetch, then let Gemini reconnect when quiet.
@@ -1033,7 +1034,8 @@ class Application:
             # transport's declared mic rate and the actually-built session
             # across two different engines.
             provider = connection.provider
-            options = self.provider_options(provider)
+            rum = getattr(connection, "device_id", "") or ""
+            options = self.provider_options(provider, rum)
             if not options.api_key:
                 logger.error(f"❌ no API key configured for {provider}")
             logger.info(
@@ -1046,13 +1048,12 @@ class Application:
                     await asyncio.wait_for(self.idag.refresh(), 3.0)
                 except Exception as e:
                     logger.warning(f"⚠️ Idag: no weather/calendar for this session ({e!r})")
-                options = self.provider_options(provider)
-            options.rum = getattr(connection, "device_id", "") or ""
-            options.instructions += avbrott_for(options.rum)
+                options = self.provider_options(provider, rum)
+            options.rum = rum
             service = build_service(provider, options, all_tools)
             if provider == GEMINI:
                 # Rendered again on every (re)connect: a fresh time and block.
-                service.instructions_provider = self._instructions
+                service.instructions_provider = lambda: self._instructions(rum)
             service.speaker_probe = None
             service.male_only_tools = set()
             connection.turn_liveness = TurnLiveness()
