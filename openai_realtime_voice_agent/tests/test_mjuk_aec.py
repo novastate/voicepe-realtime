@@ -369,3 +369,8 @@ def test_two_estimates_that_disagree_do_not_move_it(monkeypatch):
 def test_two_estimates_in_a_row_that_agree_move_it(monkeypatch):
     aec = _skattningar(monkeypatch, [-0.45, -0.46])
     assert abs(aec.skift_s - (0.15 + 0.46)) < 1e-9, aec.skift_s
+
+
+def test_a_normal_estimate_between_two_lagging_ones_starts_the_count_over(monkeypatch):
+    """B on #77: an estimate where AEC3 finds the echo itself clears the one waiting; two lagging ones must be in a row."""
+    assert _skattningar(monkeypatch, [-0.45, 0.15, -0.46]).skift_s == 0.0
