@@ -88,7 +88,10 @@ async def hamta_svar(result_id: str, timeout: float = 5.0) -> Optional[str]:
     if r.status_code != 200:
         logger.info(f"📬 sent svar: comms gave {r.status_code} for {result_id}")
         raise EjNu(str(r.status_code))
-    return (r.json().get("text") or "").strip() or None
+    try:
+        return (r.json().get("text") or "").strip() or None
+    except Exception as e:   # a broken body on a 200 is comms' fault, not a gone answer (B on #84)
+        raise EjNu(repr(e))
 
 
 class Lyssnare:
@@ -134,9 +137,11 @@ class SentSvar:
 
     def _spara(self, rum: str, notis: dict) -> None:
         lista = self.sparade.setdefault(rum, [])
+        # the first time it was held counts: saving it again must not restart the 24 h (B on #84)
+        t0 = next((n["_t"] for n in lista if n["result_id"] == notis["result_id"]), notis.get("_t", time.time()))
         lista[:] = [n for n in lista if n["result_id"] != notis["result_id"]
                     and time.time() - n["_t"] < TAK_SVAR_S][-(SPARA_MAX - 1):]
-        lista.append({**notis, "_t": time.time()})
+        lista.append({**notis, "_t": t0})
 
     async def notis(self, body: dict) -> dict:
         """The answer to Comms' POST. Never raises."""

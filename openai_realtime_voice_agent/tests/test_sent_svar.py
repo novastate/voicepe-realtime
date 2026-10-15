@@ -322,3 +322,28 @@ def test_hamta_svar_nekad_eller_trasig_ar_ej_nu(monkeypatch, kod):
     monkeypatch.setattr(sent_svar.httpx, "AsyncClient", K)
     with pytest.raises(sent_svar.EjNu):
         asyncio.run(sent_svar.hamta_svar("r1"))
+
+
+def test_ett_nej_startar_inte_om_24_timmarna(monkeypatch):
+    """B på #84: _spara skrev om _t, så ett svar som sparades igen frågades om varje dag i evighet."""
+    v = Varld(hort="nej")
+    v.samtal = True
+    asyncio.run(kor(v))                                   # held: saved the first time
+    forst = v.s.sparade["kontoret"][0]["_t"]
+    monkeypatch.setattr(sent_svar.time, "time", lambda: forst + 3600)
+    v.s._spara("kontoret", {**NOTIS, "_fragad": sent_svar.nu().date()})   # a no an hour later saves it again
+    assert v.s.sparade["kontoret"][0]["_t"] == forst
+
+
+def test_hamta_svar_trasig_kropp_pa_200_ar_ej_nu(monkeypatch):
+    import httpx
+
+    class K:
+        def __init__(self, **_k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_a): return False
+        async def post(self, *_a, **_k):
+            return httpx.Response(200, content=b"inte json")
+    monkeypatch.setattr(sent_svar.httpx, "AsyncClient", K)
+    with pytest.raises(sent_svar.EjNu):
+        asyncio.run(sent_svar.hamta_svar("r1"))
