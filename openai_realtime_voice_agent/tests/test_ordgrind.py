@@ -159,3 +159,26 @@ def test_the_engine_taking_the_turn_ends_the_mute(monkeypatch):
     tjanst, conn, fas = _koppla()
     tjanst.on_motor_avbrott()
     assert slut == [1]
+
+
+@pytest.mark.asyncio
+async def test_after_him_is_measured_before_the_slow_speech_to_text():
+    import time
+    from app.websocket_handler import koppla_ordgrind
+
+    class Ser:
+        sist = time.monotonic()
+        def sedan_svar(self): return time.monotonic() - self.sist
+        def ra_mik(self, n): return b"\0" * n
+        def tystad(self): return False
+        def tysta_slut(self): pass
+
+    async def langsam(pcm):
+        await asyncio.sleep(0.5)
+        return "Ja.", True
+    service = type("S", (), {"svar": None})()
+    ser = Ser()
+    koppla_ordgrind(service, ser, type("F", (), {"phase": "idle"})(), langsam)
+    # "Ja." began 0.3 s after his last audio and the verdict is asked for 1.0 s after it began
+    ser.sist = time.monotonic() - 1.3
+    assert await service.ordgrind(1.0, 1.0, False) is False   # over him: a back-channel, he goes on

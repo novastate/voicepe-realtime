@@ -111,6 +111,29 @@ def koppla_egen_tur(service, connection, phase_emitter, serializer) -> None:
     service.verktygsvakt = _verktygsvakt
 
 
+def koppla_ordgrind(service, serializer, phase_emitter, transkribera) -> None:
+    """GEMINI_ORDGRIND (eko_vakt.ordgrind): the word gate's watch and verdict. `transkribera(pcm)` is bana 0's STT,
+    awaited to (text, ok)."""
+    async def _ord_person(sek, sedan_start, svarade):
+        pcm = serializer.ra_mik(int(sek * 16000) * 2)
+        # Read before the speech-to-text: after it, its own time would count as time since he spoke (B on #79)
+        vid_start = serializer.sedan_svar() - sedan_start
+        hort, ok = await transkribera(pcm)
+        svar_obj = getattr(service, "svar", None)
+        hans = svar_obj.text() if svar_obj is not None else ""
+        under = eko_vakt.ord_under(svarade, vid_start)
+        person = eko_vakt.ord_dom(hort, ok, hans, under)
+        logger.info(f"🔊 word gate: heard {hort!r} ({'over him' if under else 'after him'}) -> "
+                    f"{'a person, let in' if person else 'he goes on'}")
+        return person
+
+    service.ordgrind_vakt = lambda: (not serializer.tystad() and (
+        phase_emitter.phase == "replying" or serializer.sedan_svar() <= eko_vakt.UNDER_TAL_S))
+    service.ordgrind = _ord_person
+    service.on_tal_slut = serializer.tysta_slut  # the speech the gate let in is over
+    logger.info("🔊 word gate on: over his reply the engine hears only what the words let in")
+
+
 VANTA_LYSSNAR_S = float(os.environ.get("VANTA_LYSSNAR_S", "10"))  # after a bare "vänta" over his reply: silent, mic open, this long
 VANTA_TYST_S = 90.0  # ...and the rest of the reply that was cut, which the engine goes on generating, is not spoken (until the next turn ends)
 from app.raw_audio_serializer import RawAudioSerializer
@@ -2114,24 +2137,8 @@ class WebSocketHandler:
                 if getattr(openai_service, "_fas_vad", None) is not None:
                     koppla_egen_tur(openai_service, connection, phase_emitter, serializer)
                     if getattr(openai_service, "ordgrind_paa", False):
-                        async def _ord_person(sek, sedan_start, svarade):
-                            pcm = serializer.ra_mik(int(sek * 16000) * 2)
-                            hort, ok = await bana0.transkribera_tydligt(pcm, host, port, timeout_stt)
-                            svar_obj = getattr(openai_service, "svar", None)
-                            hans = svar_obj.text() if svar_obj is not None else ""
-                            # Over him = it began while he spoke or within ORD_UNDER_S of his last audio (B on #79: measured at the
-                            # verdict, 1 s later, an answer "Ja." 0.9 s after his question counted as over him and was dropped).
-                            under = eko_vakt.ord_under(svarade, serializer.sedan_svar() - sedan_start)
-                            person = eko_vakt.ord_dom(hort, ok, hans, under)
-                            logger.info(f"🔊 word gate: heard {hort!r} ({'while he speaks' if under else 'just after'}) -> "
-                                        f"{'a person, let in' if person else 'he goes on'}")
-                            return person
-
-                        openai_service.ordgrind_vakt = lambda: (not serializer.tystad() and (
-                            phase_emitter.phase == "replying" or serializer.sedan_svar() <= eko_vakt.UNDER_TAL_S))
-                        openai_service.ordgrind = _ord_person
-                        openai_service.on_tal_slut = serializer.tysta_slut  # the speech the gate let in is over
-                        logger.info("🔊 word gate on: over his reply the engine hears only what the words let in")
+                        koppla_ordgrind(openai_service, serializer, phase_emitter,
+                                        lambda pcm: bana0.transkribera_tydligt(pcm, host, port, timeout_stt))
             if hasattr(openai_service, "on_user_turn_pre_end"):
                 openai_service.on_user_turn_pre_end = _pre_end
             serializer.is_replying = lambda: phase_emitter.phase == "replying"
