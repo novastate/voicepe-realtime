@@ -28,6 +28,20 @@ def test_the_words_decide(hort, ok, under, person):
     assert eko_vakt.ord_dom(hort, ok, HANS, under) is person
 
 
+# B on #79: a short command that shares a word with what he just said is a person, not his echo.
+@pytest.mark.parametrize("hort", ["Tänd garaget.", "Släck garaget.", "Tänd badrummet.", "Släck köket.", "Tänd lampan.",
+                                  "Släck hallen."])
+def test_a_short_command_with_one_of_his_words_is_a_person(hort):
+    assert eko_vakt.ord_dom(hort, True, "Jag tänder köket och släcker lampan i hallen.", True) is True
+
+
+def test_over_him_is_decided_where_the_speech_began():
+    assert eko_vakt.ord_under(True, 5.0)          # he was speaking
+    assert eko_vakt.ord_under(False, 0.4)         # his last words are still in the device's buffer
+    assert not eko_vakt.ord_under(False, 0.7)     # "Ja." 0.7 s after he stopped answers him (B on #79)
+    assert eko_vakt.ord_dom("Ja.", True, HANS, eko_vakt.ord_under(False, 0.7)) is True
+
+
 def test_off_unless_asked_for(monkeypatch):
     monkeypatch.delenv("GEMINI_ORDGRIND", raising=False)
     assert not eko_vakt.ordgrind("kontoret")
@@ -47,7 +61,7 @@ def _grind(monkeypatch, dom):
     service.svarar = lambda: True
     asked, barge = [], []
 
-    async def ordgrind(sek):
+    async def ordgrind(sek, sedan_start, svarade):
         asked.append(sek)
         return dom
     service.ordgrind_vakt = lambda: not barge   # as live: the cut reply (tysta_svar) ends the watch
@@ -92,7 +106,7 @@ async def test_a_person_cuts_him_and_the_engine_gets_all_of_it(monkeypatch):
 async def test_a_failing_verdict_lets_him_go_on(monkeypatch):
     service, sent, pushed, asked, barge = _grind(monkeypatch, True)
 
-    async def trasig(sek):
+    async def trasig(sek, sedan_start, svarade):
         raise RuntimeError("stt down")
     service.ordgrind = trasig
     await _mata(service, [_ljud(8000)] * 60)
@@ -118,3 +132,30 @@ async def test_the_words_are_read_before_the_canceller():
     ser.aec = Tom()
     await ser.deserialize(b"\x10\x27" * 1600)
     assert ser.ra_mik(3200) == b"\x10\x27" * 1600
+
+
+@pytest.mark.asyncio
+async def test_after_his_reply_nothing_is_muted_when_a_person_is_let_in(monkeypatch):
+    service, sent, pushed, asked, barge = _grind(monkeypatch, True)
+    service.svarar = lambda: False     # he has stopped; only his tail is in the room
+    await _mata(service, [_ljud(8000)] * 60)
+    assert barge == [] and len(sent) > 0
+
+
+@pytest.mark.asyncio
+async def test_the_end_of_the_speech_ends_the_mute(monkeypatch):
+    service, sent, pushed = _bygg(monkeypatch, ["start", None, "end"])
+    service.svarar = lambda: False
+    slut = []
+    service.on_tal_slut = lambda: slut.append(1)
+    await _mata(service, [_ljud(8000)] * 3)
+    assert slut == [1]
+
+
+def test_the_engine_taking_the_turn_ends_the_mute(monkeypatch):
+    from test_gemini_egen_tur import _Ser, _koppla
+    slut = []
+    monkeypatch.setattr(_Ser, "tysta_slut", lambda self: slut.append(1))
+    tjanst, conn, fas = _koppla()
+    tjanst.on_motor_avbrott()
+    assert slut == [1]

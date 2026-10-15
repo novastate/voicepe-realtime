@@ -153,6 +153,9 @@ class _Ser:
     def sedan_svar(self):
         return self._s
 
+    def tysta_slut(self):
+        pass
+
 
 class _Tjanst:
     def __init__(self, text="", hans="Vilken dörr vill du låsa? Är det hallen du vill att jag ska titta på?"):

@@ -63,7 +63,10 @@ def ordgrind(rum: str = "") -> bool:
     return v == "1" or (bool(rum) and rum.lower() in [r.strip() for r in v.split(",")])
 
 
-ORD_LANGT = 4
+ORD_LANGT = 6
+ORD_ANDEL = 0.75
+# Speech that starts later than this after his last audio was sent is an answer, not over him (device buffer 0.4-0.6 s)
+ORD_UNDER_S = 0.6
 
 # Words that only tell him to go on (US-060 AC-8). Not "nej": that may be a correction. Only while he speaks: just after
 # he stopped they answer him ("Ska jag tända?" - "Ja.").
@@ -87,9 +90,28 @@ def ord_dom(hort: "str | None", ok: bool, hans: str, under_tal: bool) -> bool:
         return True
     if under_tal and all(w in MEDHALL for w in h):
         return False
-    # Stop words are already decided above, so a near-miss of his own words counts as his from 4 letters ('golven',
-    # 'kolvan', 'luftsök' were his echo on 2026-10-15; at LANGT 7 they let him be cut 3 times in 11 replies).
-    return not ar_eko(hort, hans, ORD_LANGT)
+    return not ord_eko(hort, hans)
+
+
+def ord_under(svarade: bool, sedan_svar_vid_start: float) -> bool:
+    """GEMINI_ORDGRIND: the speech began over him -- while his reply played, or within ORD_UNDER_S of the last audio sent
+    (the device's buffer). Taken at the START of the speech: at the verdict, a second later, an answer "Ja." 0.9 s after
+    his question counted as over him and was dropped (B on #79)."""
+    return svarade or sedan_svar_vid_start <= ORD_UNDER_S
+
+
+def ord_eko(hort: "str | None", hans: str) -> bool:
+    """GEMINI_ORDGRIND: the words heard are his own echo. Stricter than ar_eko, because here an echo verdict throws the
+    speech away and the engine never hears it (B on #79): "Tänd garaget." over "Jag tänder köket..." must be a person.
+    - Back-channel words are left out ("Och smällen. Ja." is his "och smällen").
+    - More than ORD_ANDEL of the rest must be his, so a two-word command needs both ('släck köket' is a person); near-misses
+      count from ORD_LANGT letters ('golven' for "kolven"), so 'släck' is not 'släcker'."""
+    h = [w for w in ord_(hort) if w not in MEDHALL]
+    sina = set(ord_(hans))
+    if not h or not sina:
+        return False
+    traffar = sum(1 for w in h if w in sina or (len(w) >= ORD_LANGT and difflib.get_close_matches(w, sina, n=1, cutoff=LIKA)))
+    return traffar / len(h) > ORD_ANDEL
 
 
 def svans_s() -> float:
@@ -104,16 +126,15 @@ def ord_(text: str) -> list:
     return re.findall(r"[a-zåäöé0-9]+", (text or "").lower())
 
 
-def ar_eko(hort: "str | None", hans: str, langt: int = LANGT) -> bool:
-    """True when `hort` (the local STT of what the mic heard) is his own words, or nothing a person said. Words of `langt`
-    letters or more count as his when they are close to one of his ('golven' for "kolven")."""
+def ar_eko(hort: "str | None", hans: str) -> bool:
+    """True when `hort` (the local STT of what the mic heard) is his own words, or nothing a person said."""
     h = ord_(hort)
     if len(h) < MIN_ORD:
         return True  # nothing intelligible: not an interruption
     sina = set(ord_(hans))
     if not sina:
         return False  # he has said nothing yet: whatever is heard is a person
-    traffar = sum(1 for w in h if w in sina or (len(w) >= langt and difflib.get_close_matches(w, sina, n=1, cutoff=LIKA)))
+    traffar = sum(1 for w in h if w in sina or (len(w) >= LANGT and difflib.get_close_matches(w, sina, n=1, cutoff=LIKA)))
     return traffar / len(h) >= ANDEL
 
 

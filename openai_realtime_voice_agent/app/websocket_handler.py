@@ -87,6 +87,9 @@ def koppla_egen_tur(service, connection, phase_emitter, serializer) -> None:
     def _motor_avbrott() -> None:
         connection.barge_in_t = time.monotonic()
         connection.barge_tur = True
+        # The engine took the turn: it drops the old reply itself, so a mute the word gate set (tysta_svar, 15 s) ends
+        # after the tail (B on #79: otherwise the answer to the person could be muted too).
+        serializer.tysta_slut()
 
     def _dom():
         t = getattr(connection, "barge_in_t", None)
@@ -2111,12 +2114,14 @@ class WebSocketHandler:
                 if getattr(openai_service, "_fas_vad", None) is not None:
                     koppla_egen_tur(openai_service, connection, phase_emitter, serializer)
                     if getattr(openai_service, "ordgrind_paa", False):
-                        async def _ord_person(sek):
+                        async def _ord_person(sek, sedan_start, svarade):
                             pcm = serializer.ra_mik(int(sek * 16000) * 2)
                             hort, ok = await bana0.transkribera_tydligt(pcm, host, port, timeout_stt)
                             svar_obj = getattr(openai_service, "svar", None)
                             hans = svar_obj.text() if svar_obj is not None else ""
-                            under = eko_vakt.under_tal(serializer.sedan_svar(), sek, phase_emitter.phase == "replying")
+                            # Over him = it began while he spoke or within ORD_UNDER_S of his last audio (B on #79: measured at the
+                            # verdict, 1 s later, an answer "Ja." 0.9 s after his question counted as over him and was dropped).
+                            under = eko_vakt.ord_under(svarade, serializer.sedan_svar() - sedan_start)
                             person = eko_vakt.ord_dom(hort, ok, hans, under)
                             logger.info(f"🔊 word gate: heard {hort!r} ({'while he speaks' if under else 'just after'}) -> "
                                         f"{'a person, let in' if person else 'he goes on'}")
@@ -2125,6 +2130,7 @@ class WebSocketHandler:
                         openai_service.ordgrind_vakt = lambda: (not serializer.tystad() and (
                             phase_emitter.phase == "replying" or serializer.sedan_svar() <= eko_vakt.UNDER_TAL_S))
                         openai_service.ordgrind = _ord_person
+                        openai_service.on_tal_slut = serializer.tysta_slut  # the speech the gate let in is over
                         logger.info("🔊 word gate on: over his reply the engine hears only what the words let in")
             if hasattr(openai_service, "on_user_turn_pre_end"):
                 openai_service.on_user_turn_pre_end = _pre_end

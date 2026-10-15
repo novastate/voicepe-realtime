@@ -537,6 +537,8 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             self._avbrott_t = 0.0
             self._tider_start()
             await self.push_frame(UserStoppedSpeakingFrame())
+            if self.on_tal_slut is not None:
+                self.on_tal_slut()
         await super()._send_user_audio(frame)
 
     # GEMINI_ORDGRIND (eko_vakt.ordgrind): while his voice is in the room (ordgrind_vakt) the engine hears nothing. Mic audio
@@ -551,6 +553,9 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
     _ord_fore = None
     _ord_held = None
     _ord_task = None
+    _ord_t0 = 0.0
+    _ord_svarade = False
+    on_tal_slut = None  # called (plain) when the local detector says the speech ended: the handler ends the reply's mute
 
     async def _ordgrind_ljud(self, frame) -> bool:
         """True = the engine does not get this frame now: held while the words are judged, or dropped."""
@@ -569,12 +574,15 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
                 self._ord_fore = fore
                 return True
             self._ord_held, self._ord_fore, self._ord_task = (self._ord_fore or []) + [frame], None, None
+            self._ord_t0 = time.monotonic()
+            self._ord_svarade = bool(self.svarar is not None and self.svarar())  # he was speaking when it began
             return True
         held.append(frame)
         if self._ord_task is None:
             sek = sum(len(f.audio) for f in held) / bps
             if sek >= self.ORD_FORE_S + self.ORD_FONSTER_S:
-                self._ord_task = asyncio.get_running_loop().create_task(self.ordgrind(sek))
+                self._ord_task = asyncio.get_running_loop().create_task(
+                    self.ordgrind(sek, time.monotonic() - self._ord_t0, self._ord_svarade))
             return True
         if not self._ord_task.done():
             return True
@@ -585,8 +593,8 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             person = False
         self._ord_held = self._ord_task = None
         if person:
-            if self.on_barge_in is not None:
-                self.on_barge_in()
+            if self._ord_svarade and self.on_barge_in is not None:
+                self.on_barge_in()  # only a reply that is playing is cut; after it there is nothing to mute (B on #79)
             # The device must hear "listening" (its follow-up window closes otherwise), and hear it end: as _motor_avbrott.
             self._fas_talar = True
             self._avbrott_t = 0.0 if getattr(self._fas_vad, "_speaking", False) else time.monotonic()
