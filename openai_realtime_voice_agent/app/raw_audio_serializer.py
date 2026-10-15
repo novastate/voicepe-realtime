@@ -24,6 +24,7 @@ def _ms(namn: str, standard: int) -> int:
 
 
 TURN_PCM_PREROLL = 16000 * 2 * _ms("TURN_PREROLL_MS", 1500) // 1000
+RA_MAX = 16000 * 2 * 3  # 3 s of raw mic for GEMINI_ORDGRIND
 
 
 class RawAudioSerializer(FrameSerializer):
@@ -96,6 +97,7 @@ class RawAudioSerializer(FrameSerializer):
         # (live 2026-10-09 12:09: 0.8 s of a question was missing from bana 0's audio).
         self._ring = bytearray()
         self._samla_tur = False
+        self._ra = bytearray()  # the last RA_MAX of mic audio as the device sent it, before the canceller
         # True while the assistant is speaking (set by build_pipeline from the
         # phase): its own voice must never become a turn's audio.
         self.is_replying = lambda: False
@@ -358,6 +360,8 @@ class RawAudioSerializer(FrameSerializer):
             a[:len(bit) // 2] += _np.frombuffer(bit, dtype=_np.int16)
             message = _np.clip(a, -32768, 32767).astype(_np.int16).tobytes()
 
+        self._ra += message  # before the canceller: GEMINI_ORDGRIND reads the words here (ra_mik)
+        del self._ra[:-RA_MAX]
         if self.aec is not None:  # the mic with his own voice taken out (SOFT_AEC=1)
             message = self.aec.process(message)
             if not message:
@@ -418,6 +422,10 @@ class RawAudioSerializer(FrameSerializer):
         self._samla_tur = True
         del self.turn_pcm[:-TURN_PCM_PREROLL]
         return ringen  # True when the pre-roll came from the ring (logged by the caller)
+
+    def ra_mik(self, n: int) -> bytes:
+        """The last `n` bytes of mic audio as the device sent it, before the canceller (GEMINI_ORDGRIND)."""
+        return bytes(self._ra[-n:]) if n > 0 else b""
 
     def peek_turn_audio(self) -> bytes:
         """The turn's mic audio so far, left in place (bana 0's early speech-to-text)."""

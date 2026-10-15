@@ -55,6 +55,43 @@ def egen_tur(rum: str = "") -> bool:
     return v == "1" or (bool(rum) and rum.lower() in [r.strip() for r in v.split(",")])
 
 
+def ordgrind(rum: str = "") -> bool:
+    """GEMINI_ORDGRIND (raawr US-060, Hemma 2026-10-15: "låt orden avgöra om det är ett avbrott"), only where the engine
+    runs the turns (egen_tur): while his voice is in the room the engine hears nothing; speech is held and its words decide.
+    "1" = every such room, else room names. Off by default."""
+    v = os.environ.get("GEMINI_ORDGRIND", "0").strip().lower()
+    return v == "1" or (bool(rum) and rum.lower() in [r.strip() for r in v.split(",")])
+
+
+ORD_LANGT = 4
+
+# Words that only tell him to go on (US-060 AC-8). Not "nej": that may be a correction. Only while he speaks: just after
+# he stopped they answer him ("Ska jag tända?" - "Ja.").
+MEDHALL = {"ja", "jaa", "japp", "jo", "jodå", "javisst", "okej", "ok", "okey", "mm", "mhm", "mmm", "hm", "hmm", "aha",
+           "ah", "jaha", "jaså", "precis", "visst", "absolut", "exakt"}
+
+
+def ord_dom(hort: "str | None", ok: bool, hans: str, under_tal: bool) -> bool:
+    """GEMINI_ORDGRIND's verdict on speech over his reply, written out from the RAW mic: True = a person, let it in.
+
+    The raw mic, not the cancelled one: the canceller wipes Henrik's words in double talk ("Vänta." written as '' at
+    -14 dBFS out, 2026-10-15 06:52), and his own echo in the raw mic is written as his own words, which ar_eko drops.
+    Replayed on the START HIGH run of 2026-10-15 (ordprov.py): 'ja'/'okej' 0 of 3 let in, his echo 0 times (the engine
+    itself cut him on it 2 times in 11), the clips the words reach let in."""
+    if not ok:
+        return not under_tal  # no text: while he speaks he goes on; just after, in doubt it is the person (A on #65)
+    h = ord_(hort)
+    if not h or any(l in (hort or "").lower() for l in LUDD):
+        return False
+    if har_stoppord(hort):
+        return True
+    if under_tal and all(w in MEDHALL for w in h):
+        return False
+    # Stop words are already decided above, so a near-miss of his own words counts as his from 4 letters ('golven',
+    # 'kolvan', 'luftsök' were his echo on 2026-10-15; at LANGT 7 they let him be cut 3 times in 11 replies).
+    return not ar_eko(hort, hans, ORD_LANGT)
+
+
 def svans_s() -> float:
     """Seconds after his reply ended during which the room still carries it."""
     try:
@@ -67,15 +104,16 @@ def ord_(text: str) -> list:
     return re.findall(r"[a-zåäöé0-9]+", (text or "").lower())
 
 
-def ar_eko(hort: "str | None", hans: str) -> bool:
-    """True when `hort` (the local STT of what the mic heard) is his own words, or nothing a person said."""
+def ar_eko(hort: "str | None", hans: str, langt: int = LANGT) -> bool:
+    """True when `hort` (the local STT of what the mic heard) is his own words, or nothing a person said. Words of `langt`
+    letters or more count as his when they are close to one of his ('golven' for "kolven")."""
     h = ord_(hort)
     if len(h) < MIN_ORD:
         return True  # nothing intelligible: not an interruption
     sina = set(ord_(hans))
     if not sina:
         return False  # he has said nothing yet: whatever is heard is a person
-    traffar = sum(1 for w in h if w in sina or (len(w) >= LANGT and difflib.get_close_matches(w, sina, n=1, cutoff=LIKA)))
+    traffar = sum(1 for w in h if w in sina or (len(w) >= langt and difflib.get_close_matches(w, sina, n=1, cutoff=LIKA)))
     return traffar / len(h) >= ANDEL
 
 

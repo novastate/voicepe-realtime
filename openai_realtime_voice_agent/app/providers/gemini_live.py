@@ -520,6 +520,8 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             if event != "start" or not await self._vaken_for_tur():
                 return
             frame = type(frame)(audio=self._take_preroll(), sample_rate=frame.sample_rate, num_channels=frame.num_channels)
+        if self.ordgrind is not None and await self._ordgrind_ljud(frame):
+            return
         if event == "start":
             self._avbrott_t = 0.0   # the local detector hears the speech too: its own "end" closes it
         if event == "start" and not (self.svarar is not None and self.svarar()):
@@ -536,6 +538,62 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             self._tider_start()
             await self.push_frame(UserStoppedSpeakingFrame())
         await super()._send_user_audio(frame)
+
+    # GEMINI_ORDGRIND (eko_vakt.ordgrind): while his voice is in the room (ordgrind_vakt) the engine hears nothing. Mic audio
+    # over the floor (eko_vakt.niva_dbfs) is held with ORD_FORE_S before it; after ORD_FONSTER_S ordgrind(seconds) judges
+    # the words of that stretch of the raw mic. Not a person ('ja', 'okej', his own echo): dropped, he goes on. A person:
+    # his reply is cut (on_barge_in) and the held audio goes to the engine, whose own barge-in takes the turn from there.
+    # Both set by the handler; None = the engine hears everything (as before).
+    ordgrind_vakt = None
+    ordgrind = None
+    ORD_FORE_S = 0.3
+    ORD_FONSTER_S = float(os.environ.get("ORD_FONSTER_MS", "700")) / 1000
+    _ord_fore = None
+    _ord_held = None
+    _ord_task = None
+
+    async def _ordgrind_ljud(self, frame) -> bool:
+        """True = the engine does not get this frame now: held while the words are judged, or dropped."""
+        from app.avbrott import dbfs
+        held = self._ord_held
+        bps = frame.sample_rate * 2
+        if held is None:
+            if not self.ordgrind_vakt():
+                self._ord_fore = None
+                return False
+            if dbfs(frame.audio) < _eko.niva_dbfs():
+                fore = self._ord_fore if self._ord_fore is not None else []
+                fore.append(frame)
+                while sum(len(f.audio) for f in fore[1:]) >= self.ORD_FORE_S * bps:
+                    fore.pop(0)
+                self._ord_fore = fore
+                return True
+            self._ord_held, self._ord_fore, self._ord_task = (self._ord_fore or []) + [frame], None, None
+            return True
+        held.append(frame)
+        if self._ord_task is None:
+            sek = sum(len(f.audio) for f in held) / bps
+            if sek >= self.ORD_FORE_S + self.ORD_FONSTER_S:
+                self._ord_task = asyncio.get_running_loop().create_task(self.ordgrind(sek))
+            return True
+        if not self._ord_task.done():
+            return True
+        try:
+            person = bool(self._ord_task.result())
+        except Exception as e:
+            logger.warning(f"⚠️ the word gate failed ({e!r}): he goes on")
+            person = False
+        self._ord_held = self._ord_task = None
+        if person:
+            if self.on_barge_in is not None:
+                self.on_barge_in()
+            # The device must hear "listening" (its follow-up window closes otherwise), and hear it end: as _motor_avbrott.
+            self._fas_talar = True
+            self._avbrott_t = 0.0 if getattr(self._fas_vad, "_speaking", False) else time.monotonic()
+            await self.push_frame(UserStartedSpeakingFrame())
+            for f in held:
+                await super()._send_user_audio(f)
+        return True
 
     async def _motor_avbrott(self) -> None:
         """serverContent.interrupted: the engine heard speech over its reply and stopped. pipecat 0.0.97 does nothing
@@ -1221,6 +1279,7 @@ def build(options, tools: List[Dict[str, Any]]) -> GeminiLiveLLMService:
     service._turns = turns
     if egen_tur(options.rum):
         service._fas_vad = LocalTurns.create(int(options.gemini_turn_silence_ms) or 800)
+        service.ordgrind_paa = _eko.ordgrind(options.rum)
     if drop_language:
         logger.info(
             f"🌍 {model} refuses an explicit '{language}' — sending no language code "

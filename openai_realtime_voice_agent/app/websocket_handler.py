@@ -2110,6 +2110,22 @@ class WebSocketHandler:
                     openai_service.svar.text() if getattr(openai_service, "svar", None) is not None else "")
                 if getattr(openai_service, "_fas_vad", None) is not None:
                     koppla_egen_tur(openai_service, connection, phase_emitter, serializer)
+                    if getattr(openai_service, "ordgrind_paa", False):
+                        async def _ord_person(sek):
+                            pcm = serializer.ra_mik(int(sek * 16000) * 2)
+                            hort, ok = await bana0.transkribera_tydligt(pcm, host, port, timeout_stt)
+                            svar_obj = getattr(openai_service, "svar", None)
+                            hans = svar_obj.text() if svar_obj is not None else ""
+                            under = eko_vakt.under_tal(serializer.sedan_svar(), sek, phase_emitter.phase == "replying")
+                            person = eko_vakt.ord_dom(hort, ok, hans, under)
+                            logger.info(f"🔊 word gate: heard {hort!r} ({'while he speaks' if under else 'just after'}) -> "
+                                        f"{'a person, let in' if person else 'he goes on'}")
+                            return person
+
+                        openai_service.ordgrind_vakt = lambda: (not serializer.tystad() and (
+                            phase_emitter.phase == "replying" or serializer.sedan_svar() <= eko_vakt.UNDER_TAL_S))
+                        openai_service.ordgrind = _ord_person
+                        logger.info("🔊 word gate on: over his reply the engine hears only what the words let in")
             if hasattr(openai_service, "on_user_turn_pre_end"):
                 openai_service.on_user_turn_pre_end = _pre_end
             serializer.is_replying = lambda: phase_emitter.phase == "replying"

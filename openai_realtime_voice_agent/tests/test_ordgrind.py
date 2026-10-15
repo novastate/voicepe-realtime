@@ -1,0 +1,120 @@
+"""GEMINI_ORDGRIND (raawr US-060, Hemma 2026-10-15): over his reply the words decide whether it is an interruption."""
+import asyncio
+
+import pytest
+from pipecat.frames.frames import InputAudioRawFrame, UserStartedSpeakingFrame
+
+from app import eko_vakt
+from test_gemini_egen_tur import _bygg
+
+HANS = "Bränsle och luft sugs in, komprimeras av kolven och tänds av ett tändstift. Smällen trycker ner kolven och driver vevaxeln runt."
+
+
+@pytest.mark.parametrize("hort, ok, under, person", [
+    ("Ja.", True, True, False),                  # a back-channel while he speaks: he goes on (AC-8)
+    ("Okej.", True, True, False),
+    ("Mm, precis.", True, True, False),
+    ("Ja.", True, False, True),                  # just after he stopped it answers him
+    ("Vänta.", True, True, True),
+    ("Vad är status på huset?", True, True, True),
+    ("Och smällen. Ja.", True, True, False),     # his own echo with a "ja" in it (06:51:24)
+    ("Trycker ner kolven.", True, True, False),
+    ("", True, True, False),
+    ("Tack till elever och personal vid Värmland.", True, True, False),   # what the speech-to-text writes of noise
+    (None, False, True, False),                  # no text while he speaks: he goes on
+    (None, False, False, True),                  # ...just after: in doubt it is the person
+])
+def test_the_words_decide(hort, ok, under, person):
+    assert eko_vakt.ord_dom(hort, ok, HANS, under) is person
+
+
+def test_off_unless_asked_for(monkeypatch):
+    monkeypatch.delenv("GEMINI_ORDGRIND", raising=False)
+    assert not eko_vakt.ordgrind("kontoret")
+    monkeypatch.setenv("GEMINI_ORDGRIND", "kontoret")
+    assert eko_vakt.ordgrind("kontoret") and not eko_vakt.ordgrind("koket")
+    monkeypatch.setenv("GEMINI_ORDGRIND", "1")
+    assert eko_vakt.ordgrind("koket")
+
+
+def _ljud(amp, ms=20):
+    import numpy as np
+    return InputAudioRawFrame(audio=(np.ones(16 * ms, dtype=np.int16) * amp).tobytes(), sample_rate=16000, num_channels=1)
+
+
+def _grind(monkeypatch, dom):
+    service, sent, pushed = _bygg(monkeypatch, [None] * 1000)
+    service.svarar = lambda: True
+    asked, barge = [], []
+
+    async def ordgrind(sek):
+        asked.append(sek)
+        return dom
+    service.ordgrind_vakt = lambda: not barge   # as live: the cut reply (tysta_svar) ends the watch
+    service.ordgrind = ordgrind
+    service.on_barge_in = lambda: barge.append(1)
+    return service, sent, pushed, asked, barge
+
+
+async def _mata(service, frames):
+    for f in frames:
+        await service._send_user_audio(f)
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_over_his_reply_the_engine_hears_nothing_of_a_quiet_room(monkeypatch):
+    service, sent, pushed, asked, barge = _grind(monkeypatch, True)
+    await _mata(service, [_ljud(30)] * 100)   # his echo far under the floor, 2 s
+    assert sent == [] and asked == [] and barge == []
+
+
+@pytest.mark.asyncio
+async def test_a_back_channel_is_held_judged_and_dropped(monkeypatch):
+    service, sent, pushed, asked, barge = _grind(monkeypatch, False)
+    await _mata(service, [_ljud(30)] * 20 + [_ljud(8000)] * 20 + [_ljud(30)] * 40)
+    assert len(asked) == 1 and asked[0] >= service.ORD_FORE_S + service.ORD_FONSTER_S
+    assert sent == [] and barge == [] and not any(isinstance(f, UserStartedSpeakingFrame) for f in pushed)
+
+
+@pytest.mark.asyncio
+async def test_a_person_cuts_him_and_the_engine_gets_all_of_it(monkeypatch):
+    service, sent, pushed, asked, barge = _grind(monkeypatch, True)
+    fore = [_ljud(30)] * 20
+    tal = [_ljud(8000)] * 60
+    await _mata(service, fore + tal)
+    assert barge == [1] and any(isinstance(f, UserStartedSpeakingFrame) for f in pushed)
+    # the 0.3 s before the speech, the speech up to the verdict and after it: nothing lost, and the fore-roll in front
+    assert len(sent) == 15 + 60 and sent[0]["audio"].data == _ljud(30).audio
+
+
+@pytest.mark.asyncio
+async def test_a_failing_verdict_lets_him_go_on(monkeypatch):
+    service, sent, pushed, asked, barge = _grind(monkeypatch, True)
+
+    async def trasig(sek):
+        raise RuntimeError("stt down")
+    service.ordgrind = trasig
+    await _mata(service, [_ljud(8000)] * 60)
+    assert sent == [] and barge == []
+
+
+@pytest.mark.asyncio
+async def test_with_the_gate_off_everything_is_streamed_as_before(monkeypatch):
+    service, sent, pushed = _bygg(monkeypatch, [None] * 1000)
+    service.svarar = lambda: True
+    await _mata(service, [_ljud(8000)] * 3)
+    assert len(sent) == 3
+
+
+@pytest.mark.asyncio
+async def test_the_words_are_read_before_the_canceller():
+    from app.raw_audio_serializer import RawAudioSerializer
+    ser = RawAudioSerializer("kontoret", input_sample_rate=16000)
+
+    class Tom:   # a canceller that takes everything out
+        def process(self, pcm):
+            return bytes(len(pcm))
+    ser.aec = Tom()
+    await ser.deserialize(b"\x10\x27" * 1600)
+    assert ser.ra_mik(3200) == b"\x10\x27" * 1600
