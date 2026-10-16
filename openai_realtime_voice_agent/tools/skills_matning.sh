@@ -5,24 +5,25 @@
 #
 # The deployed app is copied and started as a side instance (ports 18080/18081, the stand-in "attrapp", its cloud
 # minutes in the test ledger) with ROST_SKILLS empty (a), b, then c; tools/skills_matning.py asks each question
-# `reps` times (default 2). Afterwards the office window lamp is turned off again (s6 turns it on, s7 off), the
-# side instance stopped and PROVPLATS removed, also on failure. Results: ut-<way>.jsonl here.
+# `reps` times (default 2). Every light.* is saved before and each one whose on/off changed is put back after
+# (tools/ljus_lage.py: s6/s7 switch the office window lamp, a wrong guess
+# could switch another), the side instance stopped and PROVPLATS removed, also on failure. Results: ut-<way>.jsonl here.
 # Never a question about a lock, the alarm, the garage, the TV or the living room (tools/skills_fragor.jsonl).
 set -u
 K=$(cd "$(dirname "$0")" && pwd)
 REPS=${1:-2}
-LAMPA=light.kontor_fonster
 PY=/opt/raawr-rostagent/venv/bin/python
 [ -e /root/PROVPLATS ] && { echo "PROVPLATS finns redan: avbryter"; exit 1; }
 touch /root/PROVPLATS
 aterstall() {
   systemctl stop prov-skills-a prov-skills-b prov-skills-c 2>/dev/null
-  set -a; . /etc/raawr-rostagent.env; . /run/raawr-rostagent/secrets.env; set +a
-  curl -s -m 10 -o /dev/null -w "lampan av: %{http_code}\n" -X POST -H "X-Raawr-Nyckel: $COMMS_NYCKEL" \
-    -H "Content-Type: application/json" -d "{\"entity_id\": \"$LAMPA\"}" "$HA_API_URL/services/light/turn_off"
+  [ -s "$K/ljus-fore.json" ] && $PY "$K/ljus_lage.py" aterstall "$K/ljus-fore.json"
   rm -rf /root/PROVPLATS /root/provapp-skills
 }
+set -a; . /etc/raawr-rostagent.env; . /run/raawr-rostagent/secrets.env; set +a
 trap aterstall EXIT
+rm -f "$K/ljus-fore.json"  # never put back a snapshot from an earlier run
+$PY "$K/ljus_lage.py" spara "$K/ljus-fore.json" || exit 1
 rm -rf /root/provapp-skills && cp -aL /opt/raawr-rostagent/app /root/provapp-skills
 for V in a b c; do
   S=$V; [ $V = a ] && S=""

@@ -167,3 +167,14 @@ async def test_av_far_dorrens_nya_verktyg_inte_ovanpa_has(monkeypatch):
     namn = set(_tool_names(service))
     assert {"lage_drift", "hamta_svar", "HassTurnOn"} <= namn
     assert not namn & {"styr", "hus_lage", "las_skill", "kostnad"}
+
+
+def test_ljuslaget_aterstalls_som_det_var():
+    """tools/ljus_lage.py (B's review of #90): each light whose on/off changed goes back; the rest is left alone."""
+    import sys
+    sys.path.insert(0, "tools")
+    from ljus_lage import andringar
+
+    fore = {"light.kontor_fonster": "off", "light.hall": "on", "light.ute": "on", "light.elsa": "unavailable"}
+    efter = {"light.kontor_fonster": "on", "light.hall": "off", "light.ute": "on", "light.elsa": "on"}
+    assert sorted(andringar(fore, efter)) == [("light.hall", "turn_on"), ("light.kontor_fonster", "turn_off")]
