@@ -20,9 +20,9 @@ aterstall() {
   [ -s "$K/ljus-fore.json" ] && $PY "$K/ljus_lage.py" aterstall "$K/ljus-fore.json"
   rm -rf /root/PROVPLATS /root/provapp-skills
 }
+rm -f "$K/ljus-fore.json"  # never put back a snapshot from an earlier run
 trap aterstall EXIT  # before sourcing: a failing source must not leave PROVPLATS behind (B, #90)
 set -a; . /etc/raawr-rostagent.env; . /run/raawr-rostagent/secrets.env; set +a
-rm -f "$K/ljus-fore.json"  # never put back a snapshot from an earlier run
 $PY "$K/ljus_lage.py" spara "$K/ljus-fore.json" || exit 1
 rm -rf /root/provapp-skills && cp -aL /opt/raawr-rostagent/app /root/provapp-skills
 for V in a b c; do
