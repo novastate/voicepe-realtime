@@ -131,3 +131,22 @@ async def test_ac1_omhamtningen_vid_vakning_haller_ocksa_urvalet(monkeypatch):
     namn = set(_tool_names(service))
     assert "HassTurnOn" not in namn
     assert namn <= skills.EGNA | skills.META, namn - skills.EGNA - skills.META
+
+
+def test_matningen_laser_verktyg_och_ratt_svar():
+    """tools/skills_matning.py: the tool called (anvand_verktyg shown by the comms tool it ran) and the key."""
+    import sys
+    sys.path.insert(0, "tools")
+    from skills_matning import anropade, ratt
+
+    rader = [
+        "x | DEBUG | ... Calling function [las_skill:call_1] with arguments {'namn': 'hus'}",
+        "x | DEBUG | ... Calling function [anvand_verktyg:call_2] with arguments {'namn': 'styr', 'argument': {}}",
+        "x | DEBUG | ... Calling function [homeassistant__GetLiveContext:call_3] with arguments {'domain': 'light'}",
+    ]
+    assert anropade(rader) == ["las_skill", "anvand_verktyg:styr", "GetLiveContext"]
+    assert ratt({"vantat": ["styr"]}, ["las_skill", "anvand_verktyg:styr"], "Klart.")
+    assert not ratt({"vantat": ["styr"]}, ["las_skill"], "Klart.")
+    assert ratt({"vantat": ["-"], "ord": ["34"]}, [], "Det blir 34.")
+    assert not ratt({"vantat": ["-"], "ord": ["34"]}, [], "Det blir 35.")
+    assert not ratt({"vantat": ["-"]}, ["HassTurnOn"], "Tänt.")
