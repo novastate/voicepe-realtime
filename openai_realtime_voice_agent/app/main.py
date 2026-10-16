@@ -1271,6 +1271,7 @@ class Application:
         """
         try:  # readOnlyHint per door tool, for the question guard (raawr US-103)
             service.lasande = {**(getattr(service, "lasande", None) or {}), **getattr(mcp_tools_schema, "las", {})}
+            service.dorrens = frozenset(getattr(mcp_tools_schema, "dorr_namn", frozenset()))
         except AttributeError:
             pass
         try:

@@ -148,10 +148,12 @@ def ar_fraga(text: Optional[str]) -> bool:
             and not _BON.search(t))  # "Kan du se till att det är tänt?" asks for it to be so
 
 
-def andrar(namn: str, argument: Optional[dict], lasande: Optional[dict] = None) -> bool:
+def andrar(namn: str, argument: Optional[dict], lasande: Optional[dict] = None, dorrens=frozenset()) -> bool:
     """Whether the tool changes something. comms says so per tool (`readOnlyHint`, raawr US-103: tools/list for the
-    door's own, las_skill for what anvand_verktyg runs); a tool comms has not described is judged by SKRIV_VERKTYG,
-    except one run through anvand_verktyg, which is taken to change something (A: missing = changing)."""
+    door's own, las_skill for what anvand_verktyg runs). A tool comms has not described changes something when it
+    is run through anvand_verktyg, or is one of the door's own once the door describes its tools (A: missing =
+    changing; B on #93: the same both ways). Before the door describes any (comms without US-103) and for HA's own
+    tools, SKRIV_VERKTYG decides."""
     lasande = lasande or {}
     bas = namn.rsplit("__", 1)[-1]
     genom = bas == "anvand_verktyg"
@@ -159,13 +161,15 @@ def andrar(namn: str, argument: Optional[dict], lasande: Optional[dict] = None) 
         bas = str((argument or {}).get("namn", "")).rsplit("__", 1)[-1]
     if bas in lasande:
         return not lasande[bas]
-    return genom or bas in SKRIV_VERKTYG
+    if genom or (lasande and namn in dorrens):
+        return True
+    return bas in SKRIV_VERKTYG
 
 
 def fraga_inte_order(turtext: Optional[str], namn: str, argument: Optional[dict],
-                     lasande: Optional[dict] = None) -> Optional[str]:
+                     lasande: Optional[dict] = None, dorrens=frozenset()) -> Optional[str]:
     """Why a changing tool must not run on this turn, or None: the turn (bana 0's local text) was a question."""
-    if not ar_fraga(turtext) or not andrar(namn, argument, lasande):
+    if not ar_fraga(turtext) or not andrar(namn, argument, lasande, dorrens):
         return None
     return (f"ignored: he asked a question ('{turtext}'), he did not ask you to change anything. Answer the "
             "question from what you can read; switch nothing.")

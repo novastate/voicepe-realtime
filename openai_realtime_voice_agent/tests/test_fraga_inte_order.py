@@ -159,3 +159,23 @@ async def test_sessionen_far_dorrens_markning():
     app.dorr_client.las = {"lage_drift": True, "kasta_in": False}
     _, service = await _connect(app)
     assert service.lasande == {"lage_drift": True, "kasta_in": False}
+
+
+def test_ett_obeskrivet_dorrverktyg_ar_andrande_bade_direkt_och_genom_anvand_verktyg():
+    """B on #93: once the door describes its tools, one it left out changes something, called either way."""
+    las, dorr = {"lage_drift": True}, frozenset({"lage_drift", "klimat"})
+    fraga = "Är det varmt i kontoret?"
+    assert bana0.fraga_inte_order(fraga, "klimat", {}, las, dorr) is not None
+    assert bana0.fraga_inte_order(fraga, "rost__anvand_verktyg", {"namn": "klimat"}, las, dorr) is not None
+    assert bana0.fraga_inte_order(fraga, "lage_drift", {}, las, dorr) is None
+    # a door that describes nothing (comms before US-103): the name list, as before
+    assert bana0.fraga_inte_order(fraga, "lage_drift", {}, {}, dorr) is None
+    assert bana0.fraga_inte_order(fraga, "homeassistant__GetLiveContext", {}, las, dorr) is None  # HA's own
+
+
+def test_pipecats_listmetod_finns_som_vi_skuggar():
+    """B on #93: LasandeMCPClient overrides pipecat's private `_list_tools_helper(self, session)`; pipecat is pinned
+    in poetry.lock, and this fails first if an upgrade renames or reshapes it."""
+    import inspect
+    from pipecat.services.mcp_service import MCPClient
+    assert list(inspect.signature(MCPClient._list_tools_helper).parameters) == ["self", "session"]
