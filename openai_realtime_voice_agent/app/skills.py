@@ -27,6 +27,11 @@ HETA = frozenset({"hus_lage", "styr"})
 # The speaker's own skills: they act on this speaker or this conversation, so they stay here (D-27 point 5).
 EGNA = frozenset({"request_follow_up", "mark_false_wake", "voice_enrollment", "set_timer", "cancel_timer",
                   "list_timers"})
+# What comms' door listed live 2026-10-16 (journal, Kontor). With ROST_SKILLS off the session keeps exactly these
+# from the door: the door is growing with Grok's tools (raawr US-083..094), and each one the speaker is handed on
+# top of HA's own would only lengthen a list that is already 51 long and duplicate HA (styr next to HassTurnOn).
+DORR_IDAG = frozenset({"folj_upp", "fraga_huset", "hamta_svar", "kasta_in", "lage_drift", "lista_svar", "mac_byggen",
+                       "svara"})
 NAS_INTE = ("Husets verktyg nås inte just nu. Får du en fråga om huset, säg kort att du inte når huset "
             "just nu och be personen försöka igen om en stund.")
 
@@ -41,6 +46,11 @@ def behall(namn: str) -> bool:
     """Whether the model is offered `namn` in skills mode. comms may hand a tool out as `<domain>__<name>`."""
     bas = namn.rsplit("__", 1)[-1]
     return namn in EGNA or bas in META or (lage() == "c" and bas in HETA)
+
+
+def visa_fran_dorren(namn: str) -> bool:
+    """With ROST_SKILLS off: whether a tool the door lists goes on the session (today's few, nothing new)."""
+    return namn.rsplit("__", 1)[-1] in DORR_IDAG
 
 
 def katalog_url() -> str:

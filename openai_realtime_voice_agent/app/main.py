@@ -1222,6 +1222,7 @@ class Application:
         session is not flooded with every intent HA exposes.
         """
         tools = []
+        dorr_namn = getattr(mcp_tools_schema, "dorr_namn", frozenset())
         for function_schema in mcp_tools_schema.standard_tools:
             name = function_schema.name
             # Allow/deny for what the model is offered: app/tool_selection.py.
@@ -1229,6 +1230,8 @@ class Application:
                 continue
             if skills.lage() and not skills.behall(name):  # US-094: the wake refetch goes through here too
                 continue
+            if not skills.lage() and name in dorr_namn and not skills.visa_fran_dorren(name):
+                continue  # US-094: the door's new tools reach the speaker through the skills path, not on top of HA's
             # Comms hands tools out as `<domain>__<name>`, HA itself bare.
             base = name.rsplit("__", 1)[-1]
             if openclaw_url() and base == "ask_openclaw":

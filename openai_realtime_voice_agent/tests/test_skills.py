@@ -49,6 +49,7 @@ async def test_ac1_av_ger_dagens_verktyg(monkeypatch):
     _, service = await _connect(_app(monkeypatch, ""))
     namn = set(_tool_names(service))
     assert {"HassTurnOn", "search_home", "lage_drift"} <= namn
+    assert "styr" not in namn and "las_skill" not in namn
 
 
 @pytest.mark.asyncio
@@ -150,3 +151,14 @@ def test_matningen_laser_verktyg_och_ratt_svar():
     assert ratt({"vantat": ["-"], "ord": ["34"]}, [], "Det blir 34.")
     assert not ratt({"vantat": ["-"], "ord": ["34"]}, [], "Det blir 35.")
     assert not ratt({"vantat": ["-"]}, ["HassTurnOn"], "Tänt.")
+
+
+@pytest.mark.asyncio
+async def test_av_far_dorrens_nya_verktyg_inte_ovanpa_has(monkeypatch):
+    """The door grows with Grok's tools; with ROST_SKILLS off the speaker keeps only what the door listed before."""
+    app = _app(monkeypatch, "")
+    app.dorr_client = _Klient(_schema("lage_drift", "hamta_svar", "styr", "hus_lage", "las_skill", "kostnad"))
+    _, service = await _connect(app)
+    namn = set(_tool_names(service))
+    assert {"lage_drift", "hamta_svar", "HassTurnOn"} <= namn
+    assert not namn & {"styr", "hus_lage", "las_skill", "kostnad"}
