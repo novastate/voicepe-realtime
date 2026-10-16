@@ -124,7 +124,7 @@ _PA = re.compile(r"\b(tänd\w*|slå på|sätt på|starta)\b|\bpå\b", re.I)
 # tända?'). Live 2026-10-17 00:20: 'Är det tänt i kontoret?' turned the whole office on ('tänt' and 'tänd' sound
 # alike). A polite request is an order ('Kan du tända...', 'Var snäll och...').
 # ponytail: the first word decides; "Vad bra, tänd lampan" reads as a question (refused, he says it again).
-_FRAGA = re.compile(r"^\W*(är|vad|vilka|vilken|vilket|hur|finns|lyser|står|när|var|varför|har)\b", re.I)
+_FRAGA = re.compile(r"^\W*(är|vad|vilka|vilken|vilket|hur|finns|lyser|syns|står|när|var|varför|har)\b", re.I)
 _BON = re.compile(r"^\W*((kan|kunde|skulle|vill|får|orkar)\s+(du|ni)|(är|var)\s+(du\s+|ni\s+)?snäll)\b", re.I)
 # B on #91: a question can also start without a question word. It ends in '?', names a state ('tänt', 'lyser',
 # 'brinner', 'på') and has no order verb ('tänd', 'släck'): 'Tänt i kontoret?', 'Brinner det i köket?',
