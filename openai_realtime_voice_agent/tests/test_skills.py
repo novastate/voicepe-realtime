@@ -1,4 +1,4 @@
-"""The speaker's tools through comms' skill catalogue (raawr US-094, E-07/D-27 point 5)."""
+"""The speaker's tools through comms' skill catalogue (raawr US-095, E-07/D-27 point 5)."""
 import types
 
 import pytest
