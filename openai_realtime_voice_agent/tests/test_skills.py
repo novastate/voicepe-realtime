@@ -1,4 +1,4 @@
-"""The speaker's tools through comms' skill catalogue (raawr US-095, E-07/D-27 point 5)."""
+"""The speaker's tools through comms' skill catalogue (raawr US-098, E-07/D-27 point 5)."""
 import types
 
 import pytest
@@ -151,6 +151,11 @@ def test_matningen_laser_verktyg_och_ratt_svar():
     assert ratt({"vantat": ["-"], "ord": ["34"]}, [], "Det blir 34.")
     assert not ratt({"vantat": ["-"], "ord": ["34"]}, [], "Det blir 35.")
     assert not ratt({"vantat": ["-"]}, ["HassTurnOn"], "Tänt.")
+    from skills_matning import verktygstider
+    tid = ["x - INFO - ⏱ tool las_skill 40 ok", "x - INFO - ⏱ tool rost__anvand_verktyg 610 ok",
+           "x - INFO - ⏱ tool homeassistant__GetLiveContext 300 fel"]
+    assert verktygstider(tid, anropade(rader)) == [["las_skill", 40, "ok"], ["anvand_verktyg:styr", 610, "ok"],
+                                                    ["GetLiveContext", 300, "fel"]]
 
 
 @pytest.mark.asyncio
