@@ -15,7 +15,8 @@ from tests.test_ha_misslyckades import _call, _service
                                   "Lyser det i hallen?", "Har du tänt i köket?", "Hur många lampor är på?",
                                   # B on #91: no question word first
                                   "Kan du säga om det är tänt i kontoret?", "Tänt i kontoret?", "Brinner det i köket?",
-                                  "Funkar lampan?", "Lampan på i köket?", "Släckt i hallen?"])
+                                  "Funkar lampan?", "Lampan på i köket?", "Släckt i hallen?",
+                                  "Syns det ljus i köket?"])  # B on #92
 def test_en_fraga_om_laget_ar_ingen_order(text):
     assert bana0.ar_fraga(text)
     assert bana0.verb_ur(text) is None
