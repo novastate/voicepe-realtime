@@ -320,6 +320,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         await super()._handle_msg_output_transcription(message)
 
     async def _handle_msg_tool_call(self, message) -> None:
+        self._stopp_tystnad_slut()   # a tool call after a cut is the engine acting on the NEW turn (G on #95)
         self._answer_after_tool = True
         self._turn_rescue = None  # a tool may have acted already: the turn is no longer safe to replay
         await super()._handle_msg_tool_call(message)
@@ -336,6 +337,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         # and mid-turn grace (8 s) are the bound on the device.
         if self._answer_after_tool:
             logger.info("⏳ empty turn_complete after a tool call — the answer comes in a new turn")
+            self._stopp_tystnad_slut()   # the cut reply's turn is over; the answer to come must not be muted (G on #95)
             return
         self._reply_awaited_at = None
         self._genererar = False
