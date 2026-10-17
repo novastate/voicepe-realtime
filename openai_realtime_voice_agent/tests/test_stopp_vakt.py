@@ -15,7 +15,7 @@ HANS = "Det här är ett ljudprov på svenska. Jag berättar en lång historia o
     ("Stå.", "stopp"), ("Tis.", "stopp"), ("Välta?", "stopp"),            # how the local speech-to-text spells a short stop word
     ("Ja.", "medhall"), ("Okej.", "medhall"), ("Aa!", "medhall"), ("Precis.", "medhall"),
     ("M. M.", "medhall"), ("Åååååå.", "medhall"), ("Mmmm.", "medhall"), ("Åh åh.", "medhall"), ("Mm.", "medhall"),      # 'M. M.' and 'Åh åh.' were cut before (measured 2026-10-17)
-    ("Anta.", "stopp"), ("Tack till elever och personal", "eko"),      # Henrik's own "vänta" was written 'Änta'/'Anta'; noise phrases are no speech
+    ("Anta.", "stopp"), ("Det är bra, stå inte där.", "annat"), ("Vi kan anta det.", "annat"),   # a misspelling counts only as the FIRST word ("Tack till elever och personal", "eko"),      # Henrik's own "vänta" was written 'Änta'/'Anta'; noise phrases are no speech
     ("Det här är ett ljudprov", "eko"), ("Böj en klock.", "annat"), ("", "inget"),
 ])
 def test_stopp_dom(hort, dom):
@@ -60,6 +60,18 @@ async def test_a_stop_word_over_his_reply_cuts_him(monkeypatch):
     assert any(isinstance(f, InterruptionFrame) for f in pushed) and any(isinstance(f, UserStartedSpeakingFrame) for f in pushed)
     assert klipp == [True]                                    # the engine is still generating: the tail is muted
     assert len(sent) == 37                                    # the engine still hears all of it
+
+
+@pytest.mark.asyncio
+async def test_an_unwritable_sound_must_be_louder_than_speech_to_cut(monkeypatch):
+    service, sent, pushed = _bygg(monkeypatch, ["start"] + [None] * 60)
+    service.STOPP_NIVA_INGET_DBFS = -5.0      # the test frames are -12 dBFS: a bang that loud is not enough, speech is
+    anrop, klipp = await _tala(service, "inget")
+    assert klipp == [] and not any(isinstance(f, InterruptionFrame) for f in pushed)
+    service2, sent2, pushed2 = _bygg(monkeypatch, ["start"] + [None] * 60)
+    service2.STOPP_NIVA_INGET_DBFS = -5.0
+    anrop2, klipp2 = await _tala(service2, "annat")
+    assert klipp2 == [True]
 
 
 @pytest.mark.asyncio

@@ -565,19 +565,25 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         self._stopp_efter, self._stopp_slut = 0, False
 
     @staticmethod
-    def _pcm_for_tyst(pcm: bytes) -> bool:
+    def _pcm_topp_db(pcm: bytes) -> float:
+        """The loudest 0.25 s of `pcm`, in dBFS (-120 when empty)."""
         from app.avbrott import dbfs
         steg = [dbfs(pcm[i:i + 8000]) for i in range(0, max(len(pcm) - 8000, 1), 8000)]
-        return bool(steg) and max(steg) < _eko.niva_dbfs()
-
-    STOPP_NIVA_DBFS = float(os.environ.get("STOPP_NIVA_DBFS", "-30"))
-    STOPP_FORE_S = 0.3
+        return max(steg) if steg else -120.0
 
     @classmethod
-    def _pcm_hogt(cls, pcm: bytes) -> bool:
-        from app.avbrott import dbfs
-        steg = [dbfs(pcm[i:i + 8000]) for i in range(0, max(len(pcm) - 8000, 1), 8000)]
-        return bool(steg) and max(steg) >= cls.STOPP_NIVA_DBFS
+    def _pcm_for_tyst(cls, pcm: bytes) -> bool:
+        return cls._pcm_topp_db(pcm) < _eko.niva_dbfs()
+
+    STOPP_NIVA_DBFS = float(os.environ.get("STOPP_NIVA_DBFS", "-30"))
+    STOPP_NIVA_INGET_DBFS = float(os.environ.get("STOPP_NIVA_INGET_DBFS", "-26"))   # estimate, to be set from Henrik's recordings
+    STOPP_FORE_S = 0.3
+
+    def _pcm_hogt(self, pcm: bytes, dom: str) -> bool:
+        """Loud enough to be a person talking over him. Speech the speech-to-text could write ("annat") must clear
+        STOPP_NIVA_DBFS; a sound it could NOT write ("inget": a clap, a door, a stop word it failed on) must clear
+        STOPP_NIVA_INGET_DBFS, a few dB higher, since a bang is as loud as Henrik (B on #94)."""
+        return self._pcm_topp_db(pcm) >= (self.STOPP_NIVA_INGET_DBFS if dom == "inget" else self.STOPP_NIVA_DBFS)
 
     async def _stopp_vakt(self, frame, event) -> None:
         if self.svarar is None or not self.svarar():
@@ -615,7 +621,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         # is not a back-channel and not his own words ("annat", or unintelligible) is a person talking over him -- also an
         # interruption, which the engine would take too -- but only well above the floor (-30), since a stop word the
         # speech-to-text could not spell ('Tack.') must still cut, and room noise must not.
-        if (dom == "stopp" and not self._pcm_for_tyst(pcm)) or (dom in ("annat", "inget") and self._pcm_hogt(pcm)):
+        if (dom == "stopp" and not self._pcm_for_tyst(pcm)) or (dom in ("annat", "inget") and self._pcm_hogt(pcm, dom)):
             await self._stopp_klipp(time.monotonic() - t0)
 
     async def _stopp_klipp(self, ms_s: float) -> None:
