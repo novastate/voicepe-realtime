@@ -104,6 +104,12 @@ def _rensa(text: str) -> str:
     return re.sub(r"[\x00-\x1f\x7f\u2028\u2029]+", " ", (text or "").replace('"', "'")).strip()
 
 
+def felrad(svar: str) -> str:
+    """HA's failure text as it may be read aloud or put in the model's line: no quotes or line breaks, at most 120
+    characters (G on voicepe #103: it went to the TTS and the model uncleaned)."""
+    return _rensa(str(svar))[:120]
+
+
 def ping_text(hort: str, svar: str) -> str:
     """The line Live gets before the audio. What bana 0 HEARD is in it (not only what it did), so Live
     can tell when it hears something else; measured 2026-10-09 (tools/live_ping_prov.py): with the line
@@ -359,6 +365,7 @@ class Svar(str):
     """HA's spoken reply, plus whether comms marked it as an answer to be told (`raawr_bana0.tala`, raawr US-069/US-116:
     the time, a reading, the weather). A str, so every caller that only wants the text is unchanged."""
     tala = False
+    fel = False  # HA marked the call as failed (`response.response_type == "error"`); the text says why (raawr US-131)
 
 
 async def prova(text: str, timeout: float) -> Optional[str]:
@@ -383,6 +390,7 @@ async def prova(text: str, timeout: float) -> Optional[str]:
             return None
         svar = Svar(speech.strip())
         svar.tala = bool((body.get("raawr_bana0") or {}).get("tala"))
+        svar.fel = body["response"].get("response_type") == "error"
         return svar
     except Exception as e:
         logger.warning(f"bana0: comms failed: {e!r}")
@@ -447,6 +455,7 @@ async def tur(
     skapa_svar: Callable[[], Awaitable[None]],
     efter_miss: Optional[Callable[[], None]] = None,
     efter_traff: Optional[Callable[[], None]] = None,
+    efter_fel: Optional[Callable[[str], None]] = None,
     klockan: Optional[Callable[[str], Awaitable[None]]] = None,
     skapa_svar_med_text: Optional[Callable[[str], Awaitable[None]]] = None,
     ping: Optional[Callable[[str, str], Awaitable[None]]] = None,
@@ -541,13 +550,16 @@ async def tur(
     # HA already acted: the model may only confirm it, never do it again.
     logger.info(f"bana0: hit {text!r} -> {svar!r}")
     try:
-        if ping is not None:  # the parallel track: the model hears the audio too, after a line about the hit
+        if ping is not None and not getattr(svar, "fel", False):  # the parallel track: the model hears the audio too, after a line about the hit; never for a failed call (its line says "done")
             await ping(text, svar)
         else:
             await skicka_svar_till_modellen(gjort(text, svar))
     except Exception as e:
         logger.warning(f"bana0: telling the model failed after a hit: {e!r}")
-    if efter_traff is not None:
+    if getattr(svar, "fel", False):  # a failed call is never confirmed as done (US-131)
+        if efter_fel is not None:
+            efter_fel(felrad(svar))
+    elif efter_traff is not None:
         efter_traff()
     return "bana0"
 
@@ -558,6 +570,11 @@ def gjort(text: str, svar: str) -> str:
         return (
             f"Användaren frågade: \"{text}\". Home Assistant svarade: \"{svar}\". Det är svaret på frågan: "
             "säg det kort med egna ord, en mening. Det är inget du har gjort. Anropa inga verktyg."
+        )
+    if getattr(svar, "fel", False):  # the call failed: never tell the model it is done (US-131)
+        return (
+            f"Användaren sa: \"{text}\". Det gick INTE: Home Assistant svarade \"{felrad(svar)}\". Säg kort och ärligt "
+            "att det inte gick och varför, en mening. Säg aldrig klart eller fixat. Anropa inga verktyg."
         )
     return (
         f"Användaren sa: \"{text}\". Huset har REDAN gjort det; Home Assistant svarade: "

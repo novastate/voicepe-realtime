@@ -97,6 +97,7 @@ async def _tur(port, service, said, timeout_stt=1.0):
         skicka_svar_till_modellen=lambda t: bana0.be_om_bekraftelse(service, t),
         skapa_svar=lambda: bana0.be_om_svar(service),
         efter_traff=lambda: said.append("vakt"),
+        efter_fel=lambda text: said.append(f"fel:{text}"),
     )
 
 
@@ -952,3 +953,81 @@ async def test_ett_las_svar_sags_som_svar_inte_som_en_handling(comms):
     comms.svar = _ha("Tände lampan")
     handling = bana0.gjort("tänd lampan", await bana0.prova("tänd lampan", 4.0))
     assert "REDAN gjort" in handling and "frågade" not in handling
+
+
+def _ha_typ(speech, typ):
+    return httpx.Response(200, json={"response": {"response_type": typ, "speech": {"plain": {"speech": speech}}}})
+
+
+@pytest.mark.asyncio
+async def test_US_131_ett_misslyckat_anrop_bekraftas_inte_som_klart(comms):
+    comms.svar = _ha_typ("Tyvärr, jag kunde inte nå lampan", "error")
+    server, port, _ = await _wyoming(_transcript("tänd lampan"))
+    service, said = FakeService(), []
+    async with server:
+        assert await _tur(port, service, said) == "bana0"
+    assert said == ["fel:Tyvärr, jag kunde inte nå lampan"]  # the failure, never the "Klart." net ("vakt")
+
+
+@pytest.mark.asyncio
+async def test_US_131_ett_lyckat_anrop_bekraftas_som_forut(comms):
+    comms.svar = _ha_typ("Tände lampan i kontoret", "action_done")
+    server, port, _ = await _wyoming(_transcript("tänd lampan"))
+    service, said = FakeService(), []
+    async with server:
+        assert await _tur(port, service, said) == "bana0"
+    assert said == ["vakt"]
+
+
+@pytest.mark.asyncio
+async def test_US_131_svar_utan_response_type_raknas_som_lyckat(comms):
+    comms.svar = _ha("Tände lampan i kontoret")  # older comms: no response_type
+    server, port, _ = await _wyoming(_transcript("tänd lampan"))
+    service, said = FakeService(), []
+    async with server:
+        assert await _tur(port, service, said) == "bana0"
+    assert said == ["vakt"]
+
+
+def test_US_131_modellen_far_veta_att_det_inte_gick():
+    svar = bana0.Svar("Tyvärr, jag kunde inte nå lampan")
+    svar.fel = True
+    text = bana0.gjort("tänd lampan", svar)
+    assert "INTE" in text and "Tyvärr, jag kunde inte nå lampan" in text
+    assert "REDAN gjort" not in text and "Bekräfta" not in text
+    ok = bana0.gjort("tänd lampan", bana0.Svar("Tände lampan"))
+    assert "REDAN gjort" in ok  # a success is told as before
+
+
+@pytest.mark.asyncio
+async def test_US_131_ett_fel_tar_inte_pingspåret_som_sager_att_huset_gjorde_det(comms):
+    comms.svar = _ha_typ("Tyvärr, jag kunde inte nå lampan", "error")
+    server, port, _ = await _wyoming(_transcript("tänd lampan"))
+    service, said, pingar = FakeService(), [], []
+
+    async def ping(text, svar):
+        pingar.append(text)
+
+    async def stt(pcm, timeout):
+        return await bana0.transkribera(pcm, "127.0.0.1", port, timeout)
+
+    async with server:
+        res = await bana0.tur(
+            PCM, stt=stt, timeout_stt=1.0, timeout_comms=4.0,
+            skicka_svar_till_modellen=lambda t: bana0.be_om_bekraftelse(service, t),
+            skapa_svar=lambda: bana0.be_om_svar(service),
+            efter_traff=lambda: said.append("vakt"), efter_fel=lambda t: said.append(f"fel:{t}"), ping=ping,
+        )
+    assert res == "bana0"
+    assert pingar == []  # ping_text says "gjorde det redan"; a failed call is told by gjort() instead
+    assert said == ["fel:Tyvärr, jag kunde inte nå lampan"]
+    assert "INTE" in service.events[0].item.content[0].text
+
+
+def test_US_131_feltexten_rensas_och_kortas_for_rosten_och_modellen():
+    lang = 'Fel "x"\nny rad ' + "a" * 300
+    ut = bana0.felrad(lang)
+    assert '"' not in ut and "\n" not in ut and len(ut) <= 120
+    svar = bana0.Svar(lang)
+    svar.fel = True
+    assert "\n" not in bana0.gjort("tänd", svar).split("Home Assistant svarade")[1]

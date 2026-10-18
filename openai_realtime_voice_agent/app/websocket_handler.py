@@ -1815,7 +1815,7 @@ class WebSocketHandler:
                 self._offline_tasks.add(task)
                 task.add_done_callback(self._offline_tasks.discard)
 
-            def _efter_traff():
+            def _efter_traff(felsvar=None):
                 liveness = getattr(connection, "turn_liveness", None)
                 if liveness is None:
                     return
@@ -1826,7 +1826,7 @@ class WebSocketHandler:
                 vanta = OK_VANTA_S if (supports_client_events(provider) or atgardslogg is not None) else 0.0
                 task = asyncio.get_running_loop().create_task(bana0.vakta_bekraftelse(
                     vanta_s=vanta, claim=lambda: bana0.ingen_bekraftelse_an(liveness, asked),
-                    say_ok=lambda: bana0.saga(_say, bana0.OK_VARIANTER),
+                    say_ok=(lambda: bana0.saga(_say, bana0.OK_VARIANTER)) if felsvar is None else (lambda: _say(felsvar)),
                 ))
                 self._offline_tasks.add(task)
                 task.add_done_callback(self._offline_tasks.discard)
@@ -1989,6 +1989,7 @@ class WebSocketHandler:
                     timeout_comms=timeout_comms,
                     skicka_svar_till_modellen=lambda text: bana0_hit(provider, openai_service, text),
                     efter_traff=_efter_traff,
+                    efter_fel=_efter_traff,
                     skapa_svar=lambda: bana0_miss(provider, openai_service),
                     skapa_svar_med_text=(lambda t: bana0_miss(provider, openai_service, t)) if bana0.text_till_modell_paa() else None,
                     ping=_ping if atgardslogg is not None else None,
