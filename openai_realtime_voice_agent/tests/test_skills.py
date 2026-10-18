@@ -260,6 +260,7 @@ async def test_verktygens_schema_far_inga_nyckelord_gemini_nekar(monkeypatch):
     app = _app(monkeypatch, "b")
     farlig = {"type": "object", "propertyNames": {"type": "string"}, "additionalProperties": {"type": "string"},
               "properties": {"inre": {"type": "object", "propertyNames": {"type": "string"}},
+                             "farg": {"type": "array", "items": [{"type": "integer", "minimum": 0, "maximum": 255}], "additionalItems": False},
                              "lista": {"anyOf": [{"type": "string"}, {"type": "object", "propertyNames": {"type": "string"}}]}}}
     app.dorr_client = _Klient(ToolsSchema(standard_tools=[
         FunctionSchema(name="anvand_verktyg", description="d", properties={"namn": {"type": "string"}, "argument": farlig},
@@ -270,3 +271,5 @@ async def test_verktygens_schema_far_inga_nyckelord_gemini_nekar(monkeypatch):
     assert ut[0]["parameters"]["properties"]["argument"]["type"] == "object"   # the rest of the schema stays
     assert ut[0]["parameters"]["properties"]["argument"]["properties"]["inre"]["type"] == "object"
     assert ut[0]["parameters"]["properties"]["argument"]["properties"]["lista"]["anyOf"][1] == {"type": "object"}   # inside a list
+    farg = ut[0]["parameters"]["properties"]["argument"]["properties"]["farg"]   # tuple-style `items` (live: color tool `farg`)
+    assert farg["items"] == {"type": "integer", "minimum": 0, "maximum": 255} and "additionalItems" not in farg

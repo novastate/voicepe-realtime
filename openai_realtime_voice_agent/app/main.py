@@ -280,13 +280,17 @@ def _device_idle(connection, quiet_s: float) -> bool:
 
 # JSON-Schema keywords Gemini Live's schema model refuses (pydantic `extra_forbidden`, live 2026-10-18 on comms' `anvand_verktyg`
 # `argument`, an object with `propertyNames`): the session never connected. OpenAI accepts them but needs none of them here.
-_OKANDA_SCHEMANYCKLAR = frozenset({"propertyNames", "additionalProperties", "$schema", "patternProperties", "unevaluatedProperties"})
+_OKANDA_SCHEMANYCKLAR = frozenset({"propertyNames", "additionalProperties", "$schema", "patternProperties", "unevaluatedProperties",
+                                  "additionalItems", "prefixItems"})
 
 
 def _sanera_schema(varde):
     """A tool schema without the keywords a model API refuses, at every depth. Everything else is kept as it is."""
     if isinstance(varde, dict):
-        return {k: _sanera_schema(v) for k, v in varde.items() if k not in _OKANDA_SCHEMANYCKLAR}
+        ut = {k: _sanera_schema(v) for k, v in varde.items() if k not in _OKANDA_SCHEMANYCKLAR}
+        if isinstance(ut.get("items"), list):  # tuple-style `items` (live: HA color tool `farg`); Gemini wants one schema
+            ut["items"] = ut["items"][0] if ut["items"] else {}  # ponytail: first position's schema stands for all
+        return ut
     if isinstance(varde, list):
         return [_sanera_schema(v) for v in varde]
     return varde
