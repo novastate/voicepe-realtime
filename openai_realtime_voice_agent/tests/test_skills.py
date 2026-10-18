@@ -274,3 +274,24 @@ async def test_verktygens_schema_far_inga_nyckelord_gemini_nekar(monkeypatch):
     assert ut[0]["parameters"]["properties"]["argument"]["properties"]["lista"]["anyOf"][1] == {"type": "object"}   # inside a list
     farg = ut[0]["parameters"]["properties"]["argument"]["properties"]["farg"]   # tuple-style `items` (live: color tool `farg`)
     assert farg["items"] == {"type": "integer", "minimum": 0, "maximum": 255} and "additionalItems" not in farg
+
+
+def test_US_098_kitet_nar_aldrig_en_lampa_utanfor_kontoret(monkeypatch):
+    """Hemma 2026-10-18: no measurement steers anything outside Kontor. Lamps the family changed meanwhile (living room,
+    kitchen, hall) are never put back; the allowlist is in the code (`ar_kontor`)."""
+    import json, sys, tempfile
+    sys.path.insert(0, "tools")
+    import ljus_lage
+
+    namn = {"light.vardagsrum": "Vardagsrum", "light.kok": "Kök", "light.hall": "Hall", "light.kontor_fonster": "Fönster", "light.kontor_tak": "Tak"}
+    fore = {"light.vardagsrum": "on", "light.kok": "on", "light.hall": "on", "light.kontor_fonster": "off", "light.kontor_tak": "on", "_namn": namn}
+    nu = {"light.vardagsrum": "off", "light.kok": "off", "light.hall": "off", "light.kontor_fonster": "on", "light.kontor_tak": "off", "_namn": namn}
+    anrop = []
+    monkeypatch.setattr(ljus_lage, "lagen", lambda: nu)
+    monkeypatch.setattr(ljus_lage, "_mcp", lambda n, a: anrop.append((n, a["name"])))
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump(fore, f)
+    monkeypatch.setattr(sys, "argv", ["ljus_lage.py", "aterstall", f.name])
+    assert ljus_lage.main() == 0
+    assert sorted(anrop) == [("intent__HassTurnOff", "Fönster"), ("intent__HassTurnOn", "Tak")]  # the office only
+    assert ljus_lage.ar_kontor("light.kontor_fonster") and not any(ljus_lage.ar_kontor(e) for e in ("light.vardagsrum", "light.kok", "light.hall", "switch.kontor_x"))
