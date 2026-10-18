@@ -997,3 +997,37 @@ def test_US_131_modellen_far_veta_att_det_inte_gick():
     assert "REDAN gjort" not in text and "Bekräfta" not in text
     ok = bana0.gjort("tänd lampan", bana0.Svar("Tände lampan"))
     assert "REDAN gjort" in ok  # a success is told as before
+
+
+@pytest.mark.asyncio
+async def test_US_131_ett_fel_tar_inte_pingspåret_som_sager_att_huset_gjorde_det(comms):
+    comms.svar = _ha_typ("Tyvärr, jag kunde inte nå lampan", "error")
+    server, port, _ = await _wyoming(_transcript("tänd lampan"))
+    service, said, pingar = FakeService(), [], []
+
+    async def ping(text, svar):
+        pingar.append(text)
+
+    async def stt(pcm, timeout):
+        return await bana0.transkribera(pcm, "127.0.0.1", port, timeout)
+
+    async with server:
+        res = await bana0.tur(
+            PCM, stt=stt, timeout_stt=1.0, timeout_comms=4.0,
+            skicka_svar_till_modellen=lambda t: bana0.be_om_bekraftelse(service, t),
+            skapa_svar=lambda: bana0.be_om_svar(service),
+            efter_traff=lambda: said.append("vakt"), efter_fel=lambda t: said.append(f"fel:{t}"), ping=ping,
+        )
+    assert res == "bana0"
+    assert pingar == []  # ping_text says "gjorde det redan"; a failed call is told by gjort() instead
+    assert said == ["fel:Tyvärr, jag kunde inte nå lampan"]
+    assert "INTE" in service.events[0].item.content[0].text
+
+
+def test_US_131_feltexten_rensas_och_kortas_for_rosten_och_modellen():
+    lang = 'Fel "x"\nny rad ' + "a" * 300
+    ut = bana0.felrad(lang)
+    assert '"' not in ut and "\n" not in ut and len(ut) <= 120
+    svar = bana0.Svar(lang)
+    svar.fel = True
+    assert "\n" not in bana0.gjort("tänd", svar).split("Home Assistant svarade")[1]
