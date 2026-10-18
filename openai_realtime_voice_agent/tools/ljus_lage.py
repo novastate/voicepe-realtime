@@ -55,11 +55,21 @@ def lagen() -> dict:
     return ut
 
 
+# The measurement only toggles the office window lamp. Putting back any other lamp would undo what the family
+# did meanwhile (2026-10-18 22:30: the living-room lamps were switched off by hand, the kit switched them on again).
+OMFATTNING = ("kontor",)
+
+
+def ar_kontor(eid: str) -> bool:
+    """The kit's allowlist: it touches only the office (Hemma 2026-10-18: no measurement steers anything outside Kontor)."""
+    return eid.startswith("light.") and any(d in eid for d in OMFATTNING)
+
+
 def andringar(fore: dict, efter: dict) -> list[tuple[str, str]]:
-    """(entity, service) that puts each light whose on/off changed back the way it was."""
+    """(entity, service) that puts each office light whose on/off changed back the way it was."""
     ut = []
     for eid, var in fore.items():
-        if not eid.startswith("light."):
+        if not ar_kontor(eid):
             continue
         nu = efter.get(eid)
         if var in ("on", "off") and nu in ("on", "off") and nu != var:
@@ -78,6 +88,8 @@ def main() -> int:
     namn_fore, namn_nu = fore.get("_namn", {}), nu.get("_namn", {})
     fel = 0
     for eid, tjanst in andringar(fore, nu):
+        if not ar_kontor(eid):  # belt and braces: never put back a lamp outside the office
+            continue
         namn = namn_fore.get(eid) or namn_nu.get(eid)
         dubbletter = [k for k, v in namn_nu.items() if v == namn and k != eid]
         if not namn or dubbletter:

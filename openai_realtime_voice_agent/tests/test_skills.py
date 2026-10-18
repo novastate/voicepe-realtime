@@ -175,9 +175,10 @@ def test_ljuslaget_aterstalls_som_det_var():
     sys.path.insert(0, "tools")
     from ljus_lage import andringar
 
-    fore = {"light.kontor_fonster": "off", "light.hall": "on", "light.ute": "on", "light.elsa": "unavailable"}
-    efter = {"light.kontor_fonster": "on", "light.hall": "off", "light.ute": "on", "light.elsa": "on"}
-    assert sorted(andringar(fore, efter)) == [("light.hall", "turn_on"), ("light.kontor_fonster", "turn_off")]
+    fore = {"light.kontor_fonster": "off", "light.kontor_sideboard": "on", "light.hall": "on", "light.ute": "on", "light.elsa": "unavailable"}
+    efter = {"light.kontor_fonster": "on", "light.kontor_sideboard": "off", "light.hall": "off", "light.ute": "on", "light.elsa": "on"}
+    # only the office is the kit's: `light.hall` changed by hand meanwhile is left alone (2026-10-18, living room)
+    assert sorted(andringar(fore, efter)) == [("light.kontor_fonster", "turn_off"), ("light.kontor_sideboard", "turn_on")]
 
 
 def test_ljuslagets_aterstallning_gar_genom_mcp_dorren_med_namn(monkeypatch):
@@ -187,8 +188,8 @@ def test_ljuslagets_aterstallning_gar_genom_mcp_dorren_med_namn(monkeypatch):
     sys.path.insert(0, "tools")
     import ljus_lage
 
-    fore = {"light.a": "on", "light.b": "off", "light.c": "on", "_namn": {"light.a": "Fönster", "light.b": "Hall", "light.c": "Hall"}}
-    nu = {"light.a": "off", "light.b": "on", "light.c": "off", "_namn": {"light.a": "Fönster", "light.b": "Hall", "light.c": "Hall"}}
+    fore = {"light.kontor_a": "on", "light.kontor_b": "off", "light.kontor_c": "on", "_namn": {"light.kontor_a": "Fönster", "light.kontor_b": "Hall", "light.kontor_c": "Hall"}}
+    nu = {"light.kontor_a": "off", "light.kontor_b": "on", "light.kontor_c": "off", "_namn": {"light.kontor_a": "Fönster", "light.kontor_b": "Hall", "light.kontor_c": "Hall"}}
     anrop = []
     monkeypatch.setattr(ljus_lage, "lagen", lambda: nu)
     monkeypatch.setattr(ljus_lage, "_mcp", lambda namn, arg: anrop.append((namn, arg)))
@@ -229,9 +230,9 @@ def test_ett_misslyckat_verktyg_ar_ett_fel_och_stoppar_inte_de_andra_lamporna(mo
     ljus_lage._mcp("intent__HassTurnOn", {"name": "Fönster", "domain": ["light"]})   # a clean answer is not an error
 
     # main(): the first lamp fails, the second is still put back, and the exit code says something was left wrong.
-    namn = {"light.a": "Fönster", "light.b": "Tak"}
-    fore = {"light.a": "on", "light.b": "on", "_namn": namn}
-    nu = {"light.a": "off", "light.b": "off", "_namn": namn}
+    namn = {"light.kontor_a": "Fönster", "light.kontor_b": "Tak"}
+    fore = {"light.kontor_a": "on", "light.kontor_b": "on", "_namn": namn}
+    nu = {"light.kontor_a": "off", "light.kontor_b": "off", "_namn": namn}
     anrop = []
 
     def mcp(n, arg):
@@ -273,3 +274,24 @@ async def test_verktygens_schema_far_inga_nyckelord_gemini_nekar(monkeypatch):
     assert ut[0]["parameters"]["properties"]["argument"]["properties"]["lista"]["anyOf"][1] == {"type": "object"}   # inside a list
     farg = ut[0]["parameters"]["properties"]["argument"]["properties"]["farg"]   # tuple-style `items` (live: color tool `farg`)
     assert farg["items"] == {"type": "integer", "minimum": 0, "maximum": 255} and "additionalItems" not in farg
+
+
+def test_US_098_kitet_nar_aldrig_en_lampa_utanfor_kontoret(monkeypatch):
+    """Hemma 2026-10-18: no measurement steers anything outside Kontor. Lamps the family changed meanwhile (living room,
+    kitchen, hall) are never put back; the allowlist is in the code (`ar_kontor`)."""
+    import json, sys, tempfile
+    sys.path.insert(0, "tools")
+    import ljus_lage
+
+    namn = {"light.vardagsrum": "Vardagsrum", "light.kok": "Kök", "light.hall": "Hall", "light.kontor_fonster": "Fönster", "light.kontor_tak": "Tak"}
+    fore = {"light.vardagsrum": "on", "light.kok": "on", "light.hall": "on", "light.kontor_fonster": "off", "light.kontor_tak": "on", "_namn": namn}
+    nu = {"light.vardagsrum": "off", "light.kok": "off", "light.hall": "off", "light.kontor_fonster": "on", "light.kontor_tak": "off", "_namn": namn}
+    anrop = []
+    monkeypatch.setattr(ljus_lage, "lagen", lambda: nu)
+    monkeypatch.setattr(ljus_lage, "_mcp", lambda n, a: anrop.append((n, a["name"])))
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump(fore, f)
+    monkeypatch.setattr(sys, "argv", ["ljus_lage.py", "aterstall", f.name])
+    assert ljus_lage.main() == 0
+    assert sorted(anrop) == [("intent__HassTurnOff", "Fönster"), ("intent__HassTurnOn", "Tak")]  # the office only
+    assert ljus_lage.ar_kontor("light.kontor_fonster") and not any(ljus_lage.ar_kontor(e) for e in ("light.vardagsrum", "light.kok", "light.hall", "switch.kontor_x"))
