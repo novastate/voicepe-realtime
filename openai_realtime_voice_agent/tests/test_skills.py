@@ -175,9 +175,10 @@ def test_ljuslaget_aterstalls_som_det_var():
     sys.path.insert(0, "tools")
     from ljus_lage import andringar
 
-    fore = {"light.kontor_fonster": "off", "light.hall": "on", "light.ute": "on", "light.elsa": "unavailable"}
-    efter = {"light.kontor_fonster": "on", "light.hall": "off", "light.ute": "on", "light.elsa": "on"}
-    assert sorted(andringar(fore, efter)) == [("light.hall", "turn_on"), ("light.kontor_fonster", "turn_off")]
+    fore = {"light.kontor_fonster": "off", "light.kontor_sideboard": "on", "light.hall": "on", "light.ute": "on", "light.elsa": "unavailable"}
+    efter = {"light.kontor_fonster": "on", "light.kontor_sideboard": "off", "light.hall": "off", "light.ute": "on", "light.elsa": "on"}
+    # only the office is the kit's: `light.hall` changed by hand meanwhile is left alone (2026-10-18, living room)
+    assert sorted(andringar(fore, efter)) == [("light.kontor_fonster", "turn_off"), ("light.kontor_sideboard", "turn_on")]
 
 
 def test_ljuslagets_aterstallning_gar_genom_mcp_dorren_med_namn(monkeypatch):
@@ -187,8 +188,8 @@ def test_ljuslagets_aterstallning_gar_genom_mcp_dorren_med_namn(monkeypatch):
     sys.path.insert(0, "tools")
     import ljus_lage
 
-    fore = {"light.a": "on", "light.b": "off", "light.c": "on", "_namn": {"light.a": "Fönster", "light.b": "Hall", "light.c": "Hall"}}
-    nu = {"light.a": "off", "light.b": "on", "light.c": "off", "_namn": {"light.a": "Fönster", "light.b": "Hall", "light.c": "Hall"}}
+    fore = {"light.kontor_a": "on", "light.kontor_b": "off", "light.kontor_c": "on", "_namn": {"light.kontor_a": "Fönster", "light.kontor_b": "Hall", "light.kontor_c": "Hall"}}
+    nu = {"light.kontor_a": "off", "light.kontor_b": "on", "light.kontor_c": "off", "_namn": {"light.kontor_a": "Fönster", "light.kontor_b": "Hall", "light.kontor_c": "Hall"}}
     anrop = []
     monkeypatch.setattr(ljus_lage, "lagen", lambda: nu)
     monkeypatch.setattr(ljus_lage, "_mcp", lambda namn, arg: anrop.append((namn, arg)))
@@ -229,9 +230,9 @@ def test_ett_misslyckat_verktyg_ar_ett_fel_och_stoppar_inte_de_andra_lamporna(mo
     ljus_lage._mcp("intent__HassTurnOn", {"name": "Fönster", "domain": ["light"]})   # a clean answer is not an error
 
     # main(): the first lamp fails, the second is still put back, and the exit code says something was left wrong.
-    namn = {"light.a": "Fönster", "light.b": "Tak"}
-    fore = {"light.a": "on", "light.b": "on", "_namn": namn}
-    nu = {"light.a": "off", "light.b": "off", "_namn": namn}
+    namn = {"light.kontor_a": "Fönster", "light.kontor_b": "Tak"}
+    fore = {"light.kontor_a": "on", "light.kontor_b": "on", "_namn": namn}
+    nu = {"light.kontor_a": "off", "light.kontor_b": "off", "_namn": namn}
     anrop = []
 
     def mcp(n, arg):
