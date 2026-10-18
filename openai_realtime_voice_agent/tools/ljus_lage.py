@@ -35,6 +35,15 @@ def _mcp(namn: str, argument: dict):
         ut = json.loads(svar.read())
     if "error" in ut:
         raise RuntimeError(f"{namn}: {ut['error']}")
+    # A tool that failed answers without a JSON-RPC error: `isError`, or `success: false` in content[0].text (app/idag.py call_ha_tool).
+    if (ut.get("result") or {}).get("isError"):
+        raise RuntimeError(f"{namn}: {ut['result']}")
+    try:
+        nyttolast = json.loads(ut["result"]["content"][0]["text"])
+    except (KeyError, IndexError, TypeError, ValueError):
+        nyttolast = {}
+    if isinstance(nyttolast, dict) and not nyttolast.get("success", True):
+        raise RuntimeError(f"{namn}: {nyttolast}")
     return ut
 
 
@@ -75,7 +84,12 @@ def main() -> int:
             print(f"kan inte återställa {eid}: {'inget namn' if not namn else 'samma namn som ' + ', '.join(dubbletter)}")
             fel = 1
             continue
-        _mcp("intent__HassTurnOn" if tjanst == "turn_on" else "intent__HassTurnOff", {"name": namn, "domain": ["light"]})
+        try:
+            _mcp("intent__HassTurnOn" if tjanst == "turn_on" else "intent__HassTurnOff", {"name": namn, "domain": ["light"]})
+        except Exception as e:  # one lamp that cannot be put back must not stop the others, nor read as restored
+            print(f"kunde inte återställa {eid} {tjanst}: {e}")
+            fel = 1
+            continue
         print(f"återställd: {eid} {tjanst}")
     return fel
 

@@ -199,3 +199,50 @@ def test_ljuslagets_aterstallning_gar_genom_mcp_dorren_med_namn(monkeypatch):
     monkeypatch.setattr(ljus_lage.sys, "argv", ["x", "aterstall", f.name])
     assert ljus_lage.main() == 1                       # Hall is ambiguous: reported, exit 1
     assert anrop == [("intent__HassTurnOn", {"name": "Fönster", "domain": ["light"]})]
+
+
+def test_ett_misslyckat_verktyg_ar_ett_fel_och_stoppar_inte_de_andra_lamporna(monkeypatch):
+    """D's review of #101: a failed MCP tool answers without a JSON-RPC error (`isError`, or `success: false` in
+    content[0].text); the put-back must not read as restored, and one lamp that fails must not stop the next."""
+    import io
+    import json
+    import sys
+    import tempfile
+    sys.path.insert(0, "tools")
+    import pytest
+    import ljus_lage
+
+    def svar(kropp):
+        return lambda req, timeout=None: io.BytesIO(json.dumps(kropp).encode())
+
+    monkeypatch.setenv("HA_API_URL", "http://comms.test/kanal/rost/kontoret/api")
+    monkeypatch.setenv("COMMS_NYCKEL", "x")
+    for kropp in (
+        {"jsonrpc": "2.0", "id": 1, "result": {"isError": True, "content": [{"type": "text", "text": "nej"}]}},
+        {"jsonrpc": "2.0", "id": 1, "result": {"content": [{"type": "text", "text": json.dumps({"success": False, "error": "x"})}]}},
+    ):
+        monkeypatch.setattr(ljus_lage.urllib.request, "urlopen", svar(kropp))
+        with pytest.raises(RuntimeError):
+            ljus_lage._mcp("intent__HassTurnOn", {"name": "Fönster", "domain": ["light"]})
+    ok = {"jsonrpc": "2.0", "id": 1, "result": {"content": [{"type": "text", "text": json.dumps({"success": True, "result": {}})}]}}
+    monkeypatch.setattr(ljus_lage.urllib.request, "urlopen", svar(ok))
+    ljus_lage._mcp("intent__HassTurnOn", {"name": "Fönster", "domain": ["light"]})   # a clean answer is not an error
+
+    # main(): the first lamp fails, the second is still put back, and the exit code says something was left wrong.
+    namn = {"light.a": "Fönster", "light.b": "Tak"}
+    fore = {"light.a": "on", "light.b": "on", "_namn": namn}
+    nu = {"light.a": "off", "light.b": "off", "_namn": namn}
+    anrop = []
+
+    def mcp(n, arg):
+        anrop.append(arg["name"])
+        if arg["name"] == "Fönster":
+            raise RuntimeError("tool failed")
+
+    monkeypatch.setattr(ljus_lage, "lagen", lambda: nu)
+    monkeypatch.setattr(ljus_lage, "_mcp", mcp)
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump(fore, f)
+    monkeypatch.setattr(ljus_lage.sys, "argv", ["x", "aterstall", f.name])
+    assert ljus_lage.main() == 1
+    assert anrop == ["Fönster", "Tak"]
