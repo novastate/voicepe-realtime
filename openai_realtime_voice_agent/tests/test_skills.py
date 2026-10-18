@@ -246,3 +246,30 @@ def test_ett_misslyckat_verktyg_ar_ett_fel_och_stoppar_inte_de_andra_lamporna(mo
     monkeypatch.setattr(ljus_lage.sys, "argv", ["x", "aterstall", f.name])
     assert ljus_lage.main() == 1
     assert anrop == ["Fönster", "Tak"]
+
+@pytest.mark.asyncio
+async def test_verktygens_schema_far_inga_nyckelord_gemini_nekar(monkeypatch):
+    """Live 2026-10-18 (raawr US-098, väg b och c): comms' `anvand_verktyg` hands out `argument` as an object with
+    `propertyNames`, and Gemini Live's schema model refuses the key (pydantic `extra_forbidden`), so the session never
+    connected and no turn got a sound. The keywords it does not know are dropped before the tool goes to the model."""
+    import json
+
+    from pipecat.adapters.schemas.function_schema import FunctionSchema
+    from pipecat.adapters.schemas.tools_schema import ToolsSchema
+
+    app = _app(monkeypatch, "b")
+    farlig = {"type": "object", "propertyNames": {"type": "string"}, "additionalProperties": {"type": "string"},
+              "properties": {"inre": {"type": "object", "propertyNames": {"type": "string"}},
+                             "farg": {"type": "array", "items": [{"type": "integer", "minimum": 0, "maximum": 255}], "additionalItems": False},
+                             "lista": {"anyOf": [{"type": "string"}, {"type": "object", "propertyNames": {"type": "string"}}]}}}
+    app.dorr_client = _Klient(ToolsSchema(standard_tools=[
+        FunctionSchema(name="anvand_verktyg", description="d", properties={"namn": {"type": "string"}, "argument": farlig},
+                       required=["namn"])]))
+    ut = app._ha_tool_definitions(await app._fetch_ha_tools_schema())
+    text = json.dumps(ut)
+    assert "propertyNames" not in text and "additionalProperties" not in text
+    assert ut[0]["parameters"]["properties"]["argument"]["type"] == "object"   # the rest of the schema stays
+    assert ut[0]["parameters"]["properties"]["argument"]["properties"]["inre"]["type"] == "object"
+    assert ut[0]["parameters"]["properties"]["argument"]["properties"]["lista"]["anyOf"][1] == {"type": "object"}   # inside a list
+    farg = ut[0]["parameters"]["properties"]["argument"]["properties"]["farg"]   # tuple-style `items` (live: color tool `farg`)
+    assert farg["items"] == {"type": "integer", "minimum": 0, "maximum": 255} and "additionalItems" not in farg
