@@ -565,6 +565,11 @@ def gjort(text: str, svar: str) -> str:
             f"Användaren frågade: \"{text}\". Home Assistant svarade: \"{svar}\". Det är svaret på frågan: "
             "säg det kort med egna ord, en mening. Det är inget du har gjort. Anropa inga verktyg."
         )
+    if getattr(svar, "fel", False):  # the call failed: never tell the model it is done (US-131)
+        return (
+            f"Användaren sa: \"{text}\". Det gick INTE: Home Assistant svarade \"{svar}\". Säg kort och ärligt "
+            "att det inte gick och varför, en mening. Säg aldrig klart eller fixat. Anropa inga verktyg."
+        )
     return (
         f"Användaren sa: \"{text}\". Huset har REDAN gjort det; Home Assistant svarade: "
         f"\"{svar}\". Bekräfta kort med egna ord, en mening. Anropa inga verktyg och gör inget mer."

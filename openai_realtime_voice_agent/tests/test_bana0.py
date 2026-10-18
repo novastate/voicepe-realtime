@@ -987,3 +987,13 @@ async def test_US_131_svar_utan_response_type_raknas_som_lyckat(comms):
     async with server:
         assert await _tur(port, service, said) == "bana0"
     assert said == ["vakt"]
+
+
+def test_US_131_modellen_far_veta_att_det_inte_gick():
+    svar = bana0.Svar("Tyvärr, jag kunde inte nå lampan")
+    svar.fel = True
+    text = bana0.gjort("tänd lampan", svar)
+    assert "INTE" in text and "Tyvärr, jag kunde inte nå lampan" in text
+    assert "REDAN gjort" not in text and "Bekräfta" not in text
+    ok = bana0.gjort("tänd lampan", bana0.Svar("Tände lampan"))
+    assert "REDAN gjort" in ok  # a success is told as before
