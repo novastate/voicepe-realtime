@@ -278,6 +278,20 @@ def _device_idle(connection, quiet_s: float) -> bool:
     return time.monotonic() - last >= quiet_s
 
 
+# JSON-Schema keywords Gemini Live's schema model refuses (pydantic `extra_forbidden`, live 2026-10-18 on comms' `anvand_verktyg`
+# `argument`, an object with `propertyNames`): the session never connected. OpenAI accepts them but needs none of them here.
+_OKANDA_SCHEMANYCKLAR = frozenset({"propertyNames", "additionalProperties", "$schema", "patternProperties", "unevaluatedProperties"})
+
+
+def _sanera_schema(varde):
+    """A tool schema without the keywords a model API refuses, at every depth. Everything else is kept as it is."""
+    if isinstance(varde, dict):
+        return {k: _sanera_schema(v) for k, v in varde.items() if k not in _OKANDA_SCHEMANYCKLAR}
+    if isinstance(varde, list):
+        return [_sanera_schema(v) for v in varde]
+    return varde
+
+
 def _compact_slots(tool_name: str, properties: dict) -> dict:
     """HA's generic intent slots, minus the ones that only cost tokens.
 
@@ -1260,7 +1274,7 @@ class Application:
                 "description": description,
                 "parameters": {
                     "type": "object",
-                    "properties": _compact_slots(name, function_schema.properties),
+                    "properties": _sanera_schema(_compact_slots(name, function_schema.properties)),
                     "required": function_schema.required
                 }
             })
