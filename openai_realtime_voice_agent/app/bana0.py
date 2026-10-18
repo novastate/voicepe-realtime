@@ -359,6 +359,7 @@ class Svar(str):
     """HA's spoken reply, plus whether comms marked it as an answer to be told (`raawr_bana0.tala`, raawr US-069/US-116:
     the time, a reading, the weather). A str, so every caller that only wants the text is unchanged."""
     tala = False
+    fel = False  # HA marked the call as failed (`response.response_type == "error"`); the text says why (raawr US-131)
 
 
 async def prova(text: str, timeout: float) -> Optional[str]:
@@ -383,6 +384,7 @@ async def prova(text: str, timeout: float) -> Optional[str]:
             return None
         svar = Svar(speech.strip())
         svar.tala = bool((body.get("raawr_bana0") or {}).get("tala"))
+        svar.fel = body["response"].get("response_type") == "error"
         return svar
     except Exception as e:
         logger.warning(f"bana0: comms failed: {e!r}")
@@ -447,6 +449,7 @@ async def tur(
     skapa_svar: Callable[[], Awaitable[None]],
     efter_miss: Optional[Callable[[], None]] = None,
     efter_traff: Optional[Callable[[], None]] = None,
+    efter_fel: Optional[Callable[[str], None]] = None,
     klockan: Optional[Callable[[str], Awaitable[None]]] = None,
     skapa_svar_med_text: Optional[Callable[[str], Awaitable[None]]] = None,
     ping: Optional[Callable[[str, str], Awaitable[None]]] = None,
@@ -547,7 +550,10 @@ async def tur(
             await skicka_svar_till_modellen(gjort(text, svar))
     except Exception as e:
         logger.warning(f"bana0: telling the model failed after a hit: {e!r}")
-    if efter_traff is not None:
+    if getattr(svar, "fel", False):  # a failed call is never confirmed as done (US-131)
+        if efter_fel is not None:
+            efter_fel(str(svar))
+    elif efter_traff is not None:
         efter_traff()
     return "bana0"
 

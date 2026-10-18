@@ -97,6 +97,7 @@ async def _tur(port, service, said, timeout_stt=1.0):
         skicka_svar_till_modellen=lambda t: bana0.be_om_bekraftelse(service, t),
         skapa_svar=lambda: bana0.be_om_svar(service),
         efter_traff=lambda: said.append("vakt"),
+        efter_fel=lambda text: said.append(f"fel:{text}"),
     )
 
 
@@ -952,3 +953,37 @@ async def test_ett_las_svar_sags_som_svar_inte_som_en_handling(comms):
     comms.svar = _ha("Tände lampan")
     handling = bana0.gjort("tänd lampan", await bana0.prova("tänd lampan", 4.0))
     assert "REDAN gjort" in handling and "frågade" not in handling
+
+
+def _ha_typ(speech, typ):
+    return httpx.Response(200, json={"response": {"response_type": typ, "speech": {"plain": {"speech": speech}}}})
+
+
+@pytest.mark.asyncio
+async def test_US_131_ett_misslyckat_anrop_bekraftas_inte_som_klart(comms):
+    comms.svar = _ha_typ("Tyvärr, jag kunde inte nå lampan", "error")
+    server, port, _ = await _wyoming(_transcript("tänd lampan"))
+    service, said = FakeService(), []
+    async with server:
+        assert await _tur(port, service, said) == "bana0"
+    assert said == ["fel:Tyvärr, jag kunde inte nå lampan"]  # the failure, never the "Klart." net ("vakt")
+
+
+@pytest.mark.asyncio
+async def test_US_131_ett_lyckat_anrop_bekraftas_som_forut(comms):
+    comms.svar = _ha_typ("Tände lampan i kontoret", "action_done")
+    server, port, _ = await _wyoming(_transcript("tänd lampan"))
+    service, said = FakeService(), []
+    async with server:
+        assert await _tur(port, service, said) == "bana0"
+    assert said == ["vakt"]
+
+
+@pytest.mark.asyncio
+async def test_US_131_svar_utan_response_type_raknas_som_lyckat(comms):
+    comms.svar = _ha("Tände lampan i kontoret")  # older comms: no response_type
+    server, port, _ = await _wyoming(_transcript("tänd lampan"))
+    service, said = FakeService(), []
+    async with server:
+        assert await _tur(port, service, said) == "bana0"
+    assert said == ["vakt"]
