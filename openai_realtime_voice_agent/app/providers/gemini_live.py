@@ -888,7 +888,10 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         return n, s
 
     def _held_label(self, turn_id, frames) -> str:
-        n, s = self._held_stats(frames)
+        try:
+            n, s = self._held_stats(frames)
+        except Exception:  # diagnostics must never break a turn
+            n, s = 0, 0.0
         nr = "?" if turn_id is None else turn_id
         return f"turn#{nr} {n}f/{s:.2f}s"
 
