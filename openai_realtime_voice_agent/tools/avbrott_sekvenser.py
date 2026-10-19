@@ -237,7 +237,7 @@ async def _run_one(client: Any, sequence_id: str, run_index: int) -> dict[str, A
         _event(events, t0, "exception", _format_exception(exc))
         _event(events, t0, "stängd")
 
-    return {"id": item_id, "handelser": events}
+    return {"id": item_id, "sek_session": round(time.monotonic() - t0, 1), "sek_ljud": round(total_audio_s, 1), "handelser": events}
 
 
 def _api_key() -> str:
@@ -251,12 +251,19 @@ async def _amain(args: argparse.Namespace) -> None:
     if genai is None:
         raise RuntimeError("google-genai is required to run this script.")
     client = genai.Client(api_key=_api_key())
+    totalt_s = 0.0
     with open(args.output, "a", encoding="utf-8") as out:
         for run_index in range(1, args.upprepa + 1):
             for sequence_id in ("S1", "S2", "S3", "S4"):
                 row = await _run_one(client, sequence_id, run_index)
                 out.write(json.dumps(row, ensure_ascii=False) + "\n")
                 out.flush()
+                totalt_s += row["sek_session"]
+                print(f"{row['id']}: {row['sek_session']} s session, {row['sek_ljud']} s ljud (totalt {totalt_s:.1f} s)", flush=True)
+                # Avbryt vid fel som inte hör till mätningen: ingen uppkoppling, ingen nyckel, ingen kvot, inget första ljud.
+                if any(h[1] == "exception" and not any(x[1] == "audio_start" for x in row["handelser"]) for h in row["handelser"]):
+                    print("AVBRYTER: fel före första svarsljudet; inga fler sessioner körs.", flush=True)
+                    return
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -268,8 +275,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv or sys.argv[1:])
-    if args.upprepa < 1:
-        raise SystemExit("--upprepa must be >= 1")
+    if args.upprepa != 1:
+        raise SystemExit("--upprepa är låst till 1: högst fyra sessioner (S1-S4), ägarens OK gäller bara dem")
     print(
         "VARNING: detta skript kostar pengar (Gemini Live) och kräver uttryckligt OK från ägaren innan körning.",
         flush=True,
