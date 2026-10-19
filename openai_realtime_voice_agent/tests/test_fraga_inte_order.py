@@ -95,6 +95,13 @@ def test_comms_markning_vinner_over_namnlistan():
     assert bana0.fraga_inte_order(fraga, "homeassistant__GetLiveContext", {}, las) is None
 
 
+def test_skrivverktyg_ar_alltid_andrande_trots_readonlyhint():
+    assert bana0.andrar("HassTurnOn", {}, {"HassTurnOn": True})
+    assert bana0.andrar("intent__HassTurnOn", {}, {"HassTurnOn": True})
+    assert bana0.andrar("rost__anvand_verktyg", {"namn": "styr", "argument": {}}, {"styr": True})
+    assert not bana0.andrar("homeassistant__GetLiveContext", {}, {"GetLiveContext": True})
+
+
 def test_las_skill_svaret_lar_vakten():
     from app import skills
     svar = '{"skill": "hus", "instruktion": "x", "verktyg": [{"namn": "hus_lage", "readOnlyHint": true}, ' \
@@ -102,6 +109,17 @@ def test_las_skill_svaret_lar_vakten():
     assert skills.lasande_ur(svar) == {"hus_lage": True, "styr": False}
     assert skills.lasande_ur({"result": svar}) == {"hus_lage": True, "styr": False}
     assert skills.lasande_ur("Fel [Comms]: skillen finns inte") == {}
+
+
+def test_las_skill_readonlyhint_for_skrivverktyg_ignoreras_och_varnas(caplog):
+    from app import skills
+    caplog.set_level("WARNING")
+    svar = {"verktyg": [{"namn": "HassTurnOff", "readOnlyHint": True}, {"namn": "GetLiveContext", "readOnlyHint": True},
+                        {"namn": "styr", "readOnlyHint": False}]}
+    assert skills.lasande_ur(svar) == {"GetLiveContext": True, "styr": False}
+    assert [r.message for r in caplog.records if r.levelname == "WARNING"] == [
+        "las_skill påstod readOnlyHint för skrivande verktyg HassTurnOff: ignorerat"
+    ]
 
 
 @pytest.mark.asyncio
