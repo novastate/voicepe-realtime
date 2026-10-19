@@ -2637,7 +2637,11 @@ class WebSocketHandler:
             if phase not in (None, "idle") or getattr(service, "_held", None):
                 logger.info(f"♻️ {connection.device_id}: a new turn has begun; the kept turn is dropped")
                 return
-            service._held = frames
+            if hasattr(service, "_held_turn_seq"):  # the Gemini service: give the kept turn a log id
+                from app.providers.gemini_live import _held_start
+                _held_start(service, frames, "rescue")
+            else:
+                service._held = frames
             logger.info(f"♻️ {connection.device_id}: answering the turn that was kept across the reconnect "
                         f"({time.monotonic() - t0:.1f}s old)")
             await service.answer_turn()
