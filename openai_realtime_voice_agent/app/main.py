@@ -1294,12 +1294,20 @@ class Application:
             service.lasande = {**(getattr(service, "lasande", None) or {}), **getattr(mcp_tools_schema, "las", {})}
         except AttributeError:
             pass
+        synliga = []
+        dolda = 0
+        for function_schema in mcp_tools_schema.standard_tools:
+            if tool_selection.shown(function_schema.name, self.mcp_tool_allowlist):
+                synliga.append(function_schema)
+            else:
+                dolda += 1
+        logger.info(f"ℹ️ Skipped registration of {dolda} hidden MCP tool handlers")
         try:
             from pipecat.adapters.schemas.tools_schema import ToolsSchema
 
             dorr_namn = getattr(mcp_tools_schema, "dorr_namn", frozenset())
-            dorrens = [f for f in mcp_tools_schema.standard_tools if f.name in dorr_namn]
-            hass = [f for f in mcp_tools_schema.standard_tools if f.name not in dorr_namn]
+            dorrens = [f for f in synliga if f.name in dorr_namn]
+            hass = [f for f in synliga if f.name not in dorr_namn]
             await self.mcp_client.register_tools_schema(ToolsSchema(standard_tools=hass), service)
             logger.info(f"✅ Registered {len(hass)} MCP tool handlers")
             if dorrens and self.dorr_client is not None:  # each tool is called on the client it came from

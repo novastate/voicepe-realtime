@@ -3,6 +3,8 @@
 The agent holds no list of the door's tools: `tools/list` is asked each time a session is built, so a change in comms
 shows on the next wake with no change here.
 """
+from types import SimpleNamespace
+
 import pytest
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
@@ -29,6 +31,27 @@ class _Klient:
 
     async def register_tools_schema(self, schema, service):
         self.registrerat.append([f.name for f in schema.standard_tools])
+
+
+class _RegistrerandeKlient(_Klient):
+    async def register_tools_schema(self, schema, service):
+        await super().register_tools_schema(schema, service)
+
+        async def _noop(params):
+            await params.result_callback({"ok": True})
+
+        for tool in schema.standard_tools:
+            service.register_function(tool.name, _noop)
+
+
+def _service():
+    service = SimpleNamespace(_functions={})
+
+    def register_function(name, handler, *args, **kwargs):
+        service._functions[name] = SimpleNamespace(handler=handler)
+
+    service.register_function = register_function
+    return service
 
 
 def _app(ha, dorr=None):
@@ -139,3 +162,38 @@ async def test_tva_sessioner_far_var_sin_uppdelning():
     app.mcp_client, app.dorr_client = ha, dorr
     await app._register_ha_handlers(object(), a, "kontoret")
     assert dorr.registrerat == [["lage_drift"]] and ha.registrerat == [["HassTurnOn"]]
+
+
+@pytest.mark.asyncio
+async def test_dolt_ha_verktyg_registreras_inte(monkeypatch):
+    monkeypatch.delenv("TOOL_DENY", raising=False)
+    app = _app(_RegistrerandeKlient())
+    service = _service()
+    schema = _schema("HassSetPosition", "HassTurnOn")
+    await app._register_ha_handlers(service, schema, "kontoret")
+    assert "HassTurnOn" in service._functions
+    assert "HassSetPosition" not in service._functions
+    assert "intent__HassSetPosition" not in service._functions
+
+
+@pytest.mark.asyncio
+async def test_tool_deny_dash_registrerar_aven_tidigare_dolt(monkeypatch):
+    monkeypatch.setenv("TOOL_DENY", "-")
+    app = _app(_RegistrerandeKlient())
+    service = _service()
+    schema = _schema("HassSetPosition", "HassTurnOn")
+    await app._register_ha_handlers(service, schema, "kontoret")
+    assert "HassTurnOn" in service._functions
+    assert "HassSetPosition" in service._functions
+
+
+@pytest.mark.asyncio
+async def test_allowlist_styr_vilka_ha_handlers_som_registreras(monkeypatch):
+    monkeypatch.setenv("TOOL_DENY", "-")
+    app = _app(_RegistrerandeKlient())
+    app.mcp_tool_allowlist = ["HassTurnOn"]
+    service = _service()
+    schema = _schema("HassSetPosition", "HassTurnOn")
+    await app._register_ha_handlers(service, schema, "kontoret")
+    assert "HassTurnOn" in service._functions
+    assert "HassSetPosition" not in service._functions
