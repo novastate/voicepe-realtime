@@ -1,11 +1,14 @@
 """US-060 AC-17/AC-18 (Henrik 2026-10-17): the stop-word guard over his reply. A stop word cuts him at once; a back-channel never."""
 import asyncio
+import logging
 
 import pytest
 from pipecat.frames.frames import InputAudioRawFrame, InterruptionFrame, UserStartedSpeakingFrame
 
 from app import eko_vakt
 from test_gemini_egen_tur import _bygg
+from test_gemini_provider import OPENAI_SHAPE, _ScriptedTurns, _options, _wire
+from app.providers import build_service
 
 HANS = "Det här är ett ljudprov på svenska. Jag berättar en lång historia om ett gammalt torp i skogen."
 
@@ -191,3 +194,18 @@ async def test_a_short_stop_word_that_ended_before_the_verdict_still_closes_the_
     service._avbrott_t = _t.monotonic() - 2.0     # the 1.2 s without local speech have passed
     await service._send_user_audio(_hogt(100))
     assert any(isinstance(f, UserStoppedSpeakingFrame) for f in pushed)
+
+
+@pytest.mark.asyncio
+async def test_held_turn_fates_are_logged_for_answer_and_drop(monkeypatch, caplog):
+    service = build_service("gemini", _options(), OPENAI_SHAPE)
+    _wire(service, _ScriptedTurns([None]))
+    caplog.set_level(logging.INFO)
+    service._held = [_hogt(1), _hogt(2)]
+    await service.answer_turn()
+    service._held = [_hogt(3), _hogt(4)]
+    await service.drop_turn()
+
+    rader = [r.getMessage() for r in caplog.records if "🧾" in r.getMessage()]
+    assert any("sent to Gemini as audio" in r for r in rader)
+    assert any("decide drop" in r for r in rader)

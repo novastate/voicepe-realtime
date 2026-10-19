@@ -446,7 +446,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         if held is None and self._forts is not None:
             # The first turn's decision ended (a miss or a ping, not drop_turn) while the continuation was being
             # collected: the continuation is the held turn now and goes on through the branch below.
-            held = self._held = self._forts
+            held = self._start_held_turn(self._forts, "continuation")
             self._forts = None
             if event == "start" and self.on_user_turn_start is not None:
                 self.on_user_turn_start()
@@ -491,8 +491,8 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             if self.on_user_turn_start is not None:
                 self.on_user_turn_start()
             if self.on_user_turn_end is not None:
-                self._held = [type(frame)(audio=preroll, sample_rate=frame.sample_rate,
-                                          num_channels=frame.num_channels), frame]
+                self._start_held_turn([type(frame)(audio=preroll, sample_rate=frame.sample_rate,
+                                                   num_channels=frame.num_channels), frame], "local-vad")
                 return
             self._activity_open = True
             logger.debug("🎙️ local VAD: speech → activityStart")
@@ -774,7 +774,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         if self.on_user_turn_start is not None:
             self.on_user_turn_start()
         if self.on_user_turn_end is not None:
-            self._held = list(frames)
+            self._start_held_turn(list(frames), "barge-in")
             if slut:
                 self._avgjord = True
                 self._tider_start()
@@ -813,7 +813,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             await asyncio.wait({task})
         if getattr(self, "_held", None) is not None:  # something else took the turn meanwhile
             return
-        self._held = frames
+        self._start_held_turn(frames, "follow-up")
         self._avgjord = True
         self._tider_start()
         await self.push_frame(UserStoppedSpeakingFrame())
@@ -878,6 +878,37 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             return None
         return sum(len(f.audio) / (2 * (f.sample_rate or 16000)) for f in held)
 
+    _held_turn_seq = 0
+    _held_turn_id = None
+
+    @staticmethod
+    def _held_stats(frames) -> tuple[int, float]:
+        n = len(frames or [])
+        s = sum(len(f.audio) / (2 * (f.sample_rate or 16000)) for f in (frames or []))
+        return n, s
+
+    def _held_label(self, turn_id, frames) -> str:
+        n, s = self._held_stats(frames)
+        nr = "?" if turn_id is None else turn_id
+        return f"turn#{nr} {n}f/{s:.2f}s"
+
+    def _start_held_turn(self, frames, source: str):
+        self._held_turn_seq += 1
+        self._held_turn_id = self._held_turn_seq
+        self._held = frames
+        efter_klipp = bool(self._stopp_tyst or self._genererar)
+        logger.info(
+            f"🧾 {self._held_label(self._held_turn_id, frames)} held start {source} "
+            f"({'after cut' if efter_klipp else 'normal'})"
+        )
+        return frames
+
+    def _take_held_turn(self):
+        held, turn_id = getattr(self, "_held", None), self._held_turn_id
+        self._held = None
+        self._held_turn_id = None
+        return held, turn_id
+
     def _decide_turn(self) -> None:
         """Run bana 0's decision once per held turn, off the audio path."""
         if self._turn_end_task is None or self._turn_end_task.done():
@@ -917,16 +948,23 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
 
     async def answer_turn(self) -> None:
         """Bana 0 missed: give Google the held turn and let the model answer."""
-        held, self._held = getattr(self, "_held", None), None
+        held, turn_id = self._take_held_turn()
         if not held:
             return
+        logger.info(f"🧾 {self._held_label(turn_id, held)} decide miss(audio)")
         if not await self._vaken_for_tur():
+            logger.info(f"🧾 {self._held_label(turn_id, held)} abandoned: engine did not wake")
             return
         self._turn_rescue = (list(held), time.monotonic())
+        activity_open = bool(self._activity_open)
         await self._send_activity(activity_start=ActivityStart())
         for frame in held:
             await self._send_pcm(frame, frame.audio)
         await self._end_activity()
+        logger.info(
+            f"🧾 {self._held_label(turn_id, held)} sent to Gemini as audio, "
+            f"{len(held)} frames (activity_open={activity_open})"
+        )
 
     # The audio of the turn the model was last asked to answer, until it has begun to answer (first
     # sound), acted (a tool call) or finished. If the device's link drops in between, the handler
@@ -962,11 +1000,13 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         Live 2026-10-09: Gemini heard 'Kan du ta den på toalettet kanske?' where the
         local STT, on the same audio, got 'Kan du tända kontoret kanske?'. The reply
         is still audio; only the model's ears change."""
-        held, self._held = getattr(self, "_held", None), None
+        held, turn_id = self._take_held_turn()
         if not held:
             logger.warning("⚠️ bana0: the locally heard text had no held turn to answer; nothing was sent")
             return
+        logger.info(f"🧾 {self._held_label(turn_id, held)} decide text")
         if not await self._vaken_for_tur():
+            logger.info(f"🧾 {self._held_label(turn_id, held)} abandoned: engine did not wake")
             return
         # Variant B (2026-10-09 10:30): text on its own, no activity signals. Variant A
         # (activityStart, text, activityEnd) made Google close the socket: 1007 'Precondition
@@ -974,8 +1014,9 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         await self._send_activity(text=text)
         self._reply_awaited_at = time.monotonic()
         self.arm_silence_ack()
+        logger.info(f"🧾 {self._held_label(turn_id, held)} sent as text")
 
-    async def drop_turn(self) -> None:
+    async def drop_turn(self, skal: Optional[str] = None) -> None:
         """Forget the current turn: held audio, or an activity already open.
 
         An open activity is abandoned without an activityEnd, so the model is
@@ -988,7 +1029,13 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         if self._activity_open:
             logger.info("🧽 open Gemini activity abandoned (device dropped the input)")
         forts, self._forts = getattr(self, "_forts", None), None
-        self._held = None
+        held, turn_id = self._take_held_turn()
+        if held:
+            logger.info(f"🧾 {self._held_label(turn_id, held)} decide drop")
+            logger.info(
+                f"🧾 {self._held_label(turn_id, held)} abandoned"
+                f"{f': {skal}' if skal else ''}"
+            )
         self._vantar = False
         self._turn_rescue = None
         self._activity_open = False
