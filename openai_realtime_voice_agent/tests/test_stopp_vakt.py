@@ -5,6 +5,7 @@ import pytest
 from pipecat.frames.frames import InputAudioRawFrame, InterruptionFrame, UserStartedSpeakingFrame
 
 from app import eko_vakt
+from test_gemini_provider import _kinds
 from test_gemini_egen_tur import _bygg
 
 HANS = "Det här är ett ljudprov på svenska. Jag berättar en lång historia om ett gammalt torp i skogen."
@@ -105,6 +106,85 @@ async def test_a_local_cut_while_the_engine_generates_sends_interrupt_and_keeps_
     await service._send_user_audio(_hogt(120))  # follow-up speech after the cut
     assert any("activity_start" in kw for kw in sent)   # the old generation is interrupted
     assert len([kw for kw in sent if "audio" in kw]) == before + 1  # follow-up speech still reaches the engine
+
+
+@pytest.mark.asyncio
+async def test_clip_owned_activity_is_reused_by_answer_turn_with_one_start(monkeypatch):
+    service, sent, _ = _bygg(monkeypatch, ["start"] + [None] * 8)
+    service._genererar = True
+    service._held = [_hogt(301)]
+
+    async def inget():
+        return None
+    service._handle_interruption = inget
+
+    await service._stopp_klipp(0.05)
+    await service.answer_turn()
+    assert _kinds(sent) == ["start", "audio", "end"]
+
+
+@pytest.mark.asyncio
+async def test_clip_then_answer_turn_text_goes_via_audio_path_not_text_only(monkeypatch):
+    service, sent, _ = _bygg(monkeypatch, ["start"] + [None] * 8)
+    service._genererar = True
+    service._held = [_hogt(302)]
+
+    async def inget():
+        return None
+    service._handle_interruption = inget
+
+    await service._stopp_klipp(0.05)
+    await service.answer_turn_text("x")
+    assert _kinds(sent) == ["start", "audio", "end"]
+    assert not any("text" in kw for kw in sent)
+
+
+@pytest.mark.asyncio
+async def test_clip_does_not_send_new_start_when_activity_is_already_open(monkeypatch):
+    service, sent, _ = _bygg(monkeypatch, ["start"] + [None] * 8)
+    service._genererar = True
+    service._activity_open = True
+
+    async def inget():
+        return None
+    service._handle_interruption = inget
+
+    await service._stopp_klipp(0.05)
+    assert not any("activity_start" in kw for kw in sent)
+    assert service._klipp_aktivitet is False
+
+
+@pytest.mark.asyncio
+async def test_clip_without_generation_sends_no_activity_start(monkeypatch):
+    service, sent, _ = _bygg(monkeypatch, ["start"] + [None] * 8)
+    service._genererar = False
+
+    async def inget():
+        return None
+    service._handle_interruption = inget
+
+    await service._stopp_klipp(0.05)
+    assert not any("activity_start" in kw for kw in sent)
+    assert service._klipp_aktivitet is False
+
+
+@pytest.mark.asyncio
+async def test_drop_turn_after_clip_resets_flags_and_next_answer_turn_starts_fresh(monkeypatch):
+    service, sent, _ = _bygg(monkeypatch, ["start"] + [None] * 8)
+    service._genererar = True
+
+    async def inget():
+        return None
+    service._handle_interruption = inget
+
+    await service._stopp_klipp(0.05)
+    assert service._activity_open is True and service._klipp_aktivitet is True
+    await service.drop_turn()
+    assert service._activity_open is False and service._klipp_aktivitet is False
+    mark = len(sent)
+    service._held = [_hogt(303)]
+    await service.answer_turn()
+    assert _kinds(sent[mark:]) == ["start", "audio", "end"]
 
 
 @pytest.mark.asyncio

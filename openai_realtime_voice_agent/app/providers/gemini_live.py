@@ -378,6 +378,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
     # Google's automatic activity detection, the pre-0.22.5 behaviour.
     _turns: Optional[LocalTurns] = None
     _activity_open = False
+    _klipp_aktivitet = False
 
     # Bana 0 (raawr US-016), same hooks as the OpenAI service. With
     # on_user_turn_end set, a turn's audio is HELD here instead of streamed:
@@ -649,7 +650,9 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         self._stopp_tyst = avbryt_generering   # the engine has already sent the whole reply: nothing more is on its way
         if self.on_stopp_klipp is not None:
             self.on_stopp_klipp(self._stopp_tyst)
-        if avbryt_generering:
+        if avbryt_generering and not self._activity_open:
+            self._activity_open = True
+            self._klipp_aktivitet = True
             await self._send_activity(activity_start=ActivityStart())
         await self._handle_interruption()
         await self.push_frame(InterruptionFrame())
@@ -795,6 +798,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
 
     async def _end_activity(self) -> None:
         self._activity_open = False
+        self._klipp_aktivitet = False
         self._answer_after_tool = False  # a new question; the old step is moot
         self._reply_awaited_at = time.monotonic()
         logger.debug("🎙️ local VAD: silence → activityEnd")
@@ -926,10 +930,13 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         if not await self._vaken_for_tur():
             return
         self._turn_rescue = (list(held), time.monotonic())
-        await self._send_activity(activity_start=ActivityStart())
+        if not self._activity_open:
+            self._activity_open = True
+            await self._send_activity(activity_start=ActivityStart())
         for frame in held:
             await self._send_pcm(frame, frame.audio)
         await self._end_activity()
+        self._klipp_aktivitet = False
 
     # The audio of the turn the model was last asked to answer, until it has begun to answer (first
     # sound), acted (a tool call) or finished. If the device's link drops in between, the handler
@@ -971,6 +978,10 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             return
         if not await self._vaken_for_tur():
             return
+        if self._klipp_aktivitet:
+            self._held = held
+            await self.answer_turn()
+            return
         # Variant B (2026-10-09 10:30): text on its own, no activity signals. Variant A
         # (activityStart, text, activityEnd) made Google close the socket: 1007 'Precondition
         # check failed'.
@@ -986,8 +997,8 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         """
         # ponytail: whether Google accepts the next activityStart without an
         # activityEnd for the abandoned one is unmeasured; a refusal surfaces
-        # as a reconnect in the journal. Bana 0 holds instead of streaming so
-        # its hits never take this path.
+        # as a reconnect in the journal. Bana 0 holds instead of streaming, but
+        # a stop-word clip may still open and then abandon an activity here.
         if self._activity_open:
             logger.info("🧽 open Gemini activity abandoned (device dropped the input)")
         forts, self._forts = getattr(self, "_forts", None), None
@@ -995,6 +1006,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         self._vantar = False
         self._turn_rescue = None
         self._activity_open = False
+        self._klipp_aktivitet = False
         # A continuation being collected (see _fortsatt) is not the dropped turn: the reset below makes the
         # detector open it again, so what was said of it so far goes back in as the pre-roll.
         self._preroll = bytearray(b"".join(f.audio for f in forts)) if forts else bytearray()
@@ -1128,6 +1140,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         """A new socket knows nothing of an activity the old one had open."""
         self.vagran = None
         self._activity_open = False
+        self._klipp_aktivitet = False
         self._answer_after_tool = False
         self._preroll = bytearray()
         if self._turns is not None:
