@@ -645,9 +645,12 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
     async def _stopp_klipp(self, ms_s: float) -> None:
         logger.info(f"🛑 stop word over his reply: cut, {ms_s * 1000:.0f} ms after the speech began (to the decision)")
         self._logg_avbruten_text("stoppvakten")
-        self._stopp_tyst = self._genererar   # the engine has already sent the whole reply: nothing more is on its way
+        avbryt_generering = self._genererar
+        self._stopp_tyst = avbryt_generering   # the engine has already sent the whole reply: nothing more is on its way
         if self.on_stopp_klipp is not None:
             self.on_stopp_klipp(self._stopp_tyst)
+        if avbryt_generering:
+            await self._send_activity(activity_start=ActivityStart())
         await self._handle_interruption()
         await self.push_frame(InterruptionFrame())
         self._fas_talar = True

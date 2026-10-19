@@ -59,7 +59,8 @@ async def test_a_stop_word_over_his_reply_cuts_him(monkeypatch):
     assert len(anrop) == 1 and anrop[0] >= 0.6 * 32000        # written out once, after >= 0.6 s of speech
     assert any(isinstance(f, InterruptionFrame) for f in pushed) and any(isinstance(f, UserStartedSpeakingFrame) for f in pushed)
     assert klipp == [True]                                    # the engine is still generating: the tail is muted
-    assert len(sent) == 37                                    # the engine still hears all of it
+    assert len([kw for kw in sent if "audio" in kw]) == 37    # the engine still hears all of it
+    assert len([kw for kw in sent if "activity_start" in kw]) == 1
 
 
 @pytest.mark.asyncio
@@ -94,6 +95,16 @@ async def test_the_tail_is_not_muted_when_the_engine_has_sent_it_all(monkeypatch
     service, sent, pushed = _bygg(monkeypatch, ["start"] + [None] * 60)
     anrop, klipp = await _tala(service, "stopp", genererar=False)
     assert klipp == [False]    # a mute that outlives the reply would swallow the answer to the next question
+
+
+@pytest.mark.asyncio
+async def test_a_local_cut_while_the_engine_generates_sends_interrupt_and_keeps_follow_up_audio(monkeypatch):
+    service, sent, pushed = _bygg(monkeypatch, ["start"] + [None] * 80)
+    await _tala(service, "stopp", genererar=True)
+    before = len([kw for kw in sent if "audio" in kw])
+    await service._send_user_audio(_hogt(120))  # follow-up speech after the cut
+    assert any("activity_start" in kw for kw in sent)   # the old generation is interrupted
+    assert len([kw for kw in sent if "audio" in kw]) == before + 1  # follow-up speech still reaches the engine
 
 
 @pytest.mark.asyncio
