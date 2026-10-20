@@ -14,7 +14,10 @@ from tests.test_ha_misslyckades import _call, _service
                                       ("intent__HassTurnOff", {"floor": "Övervåningen"}),
                                       ("rost__anvand_verktyg", {"namn": "HassTurnOn", "argument": {"area": "Kontor"}}),
                                       ("intent__HassTurnOn", {"area": "Kontor", "domain": []}),
-                                      ("intent__HassTurnOn", {"area": "Kontor", "name": "  "})])
+                                      ("intent__HassTurnOn", {"area": "Kontor", "name": "  "}),
+                                      ("intent__HassTurnOn", {"area": "Kontor", "domain": [""]}),
+                                      ("intent__HassTurnOn", {"area": "Kontor", "name": ["", " "]}),
+                                      ("rost__anvand_verktyg", {"namn": "HassTurnOn", "argument": '{"area": "Kontor"}'})])
 def test_ett_omrade_utan_doman_nekas(namn, arg):
     assert bana0.omrade_utan_doman(namn, arg) is not None
 
@@ -27,7 +30,8 @@ def test_ett_omrade_utan_doman_nekas(namn, arg):
                                       ("intent__GetLiveContext", {"area": "Kontor"}),
                                       ("intent__HassLightSet", {"area": "Kontor", "brightness": 50}),
                                       ("styr", {"vad": "kontoret"}),
-                                      ("intent__HassTurnOn", {})])
+                                      ("intent__HassTurnOn", {}),
+                                      ("rost__anvand_verktyg", {"namn": "HassTurnOn", "argument": '{"area": "Kontor", "domain": ["light"]}'})])
 def test_ett_smalt_eller_annat_anrop_ar_orort(namn, arg):
     assert bana0.omrade_utan_doman(namn, arg) is None
 

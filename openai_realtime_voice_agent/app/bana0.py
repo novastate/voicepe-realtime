@@ -183,13 +183,24 @@ def omrade_utan_doman(namn: str, argument: Optional[dict]) -> Optional[str]:
     arg = argument or {}
     if bas == "anvand_verktyg":
         bas = str(arg.get("namn", "")).rsplit("__", 1)[-1]
-        arg = arg.get("argument") if isinstance(arg.get("argument"), dict) else {}
+        inre = arg.get("argument")
+        if isinstance(inre, str):  # the inner arguments may arrive as a JSON string
+            import json
+            try:
+                inre = json.loads(inre)
+            except ValueError:
+                inre = {}
+        arg = inre if isinstance(inre, dict) else {}
     if bas not in OMRADE_UTAN_DOMAN:
         return None
 
     def satt(nyckel: str) -> bool:
         v = arg.get(nyckel)
-        return bool(v) if not isinstance(v, str) else v.strip() != ""
+        if isinstance(v, str):
+            return v.strip() != ""
+        if isinstance(v, (list, tuple)):  # a list counts only when some element is a non-empty string
+            return any(isinstance(e, str) and e.strip() != "" for e in v)
+        return bool(v)
 
     if (satt("area") or satt("floor")) and not (satt("name") or satt("domain") or satt("device_class")):
         return ("ignored: an area or floor with no domain would switch EVERYTHING there. Say which kind: call it again "
