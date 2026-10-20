@@ -427,14 +427,13 @@ class ToolRegistrationMixin:
                 if not callback_used:
                     try:
                         await params.result_callback(
-                            {"error": f"Verktyget misslyckades: {type(e).__name__}. Säg till användaren att det inte blev gjort."}
+                            {"error": f"Verktyget gav ett fel ({type(e).__name__}). Säg till användaren att det inte gick att bekräfta att det blev gjort, och påstå aldrig att det är klart."}
                         )
                     except Exception as cb_error:
                         logger.warning(f"⚠️ {function_name}: result_callback failed after tool exception: {cb_error!r}")
                         log_timing("fel")
                         raise e
-                    log_timing("fel")
-                    return
+                    return  # capped_callback has logged the outcome ("fel") once
                 log_timing("fel")
                 raise
             except BaseException:
