@@ -163,6 +163,8 @@ def andrar(namn: str, argument: Optional[dict], lasande: Optional[dict] = None) 
     genom = bas == "anvand_verktyg"
     if genom:  # comms' generic tool (raawr US-089): judged by the tool it runs
         bas = str((argument or {}).get("namn", "")).rsplit("__", 1)[-1]
+    if bas in SKRIV_VERKTYG:
+        return True
     if bas in lasande:
         return not lasande[bas]
     return genom or bas in SKRIV_VERKTYG

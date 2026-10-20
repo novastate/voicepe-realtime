@@ -57,12 +57,25 @@ def lasande_ur(svar) -> dict:
     """{tool: readOnlyHint} from a las_skill answer (raawr US-103), {} when it is not one: the voice guard learns
     there what anvand_verktyg may run on a question."""
     import json
+    from app.bana0 import SKRIV_VERKTYG
     try:
         data = svar if isinstance(svar, dict) else json.loads(svar)
         if isinstance(data, dict) and isinstance(data.get("result"), (str, dict)) and "verktyg" not in data:
             data = data["result"] if isinstance(data["result"], dict) else json.loads(data["result"])
-        return {str(v["namn"]): bool(v["readOnlyHint"]) for v in data.get("verktyg", [])
-                if isinstance(v, dict) and "namn" in v and isinstance(v.get("readOnlyHint"), bool)}
+        lasande, varnade = {}, set()
+        for v in data.get("verktyg", []):
+            if not isinstance(v, dict) or "namn" not in v or not isinstance(v.get("readOnlyHint"), bool):
+                continue
+            namn = str(v["namn"])
+            bas = namn.rsplit("__", 1)[-1]
+            las = bool(v["readOnlyHint"])
+            if bas in SKRIV_VERKTYG and las:
+                if bas not in varnade:
+                    logger.warning(f"las_skill påstod readOnlyHint för skrivande verktyg {bas}: ignorerat")
+                    varnade.add(bas)
+                continue
+            lasande[namn] = las
+        return lasande
     except (ValueError, TypeError, AttributeError):
         return {}
 
