@@ -396,6 +396,11 @@ class ToolRegistrationMixin:
                     logger.warning(f"🛡️ tool {function_name} NOT run: {nej}")
                     await params.result_callback({"result": nej})
                     return
+                for_brett = bana0.omrade_utan_doman(function_name, getattr(params, "arguments", None))
+                if for_brett:  # G finding 20: an area-wide turn on/off without a domain switches everything there
+                    logger.warning(f"🛡️ tool {function_name} NOT run: {for_brett}")
+                    await params.result_callback({"result": for_brett})
+                    return
                 # Speaker gate (fork): tools listed in male_only_tools only execute
                 # when the last voice-type verdict is "male". Enforced HERE — below
                 # the model — so prompt tricks can't bypass it. Fails closed on

@@ -231,13 +231,13 @@ async def test_a_tool_waits_for_a_guard_that_is_a_coroutine():
     async def nej():
         return "ignored: echo"
     service.verktygsvakt = nej
-    got = await _call(service, "intent__HassTurnOn", {"area": "hall"})
+    got = await _call(service, "intent__HassTurnOn", {"area": "hall", "domain": ["light"]})
     assert ran == [] and "ignored" in str(got)
 
     async def ja():
         return None
     service.verktygsvakt = ja
-    await _call(service, "intent__HassTurnOn", {"area": "hall"})
+    await _call(service, "intent__HassTurnOn", {"area": "hall", "domain": ["light"]})
     assert ran == ["intent__HassTurnOn"]
 
 
