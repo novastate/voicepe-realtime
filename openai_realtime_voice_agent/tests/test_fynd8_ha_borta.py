@@ -100,7 +100,7 @@ async def test_misslyckad_hamtning_fylls_vid_nasta_vakning():
     assert service.sover is True
     assert service._uppkopplad_sedan is None
     assert booked == []
-    assert app.mcp_client.registered == [["HassTurnOn", "HassMediaSearchAndPlay"]]
+    assert app.mcp_client.registered == [["HassTurnOn"]]
 
 
 @pytest.mark.asyncio

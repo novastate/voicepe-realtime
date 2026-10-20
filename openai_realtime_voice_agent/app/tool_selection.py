@@ -8,8 +8,8 @@ music, timers, calendar, lists and notes, weather, time, GetLiveContext,
 delegation and web search -- and not every intent HA happens to expose.
 
 Matched on the base name: comms hands tools out as `<domain>__<name>`, HA
-itself bare. Hidden is not disabled: pipecat still registers a handler for
-every MCP tool, the model just is not offered it.
+itself bare. Hidden is disabled in both places: not offered to the model and
+not registered as an MCP handler.
 
 ponytail: a static list per house. When the tools come from one registry in
 comms (raawr US-021) this list moves there and this module goes.
