@@ -424,6 +424,7 @@ class ToolRegistrationMixin:
                 return await handler(params)
             except Exception as e:
                 utfall = "fel"
+                logger.warning(f"⚠️ {function_name} kastade: {e!r}", exc_info=True)  # the model only gets the type name
                 if not callback_used:
                     try:
                         await params.result_callback(

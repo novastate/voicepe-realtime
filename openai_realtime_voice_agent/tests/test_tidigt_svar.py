@@ -107,6 +107,9 @@ async def test_handler_exception_before_callback_sends_safe_error_and_logs_only_
     assert "ValueError" in results[0]["error"]
     assert "hemlig" not in results[0]["error"]
     assert [(n, s) for n, _, s in _timings(caplog)] == [("search_home", "fel")]
+    # The model only gets the type name; the journal keeps the real text and trace, once.
+    kastade = [r for r in caplog.records if "search_home kastade" in r.getMessage()]
+    assert len(kastade) == 1 and "hemlig" in kastade[0].getMessage() and kastade[0].exc_info
 
 
 @pytest.mark.asyncio
