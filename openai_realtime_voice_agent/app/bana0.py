@@ -170,6 +170,44 @@ def andrar(namn: str, argument: Optional[dict], lasande: Optional[dict] = None) 
     return genom or bas in SKRIV_VERKTYG
 
 
+# Home Assistant's HassTurnOn/HassTurnOff act on EVERYTHING in an area or floor that supports it when nothing narrows the call
+# (lights, switches, fans, covers: "open"). The house wants a light. G's review 2026-10-18, finding 20: nothing in the tool
+# schema requires a domain, name or device class, so the model could send {area} alone.
+OMRADE_UTAN_DOMAN = frozenset({"HassTurnOn", "HassTurnOff"})
+
+
+def omrade_utan_doman(namn: str, argument: Optional[dict]) -> Optional[str]:
+    """Why an area- or floor-wide turn on/off must not run, or None: it names an area/floor but no domain, name or
+    device class, so HA would switch everything there. Also judged through anvand_verktyg (the inner call's arguments)."""
+    bas = namn.rsplit("__", 1)[-1]
+    arg = argument or {}
+    if bas == "anvand_verktyg":
+        bas = str(arg.get("namn", "")).rsplit("__", 1)[-1]
+        inre = arg.get("argument")
+        if isinstance(inre, str):  # the inner arguments may arrive as a JSON string
+            import json
+            try:
+                inre = json.loads(inre)
+            except ValueError:
+                inre = {}
+        arg = inre if isinstance(inre, dict) else {}
+    if bas not in OMRADE_UTAN_DOMAN:
+        return None
+
+    def satt(nyckel: str) -> bool:
+        v = arg.get(nyckel)
+        if isinstance(v, str):
+            return v.strip() != ""
+        if isinstance(v, (list, tuple)):  # a list counts only when some element is a non-empty string
+            return any(isinstance(e, str) and e.strip() != "" for e in v)
+        return bool(v)
+
+    if (satt("area") or satt("floor")) and not (satt("name") or satt("domain") or satt("device_class")):
+        return ("ignored: an area or floor with no domain would switch EVERYTHING there. Say which kind: call it again "
+                "with domain ['light'] (or the device's name). Do not switch the whole area.")
+    return None
+
+
 def fraga_inte_order(turtext: Optional[str], namn: str, argument: Optional[dict],
                      lasande: Optional[dict] = None) -> Optional[str]:
     """Why a changing tool must not run on this turn, or None: the turn (bana 0's local text) was a question."""

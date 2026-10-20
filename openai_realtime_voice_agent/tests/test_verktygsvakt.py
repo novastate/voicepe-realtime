@@ -34,10 +34,10 @@ async def test_a_tool_does_not_run_when_the_guard_says_no_and_runs_when_it_does_
 
     service.register_function("intent__HassTurnOn", tool)
     service.verktygsvakt = lambda: "ignored: echo"
-    got = await _call(service, "intent__HassTurnOn", {"area": "hall"})
+    got = await _call(service, "intent__HassTurnOn", {"area": "hall", "domain": ["light"]})
     assert ran == [] and "ignored" in str(got)
     service.verktygsvakt = lambda: None
-    await _call(service, "intent__HassTurnOn", {"area": "hall"})
+    await _call(service, "intent__HassTurnOn", {"area": "hall", "domain": ["light"]})
     assert ran == ["intent__HassTurnOn"]
 
 
