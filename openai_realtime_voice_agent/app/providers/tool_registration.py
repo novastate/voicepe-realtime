@@ -312,6 +312,7 @@ class ToolRegistrationMixin:
             # handed back -- that is what the person in the room waits for.
             started = time.monotonic()
             logged = False
+            utfall = "ok"
             ack_speaking = False
             if getattr(self, "tider", None) is not None:
                 self.tider.mark("verktyg")
@@ -351,9 +352,16 @@ class ToolRegistrationMixin:
 
             # Capped here, below every engine and every tool, MCP included.
             original_callback = params.result_callback
+            callback_used = False
             max_chars = _result_max_chars()
 
+            async def tracked_callback(result, *args, **kwargs):
+                nonlocal callback_used
+                callback_used = True
+                return await original_callback(result, *args, **kwargs)
+
             async def capped_callback(result, *args, **kwargs):
+                nonlocal utfall
                 stop_waiting_ack()
                 if function_name.rsplit("__", 1)[-1] == "las_skill":  # what anvand_verktyg may run on a question
                     self.lasande = {**(getattr(self, "lasande", None) or {}), **skills.lasande_ur(result)}
@@ -361,8 +369,9 @@ class ToolRegistrationMixin:
                 if fel is not None:
                     logger.warning(f"⚠️ {function_name}: Home Assistant says failed: {', '.join(fel['failed'])}")
                     result = fel
-                log_timing("fel" if _is_error(result) else "ok")
-                return await original_callback(cap_tool_result(result, max_chars), *args, **kwargs)
+                utfall = "fel" if _is_error(result) else "ok"
+                log_timing(utfall)
+                return await tracked_callback(cap_tool_result(result, max_chars), *args, **kwargs)
 
             params.result_callback = capped_callback
             if self.turn_liveness is not None:
@@ -413,12 +422,29 @@ class ToolRegistrationMixin:
                         params.function_name, params.arguments = ny, paus[1]
                         return await self._ra_handlers[ny](params)
                 return await handler(params)
+            except Exception as e:
+                utfall = "fel"
+                logger.warning(f"⚠️ {function_name} kastade: {e!r}", exc_info=True)  # the model only gets the type name
+                if not callback_used:
+                    try:
+                        await params.result_callback(
+                            {"error": f"Verktyget gav ett fel ({type(e).__name__}). Säg till användaren att det inte gick att bekräfta att det blev gjort, och påstå aldrig att det är klart."}
+                        )
+                    except Exception as cb_error:
+                        logger.warning(f"⚠️ {function_name}: result_callback failed after tool exception: {cb_error!r}")
+                        log_timing("fel")
+                        raise e
+                    return  # capped_callback has logged the outcome ("fel") once
+                log_timing("fel")
+                raise
             except BaseException:
+                utfall = "fel"
                 log_timing("fel")
                 raise
             finally:
                 stop_waiting_ack()
-                log_timing("ok")
+                if utfall != "fel":
+                    log_timing("ok")
                 if self.turn_liveness is not None:
                     self.turn_liveness.tool_finished()
 

@@ -10,7 +10,7 @@ import asyncio
 import logging
 import re
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from pipecat.frames.frames import BotStartedSpeakingFrame, BotStoppedSpeakingFrame
@@ -85,12 +85,110 @@ async def test_failed_tool_logs_fel(caplog):
         await params.result_callback({"error": "HA svarade inte"})
 
     async def raises(params):
+        await params.result_callback({"error": "började"})
         raise RuntimeError("boom")
 
     await _call(service, "play_media", errors)
     with pytest.raises(RuntimeError):
         await _call(service, "search_home", raises)
     assert [(n, s) for n, _, s in _timings(caplog)] == [("play_media", "fel"), ("search_home", "fel")]
+
+
+@pytest.mark.asyncio
+async def test_handler_exception_before_callback_sends_safe_error_and_logs_only_fel(caplog):
+    caplog.set_level(logging.INFO)
+    service = _service(GEMINI)
+
+    async def fails(params):
+        raise ValueError("hemlig")
+
+    results = await _call(service, "search_home", fails)
+    assert len(results) == 1
+    assert "ValueError" in results[0]["error"]
+    assert "hemlig" not in results[0]["error"]
+    assert [(n, s) for n, _, s in _timings(caplog)] == [("search_home", "fel")]
+    # The model only gets the type name; the journal keeps the real text and trace, once.
+    kastade = [r for r in caplog.records if "search_home kastade" in r.getMessage()]
+    assert len(kastade) == 1 and "hemlig" in kastade[0].getMessage() and kastade[0].exc_info
+
+
+@pytest.mark.asyncio
+async def test_handler_exception_after_callback_is_raised_and_callback_is_not_repeated():
+    service = _service(GEMINI)
+
+    async def partial_then_fail(params):
+        await params.result_callback({"result": "klart"})
+        raise RuntimeError("boom")
+
+    service.register_function("play_media", partial_then_fail)
+    results = []
+
+    async def result_callback(result, *a, **k):
+        results.append(result)
+
+    params = SimpleNamespace(arguments={}, result_callback=result_callback, function_name="play_media")
+    with pytest.raises(RuntimeError):
+        await service._functions["play_media"].handler(params)
+    assert results == [{"result": "klart"}]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_error_propagates_without_callback():
+    service = _service(GEMINI)
+
+    async def cancelled(params):
+        raise asyncio.CancelledError()
+
+    service.register_function("cancel_me", cancelled)
+    results = []
+
+    async def result_callback(result, *a, **k):
+        results.append(result)
+
+    params = SimpleNamespace(arguments={}, result_callback=result_callback, function_name="cancel_me")
+    with pytest.raises(asyncio.CancelledError):
+        await service._functions["cancel_me"].handler(params)
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_success_logs_ok_without_fel(caplog):
+    caplog.set_level(logging.INFO)
+    service = _service(GEMINI)
+
+    async def works(params):
+        await params.result_callback({"result": "ok"})
+
+    await _call(service, "intent__HassTurnOn", works)
+    assert [(n, s) for n, _, s in _timings(caplog)] == [("intent__HassTurnOn", "ok")]
+
+
+@pytest.mark.asyncio
+async def test_tool_finished_runs_in_every_outcome():
+    service = _service(GEMINI)
+    service.turn_liveness = TurnLiveness()
+    service.turn_liveness.tool_finished = Mock(wraps=service.turn_liveness.tool_finished)
+
+    async def before_callback_error(params):
+        raise ValueError("hemlig")
+
+    async def after_callback_error(params):
+        await params.result_callback({"result": "klart"})
+        raise RuntimeError("boom")
+
+    async def cancelled(params):
+        raise asyncio.CancelledError()
+
+    async def success(params):
+        await params.result_callback({"result": "ok"})
+
+    await _call(service, "fail_before", before_callback_error)
+    with pytest.raises(RuntimeError):
+        await _call(service, "fail_after", after_callback_error)
+    with pytest.raises(asyncio.CancelledError):
+        await _call(service, "cancelled", cancelled)
+    await _call(service, "success", success)
+    assert service.turn_liveness.tool_finished.call_count == 4
 
 
 # --- 2. early acknowledgement ----------------------------------------------
