@@ -440,17 +440,21 @@ class ToolRegistrationMixin:
                             )
                         })
                         return
+                target = handler
                 paus = media_paus(function_name, getattr(params, "arguments", None))
                 if paus is not None:
                     ny = next((n for n in (f"media_player__{paus[0]}", paus[0]) if n in self._ra_handlers), None)
                     if ny is not None:
                         logger.info(f"🎵 {function_name} on a speaker -> {ny} (a speaker cannot be turned off, it is paused)")
                         params.function_name, params.arguments = ny, paus[1]
-                        return await self._ra_handlers[ny](params)
+                        target = self._ra_handlers[ny]
                 timeout_seconds = _tool_timeout_seconds()
                 try:
-                    return await asyncio.wait_for(handler(params), timeout=timeout_seconds or None)  # 0 = no cap
-                except asyncio.TimeoutError:
+                    async with asyncio.timeout(timeout_seconds or None) as cap:  # 0 = no cap
+                        return await target(params)
+                except TimeoutError:
+                    if not cap.expired():
+                        raise  # the handler's own timeout, not our cap: the generic error path answers it
                     utfall = "fel"
                     log_timing("fel")
                     if not callback_used:
@@ -480,17 +484,19 @@ class ToolRegistrationMixin:
             except BaseException:
                 utfall = "fel"
                 log_timing("fel")
-                if (self.turn_liveness is not None and not callback_used
+                if (self.turn_liveness is not None
                         and self.turn_liveness.tool_was_cancelled(current_task)):
                     # A real barge-in. Pipecat keeps the call IN_PROGRESS until it gets a result,
                     # so close it quietly (run_llm False: the model must not start talking).
-                    try:
-                        await original_callback(
-                            {"result": "Avbröts av användaren. Inget mer gjordes."},
-                            properties=FunctionCallResultProperties(run_llm=False),
-                        )
-                    except Exception as cb_error:
-                        logger.warning(f"⚠️ {function_name}: closing the interrupted call failed: {cb_error!r}")
+                    # A write may already have gone out, so never claim it did not happen.
+                    if not callback_used:
+                        try:
+                            await original_callback(
+                                {"result": "Avbröts av användaren. Det är inte bekräftat om det hann utföras."},
+                                properties=FunctionCallResultProperties(run_llm=False),
+                            )
+                        except Exception as cb_error:
+                            logger.warning(f"⚠️ {function_name}: closing the interrupted call failed: {cb_error!r}")
                     return
                 raise
             finally:

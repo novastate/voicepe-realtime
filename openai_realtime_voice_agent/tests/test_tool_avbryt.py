@@ -87,7 +87,7 @@ async def test_real_interruption_cancels_running_tool_without_result():
     await _assert_cancelled(task)
     assert service.turn_liveness.in_flight == 0
     # pipecat keeps a call IN_PROGRESS until it gets a result: exactly one, and it must not make the model talk
-    assert results == [{"result": "Avbröts av användaren. Inget mer gjordes."}]
+    assert results == [{"result": "Avbröts av användaren. Det är inte bekräftat om det hann utföras."}]
     assert params.props[0].run_llm is False
 
 
@@ -240,3 +240,42 @@ async def test_a_cancellation_that_is_not_a_barge_in_still_propagates():
         await task
     assert results == []
     assert service.turn_liveness.in_flight == 0
+
+
+@pytest.mark.asyncio
+async def test_a_call_already_answered_is_closed_quietly_by_a_barge_in():
+    service = _service()
+    started = asyncio.Event()
+
+    async def tool(params):
+        await params.result_callback({"result": "ok"})
+        started.set()
+        await asyncio.sleep(10)
+
+    service.register_function("answered_tool", tool)
+    results = []
+    task = asyncio.create_task(service._functions["answered_tool"].handler(_params("answered_tool", {}, results)))
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+
+    await _interrupt(service.turn_liveness, emulated=False)
+
+    await _assert_cancelled(task)  # finishes without raising
+    assert results == [{"result": "ok"}]
+
+
+@pytest.mark.asyncio
+async def test_interrupted_text_does_not_claim_nothing_was_done():
+    service = _service()
+    started = asyncio.Event()
+
+    async def tool(params):
+        started.set()
+        await asyncio.sleep(10)
+
+    service.register_function("HassTurnOn", tool)
+    results = []
+    task = asyncio.create_task(service._functions["HassTurnOn"].handler(_params("HassTurnOn", {"a": 1}, results)))
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+    await _interrupt(service.turn_liveness, emulated=False)
+    await _assert_cancelled(task)
+    assert "Inget mer gjordes" not in results[0]["result"]

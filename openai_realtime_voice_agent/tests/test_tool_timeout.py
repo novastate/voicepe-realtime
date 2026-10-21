@@ -73,3 +73,55 @@ async def test_fast_tool_still_returns_its_result(monkeypatch):
 
     assert await _call(service, "fast_tool") == [{"result": "klart"}]
     assert service.turn_liveness.in_flight == 0
+
+
+@pytest.mark.asyncio
+async def test_the_cap_also_covers_the_media_pause_rewrite(monkeypatch):
+    monkeypatch.setenv("TOOL_TIMEOUT_SECONDS", "0.2")
+    service = _service()
+
+    async def hanging_pause(params):
+        await asyncio.sleep(5)
+
+    service.register_function("HassMediaPause", hanging_pause)
+    service.register_function("HassTurnOff", hanging_pause)
+    service._functions["HassTurnOff"]  # registered
+    async def call():
+        results = []
+
+        async def cb(result, *a, **k):
+            results.append(result)
+
+        await service._functions["HassTurnOff"].handler(SimpleNamespace(
+            arguments={"domain": ["media_player"], "area": "kontoret"}, result_callback=cb, function_name="HassTurnOff"))
+        return results
+
+    results = await asyncio.wait_for(call(), timeout=1.0)
+    assert "svarade inte inom" in results[0]["error"]
+    assert service.turn_liveness.in_flight == 0
+
+
+@pytest.mark.asyncio
+async def test_zero_means_no_cap(monkeypatch):
+    monkeypatch.setenv("TOOL_TIMEOUT_SECONDS", "0")
+    service = _service()
+
+    async def slowish(params):
+        await asyncio.sleep(0.3)
+        await params.result_callback({"result": "klart"})
+
+    service.register_function("slowish", slowish)
+    assert await _call(service, "slowish") == [{"result": "klart"}]
+
+
+@pytest.mark.asyncio
+async def test_a_handlers_own_timeout_is_not_reported_as_our_cap(monkeypatch):
+    monkeypatch.setenv("TOOL_TIMEOUT_SECONDS", "30")
+    service = _service()
+
+    async def own_timeout(params):
+        raise TimeoutError("upstream")
+
+    service.register_function("own", own_timeout)
+    results = await _call(service, "own")
+    assert "svarade inte inom" not in str(results)
