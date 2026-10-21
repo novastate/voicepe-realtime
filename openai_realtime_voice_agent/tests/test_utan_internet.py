@@ -263,3 +263,44 @@ async def test_comms_lever_ar_falskt_utan_konfiguration_aven_om_nagon_svarar(mon
 
     monkeypatch.setattr(bana0.httpx.AsyncClient, "get", svar)
     assert await bana0.comms_lever(0.5) is False
+
+
+# --- G:s slutpass: motorprovet och Comms-kontrollen går sida vid sida, och platsen tas sist ---
+
+@pytest.mark.asyncio
+async def test_motorprov_och_comms_kontroll_vantar_inte_efter_varandra():
+    async def natet_nere():
+        await asyncio.sleep(0.3)
+        return True
+
+    async def comms():
+        await asyncio.sleep(0.3)
+        return True
+
+    start = time.monotonic()
+    sagt = await bana0.vakta_natet(natet_nere=natet_nere, claim=lambda: True, say=lambda t: asyncio.sleep(0), kolla_comms=comms)
+    assert sagt is True
+    assert time.monotonic() - start < 0.5  # 0.6 s om de väntade efter varandra
+
+
+@pytest.mark.asyncio
+async def test_tystnadsplatsen_tas_efter_comms_kontrollen():
+    handelser = []
+
+    async def natet_nere():
+        return True
+
+    async def comms():
+        await asyncio.sleep(0.1)
+        handelser.append("comms klar")
+        return True
+
+    def claim():
+        handelser.append("claim")
+        return True
+
+    async def say(t):
+        handelser.append("say")
+
+    await bana0.vakta_natet(natet_nere=natet_nere, claim=claim, say=say, kolla_comms=comms)
+    assert handelser == ["comms klar", "claim", "say"]

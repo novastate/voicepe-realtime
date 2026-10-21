@@ -718,21 +718,26 @@ async def vakta_natet(
     false when the model already spoke or the "Ett ögonblick" ack took it, so
     the room never hears both. True when the line was said.
     """
+    # The Comms check runs beside the engine probe, so the line is said within the probe's cap (not after two waits in a
+    # row), and `claim()` is taken only when the line is about to be said: no second of waiting between taking the
+    # silence slot and speaking, in which the model could start.
+    # The check is part of the guard itself (kolla_comms only lets a test inject one): no caller can leave it out
+    # and so promise the lamps by omission.
+    comms = asyncio.ensure_future(kolla_comms() if kolla_comms is not None else comms_lever(COMMS_PROBE_S))
     try:
         if not await natet_nere():
+            comms.cancel()
             return False
     except Exception as e:
         logger.warning(f"bana0: engine probe raised: {e!r}")
-    if not claim():
-        return False
-    logger.warning("bana0: the engine is unreachable, saying so")
-    # The check is part of the guard itself (kolla_comms only lets a test inject one): no caller can leave it out
-    # and so promise the lamps by omission.
     try:
-        lever = bool(await (kolla_comms() if kolla_comms is not None else comms_lever(COMMS_PROBE_S)))
+        lever = bool(await comms)
     except Exception as e:
         logger.warning(f"bana0: comms health check raised: {e!r}")
         lever = False
+    if not claim():
+        return False
+    logger.warning("bana0: the engine is unreachable, saying so")
     try:
         repliker = OFFLINE_VARIANTER if lever else OFFLINE_UTAN_LOFTE
         await saga(say, repliker)
