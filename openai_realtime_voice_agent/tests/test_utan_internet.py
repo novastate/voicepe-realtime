@@ -1,4 +1,6 @@
 """Without internet (raawr US-018): bana 0 still confirms, a question gets an honest no."""
+import asyncio
+from types import SimpleNamespace
 import time
 
 import pytest
@@ -79,7 +81,7 @@ async def test_miss_dar_modellen_inte_nas_kraschar_inte_och_vaktar(monkeypatch):
     assert calls == ["vakt"]
 
 
-async def _vakta(nere, claimed=True):
+async def _vakta(nere, claimed=True, comms=True):
     said = []
 
     async def natet_nere():
@@ -90,14 +92,54 @@ async def _vakta(nere, claimed=True):
     async def say(text):
         said.append(text)
 
-    sagt = await bana0.vakta_natet(natet_nere=natet_nere, claim=lambda: claimed, say=say)
+    async def comms_lever():
+        if isinstance(comms, Exception):
+            raise comms
+        return comms
+
+    sagt = await bana0.vakta_natet(
+        natet_nere=natet_nere, claim=lambda: claimed, say=say, kolla_comms=comms_lever,
+    )
     return sagt, said
 
 
 @pytest.mark.asyncio
-async def test_natet_nere_sager_det():
-    sagt, said = await _vakta(True)
+async def test_comms_uppe_ger_offlinevariant_som_forut():
+    sagt, said = await _vakta(True, comms=True)
     assert sagt is True and len(said) == 1 and said[0] in bana0.OFFLINE_VARIANTER
+
+
+@pytest.mark.asyncio
+async def test_comms_nere_ger_inget_lofte_om_lamporna():
+    sagt, said = await _vakta(True, comms=False)
+    assert sagt is True and len(said) == 1
+    assert not any(lofte in said[0].lower() for lofte in ("fungerar", "funkar", "går att styra"))
+
+
+@pytest.mark.asyncio
+async def test_comms_probe_som_hanger_ger_replik_inom_taket(monkeypatch):
+    monkeypatch.setenv("HA_API_URL", "http://comms.test/kanal/rost/kontoret/api")
+    monkeypatch.setenv("COMMS_NYCKEL", "k")
+    async def hanger(*args, **kwargs):
+        await asyncio.sleep(2)
+
+    monkeypatch.setattr(bana0.httpx.AsyncClient, "get", hanger)
+    start = time.monotonic()
+    said = []
+
+    async def natet_nere():
+        await asyncio.sleep(0.3)
+        return True
+
+    async def say(t):
+        said.append(t)
+
+    sagt = await bana0.vakta_natet(
+        natet_nere=natet_nere, claim=lambda: True, say=say,
+        kolla_comms=lambda: bana0.comms_lever(0.05),
+    )
+    assert time.monotonic() - start < 0.5
+    assert sagt is True and said[0] in bana0.OFFLINE_UTAN_LOFTE
 
 
 @pytest.mark.asyncio
@@ -180,3 +222,146 @@ def test_ny_fras_efter_traffen_far_inget_klart():
     _t.sleep(0.01)
     liv.user_started()
     assert bana0.ingen_bekraftelse_an(liv, asked) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,lever", [(200, True), (404, True), (401, True), (502, False), (503, False)])
+async def test_comms_lever_raknar_varje_svar_under_500(monkeypatch, status, lever):
+    monkeypatch.setenv("HA_API_URL", "http://comms.test/kanal/rost/kontoret/api")
+    monkeypatch.setenv("COMMS_NYCKEL", "k")
+
+    async def svar(*args, **kwargs):
+        return SimpleNamespace(status_code=status)
+
+    monkeypatch.setattr(bana0.httpx.AsyncClient, "get", svar)
+    assert await bana0.comms_lever(0.5) is lever
+
+
+@pytest.mark.asyncio
+async def test_comms_fraga_som_kastar_ger_inget_lofte():
+    sagt, said = await _vakta(True, comms=RuntimeError("boom"))
+    assert sagt is True and said[0] in bana0.OFFLINE_UTAN_LOFTE
+
+
+@pytest.mark.asyncio
+async def test_vakta_natet_frågar_comms_själv_utan_injektion(monkeypatch):
+    """The guard owns the Comms check: nothing at the call site can drop it."""
+    anropad = []
+
+    async def comms_nere(timeout):
+        anropad.append(timeout)
+        return False
+
+    monkeypatch.setattr(bana0, "comms_lever", comms_nere)
+    said = []
+
+    async def natet_nere():
+        return True
+
+    async def say(text):
+        said.append(text)
+
+    sagt = await bana0.vakta_natet(natet_nere=natet_nere, claim=lambda: True, say=say)
+    assert anropad == [bana0.COMMS_PROBE_S]
+    assert sagt is True and said[0] in bana0.OFFLINE_UTAN_LOFTE
+
+
+@pytest.mark.asyncio
+async def test_comms_lever_ar_falskt_utan_konfiguration_aven_om_nagon_svarar(monkeypatch):
+    monkeypatch.delenv("HA_API_URL", raising=False)
+
+    async def svar(*args, **kwargs):
+        return SimpleNamespace(status_code=200)
+
+    monkeypatch.setattr(bana0.httpx.AsyncClient, "get", svar)
+    assert await bana0.comms_lever(0.5) is False
+
+
+# --- G:s slutpass: motorprovet och Comms-kontrollen går sida vid sida, och platsen tas sist ---
+
+@pytest.mark.asyncio
+async def test_motorprov_och_comms_kontroll_vantar_inte_efter_varandra():
+    async def natet_nere():
+        await asyncio.sleep(0.3)
+        return True
+
+    async def comms():
+        await asyncio.sleep(0.3)
+        return True
+
+    start = time.monotonic()
+    sagt = await bana0.vakta_natet(natet_nere=natet_nere, claim=lambda: True, say=lambda t: asyncio.sleep(0), kolla_comms=comms)
+    assert sagt is True
+    assert time.monotonic() - start < 0.5  # 0.6 s om de väntade efter varandra
+
+
+@pytest.mark.asyncio
+async def test_tystnadsplatsen_tas_efter_comms_kontrollen():
+    handelser = []
+
+    async def natet_nere():
+        return True
+
+    async def comms():
+        await asyncio.sleep(0.1)
+        handelser.append("comms klar")
+        return True
+
+    def claim():
+        handelser.append("claim")
+        return True
+
+    async def say(t):
+        handelser.append("say")
+
+    await bana0.vakta_natet(natet_nere=natet_nere, claim=claim, say=say, kolla_comms=comms)
+    assert handelser == ["comms klar", "claim", "say"]
+
+
+@pytest.mark.asyncio
+async def test_natet_uppe_avbryter_comms_kontrollen():
+    handelser = []
+
+    async def natet_nere():
+        await asyncio.sleep(0.05)
+        return False
+
+    async def comms():
+        try:
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            handelser.append("avbruten")
+            raise
+
+    async def say(t):
+        handelser.append("say")
+
+    assert await bana0.vakta_natet(natet_nere=natet_nere, claim=lambda: True, say=say, kolla_comms=comms) is False
+    await asyncio.sleep(0)
+    assert handelser == ["avbruten"]
+
+
+@pytest.mark.asyncio
+async def test_avbruten_vakt_lamnar_ingen_comms_kontroll_kvar():
+    handelser = []
+
+    async def natet_nere():
+        await asyncio.sleep(5)
+
+    async def comms():
+        try:
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            handelser.append("avbruten")
+            raise
+
+    async def say(t):
+        handelser.append("say")
+
+    vakt = asyncio.ensure_future(bana0.vakta_natet(natet_nere=natet_nere, claim=lambda: True, say=say, kolla_comms=comms))
+    await asyncio.sleep(0.05)
+    vakt.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await vakt
+    await asyncio.sleep(0)
+    assert handelser == ["avbruten"]

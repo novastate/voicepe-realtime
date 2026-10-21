@@ -44,8 +44,11 @@ OFFLINE_VARIANTER = (
     "Nätet är nere just nu. Lampor och sånt funkar ändå.",
     "Inget nät här just nu, men lamporna går att styra.",
 )
+OFFLINE_UTAN_LOFTE = ("Jag når inte nätet just nu.",)
 OK_FALLBACK, OFFLINE_LINE = OK_VARIANTER[0], OFFLINE_VARIANTER[0]
-LOKALA_REPLIKER = OK_VARIANTER + OFFLINE_VARIANTER
+LOKALA_REPLIKER = OK_VARIANTER + OFFLINE_VARIANTER + OFFLINE_UTAN_LOFTE
+
+
 def text_till_modell_paa() -> bool:
     """Experiment (raawr US-032): on a miss, the model gets the locally heard words
     instead of the audio. OFF by default. LOCAL_TEXT_TO_MODEL=1 turns it on."""
@@ -437,6 +440,30 @@ async def prova(text: str, timeout: float) -> Optional[str]:
         return None
 
 
+COMMS_PROBE_S = 1.0
+
+
+async def comms_lever(timeout: float) -> bool:
+    """True when comms answers at all on the HA API base URL within `timeout`.
+
+    Any HTTP answer below 500 counts (the base path itself may be a 404): the question is whether the door is
+    up, and a proxy's 502/503/504 means it is not. Not configured means there is nobody to ask: False.
+    """
+    if not ha_api.configured():
+        return False
+
+    async def hamta() -> bool:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            svar = await client.get(ha_api.base(), headers=ha_api.headers())
+        return svar.status_code < 500
+
+    try:
+        return await asyncio.wait_for(hamta(), timeout)
+    except Exception as e:
+        logger.warning(f"bana0: comms health check failed: {e!r}")
+        return False
+
+
 # Whisper invents these on noise and music (kitchen 2026-10-09 21:17: "Ett tack till mina supporters via Patreon!").
 # A phrase from subtitle credits is never a command; the turn then goes to the model with the audio as if STT heard nothing.
 _PAHITT = ("patreon", "tack för att ni tittade", "tack för att du tittade", "tack för att ni tittat", "tack för att du tittat",
@@ -683,23 +710,42 @@ async def vakta_natet(
     natet_nere: Callable[[], Awaitable[bool]],
     claim: Callable[[], bool],
     say: Callable[[str], Awaitable[None]],
+    kolla_comms: Callable[[], Awaitable[bool]] | None = None,
 ) -> bool:
-    """After a miss: if the model's engine cannot be reached, say one of OFFLINE_VARIANTER.
+    """After a miss: if the model's engine cannot be reached, say a cached offline line.
 
     `claim()` is the turn's once-only silence slot (TurnLiveness.claim_silence_ack):
     false when the model already spoke or the "Ett ögonblick" ack took it, so
     the room never hears both. True when the line was said.
     """
+    # The Comms check runs beside the engine probe, so the line is said within the probe's cap (not after two waits in a
+    # row), and `claim()` is taken only when the line is about to be said: no second of waiting between taking the
+    # silence slot and speaking, in which the model could start.
+    # The check is part of the guard itself (kolla_comms only lets a test inject one): no caller can leave it out
+    # and so promise the lamps by omission.
+    comms = asyncio.ensure_future(kolla_comms() if kolla_comms is not None else comms_lever(COMMS_PROBE_S))
+    # A failure nobody awaits (the engine probe said "network up" first) is read here, so it is not logged as never retrieved.
+    comms.add_done_callback(lambda t: t.cancelled() or t.exception())
     try:
-        if not await natet_nere():
-            return False
-    except Exception as e:
-        logger.warning(f"bana0: engine probe raised: {e!r}")
+        try:
+            if not await natet_nere():
+                return False
+        except Exception as e:
+            logger.warning(f"bana0: engine probe raised: {e!r}")
+        try:
+            lever = bool(await comms)
+        except Exception as e:
+            logger.warning(f"bana0: comms health check raised: {e!r}")
+            lever = False
+    finally:
+        # Every way out (network up, the guard itself cancelled mid-probe) ends the Comms check: it never outlives the guard.
+        comms.cancel()
     if not claim():
         return False
     logger.warning("bana0: the engine is unreachable, saying so")
     try:
-        await saga(say, OFFLINE_VARIANTER)
+        repliker = OFFLINE_VARIANTER if lever else OFFLINE_UTAN_LOFTE
+        await saga(say, repliker)
     except Exception as e:
         logger.warning(f"bana0: offline line failed: {e!r}")
         return False
