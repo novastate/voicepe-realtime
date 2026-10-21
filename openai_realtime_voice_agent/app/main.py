@@ -1606,6 +1606,9 @@ class Application:
 
         ha_tools = with_ack_hint(self._ha_tool_definitions(schema))
         props = getattr(service, "_session_properties", None)
+        if props is not None and isinstance(getattr(props, "instructions", None), str):
+            # The warning was put there when the build could not reach HA; the tools are here now.
+            props.instructions = props.instructions.replace(HA_VERKTYG_SAKNAS, "")
         tools = getattr(props, "tools", None) if props is not None else None
         if isinstance(tools, list):
             have = {t.get("name") for t in tools if isinstance(t, dict)}

@@ -87,3 +87,39 @@ async def test_next_session_drops_warning_after_ha_recovers():
     assert HA_NERE in first_instructions
     assert second_connection.ha_verktyg_saknas is False
     assert HA_NERE not in second_instructions
+
+
+@pytest.mark.asyncio
+async def test_openai_session_drops_the_warning_when_the_wake_refetch_succeeds():
+    """The session object lives on after the build: the line must not outlive the failure."""
+    from app.device_registry import DeviceConnection
+    from app.providers import OPENAI
+
+    app = _bare_app(OPENAI)
+    app.mcp_client = _McpClient(failures=1)
+    connection = DeviceConnection(device_id="office", websocket=object())
+    connection.provider = OPENAI
+    service = await app.create_service(connection)
+    connection.openai_service = service
+    assert HA_NERE in service._session_properties.instructions
+
+    await app.hamta_verktyg_vid_vakning(connection)
+
+    assert connection.ha_verktyg_saknas is False
+    assert HA_NERE not in service._session_properties.instructions
+
+
+@pytest.mark.asyncio
+async def test_gemini_renders_the_warning_per_connect_and_follows_the_flag():
+    from app.device_registry import DeviceConnection
+    from app.providers import GEMINI
+
+    app = _bare_app(GEMINI)
+    app.mcp_client = _McpClient(failures=1)
+    connection = DeviceConnection(device_id="office", websocket=object())
+    connection.provider = GEMINI
+    service = await app.create_service(connection)
+
+    assert HA_NERE in service.instructions_provider()
+    connection.ha_verktyg_saknas = False  # what _markera_ha_verktyg does on a good fetch
+    assert HA_NERE not in service.instructions_provider()
