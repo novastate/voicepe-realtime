@@ -724,17 +724,22 @@ async def vakta_natet(
     # The check is part of the guard itself (kolla_comms only lets a test inject one): no caller can leave it out
     # and so promise the lamps by omission.
     comms = asyncio.ensure_future(kolla_comms() if kolla_comms is not None else comms_lever(COMMS_PROBE_S))
+    # A failure nobody awaits (the engine probe said "network up" first) is read here, so it is not logged as never retrieved.
+    comms.add_done_callback(lambda t: t.cancelled() or t.exception())
     try:
-        if not await natet_nere():
-            comms.cancel()
-            return False
-    except Exception as e:
-        logger.warning(f"bana0: engine probe raised: {e!r}")
-    try:
-        lever = bool(await comms)
-    except Exception as e:
-        logger.warning(f"bana0: comms health check raised: {e!r}")
-        lever = False
+        try:
+            if not await natet_nere():
+                return False
+        except Exception as e:
+            logger.warning(f"bana0: engine probe raised: {e!r}")
+        try:
+            lever = bool(await comms)
+        except Exception as e:
+            logger.warning(f"bana0: comms health check raised: {e!r}")
+            lever = False
+    finally:
+        # Every way out (network up, the guard itself cancelled mid-probe) ends the Comms check: it never outlives the guard.
+        comms.cancel()
     if not claim():
         return False
     logger.warning("bana0: the engine is unreachable, saying so")

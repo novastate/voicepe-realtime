@@ -125,7 +125,19 @@ async def test_comms_probe_som_hanger_ger_replik_inom_taket(monkeypatch):
 
     monkeypatch.setattr(bana0.httpx.AsyncClient, "get", hanger)
     start = time.monotonic()
-    sagt, said = await _vakta(True, comms=await bana0.comms_lever(0.05))
+    said = []
+
+    async def natet_nere():
+        await asyncio.sleep(0.3)
+        return True
+
+    async def say(t):
+        said.append(t)
+
+    sagt = await bana0.vakta_natet(
+        natet_nere=natet_nere, claim=lambda: True, say=say,
+        kolla_comms=lambda: bana0.comms_lever(0.05),
+    )
     assert time.monotonic() - start < 0.5
     assert sagt is True and said[0] in bana0.OFFLINE_UTAN_LOFTE
 
@@ -304,3 +316,52 @@ async def test_tystnadsplatsen_tas_efter_comms_kontrollen():
 
     await bana0.vakta_natet(natet_nere=natet_nere, claim=claim, say=say, kolla_comms=comms)
     assert handelser == ["comms klar", "claim", "say"]
+
+
+@pytest.mark.asyncio
+async def test_natet_uppe_avbryter_comms_kontrollen():
+    handelser = []
+
+    async def natet_nere():
+        await asyncio.sleep(0.05)
+        return False
+
+    async def comms():
+        try:
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            handelser.append("avbruten")
+            raise
+
+    async def say(t):
+        handelser.append("say")
+
+    assert await bana0.vakta_natet(natet_nere=natet_nere, claim=lambda: True, say=say, kolla_comms=comms) is False
+    await asyncio.sleep(0)
+    assert handelser == ["avbruten"]
+
+
+@pytest.mark.asyncio
+async def test_avbruten_vakt_lamnar_ingen_comms_kontroll_kvar():
+    handelser = []
+
+    async def natet_nere():
+        await asyncio.sleep(5)
+
+    async def comms():
+        try:
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            handelser.append("avbruten")
+            raise
+
+    async def say(t):
+        handelser.append("say")
+
+    vakt = asyncio.ensure_future(bana0.vakta_natet(natet_nere=natet_nere, claim=lambda: True, say=say, kolla_comms=comms))
+    await asyncio.sleep(0.05)
+    vakt.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await vakt
+    await asyncio.sleep(0)
+    assert handelser == ["avbruten"]
