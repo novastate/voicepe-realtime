@@ -156,6 +156,8 @@ class TurnLiveness:
         self.tool_counts = {}
         if not emulated:
             for task, call_key in list(self.tool_tasks.items()):
+                if task in self._cancelled_tool_tasks:
+                    continue  # already told once: a second start must not cancel its closing hand-over
                 self.avbrutna[call_key] = now
                 self._cancelled_tool_tasks.add(task)
                 task.cancel()

@@ -495,10 +495,10 @@ class ToolRegistrationMixin:
                     # A write may already have gone out, so never claim it did not happen.
                     if not callback_used:
                         try:
-                            await original_callback(
+                            await asyncio.shield(original_callback(
                                 {"result": "Avbröts av användaren. Det är inte bekräftat om det hann utföras."},
                                 properties=FunctionCallResultProperties(run_llm=False),
-                            )
+                            ))
                         except Exception as cb_error:
                             logger.warning(f"⚠️ {function_name}: closing the interrupted call failed: {cb_error!r}")
                     return

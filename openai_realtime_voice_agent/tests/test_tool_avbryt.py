@@ -279,3 +279,31 @@ async def test_interrupted_text_does_not_claim_nothing_was_done():
     await _interrupt(service.turn_liveness, emulated=False)
     await _assert_cancelled(task)
     assert "Inget mer gjordes" not in results[0]["result"]
+
+
+@pytest.mark.asyncio
+async def test_a_second_real_barge_in_does_not_abort_the_closing_of_the_call():
+    service = _service()
+    started = asyncio.Event()
+    delivered = []
+
+    async def tool(params):
+        started.set()
+        await asyncio.sleep(10)
+
+    async def slow_original(result, *args, **kwargs):
+        await asyncio.sleep(0.2)  # the hand-over to pipecat takes a moment
+        delivered.append(result)
+
+    service.register_function("HassTurnOn", tool)
+    params = SimpleNamespace(arguments={"a": 1}, result_callback=slow_original, function_name="HassTurnOn")
+    task = asyncio.create_task(service._functions["HassTurnOn"].handler(params))
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+
+    await _interrupt(service.turn_liveness, emulated=False)
+    await asyncio.sleep(0.05)
+    await _interrupt(service.turn_liveness, emulated=False)  # speech fragments: a second real start
+
+    await asyncio.wait_for(task, timeout=2.0)
+    assert len(delivered) == 1
+    assert service.turn_liveness.in_flight == 0
