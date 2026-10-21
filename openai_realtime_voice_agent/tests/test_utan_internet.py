@@ -81,7 +81,7 @@ async def test_miss_dar_modellen_inte_nas_kraschar_inte_och_vaktar(monkeypatch):
     assert calls == ["vakt"]
 
 
-async def _vakta(nere, claimed=True, comms=None):
+async def _vakta(nere, claimed=True, comms=True):
     said = []
 
     async def natet_nere():
@@ -93,11 +93,12 @@ async def _vakta(nere, claimed=True, comms=None):
         said.append(text)
 
     async def comms_lever():
+        if isinstance(comms, Exception):
+            raise comms
         return comms
 
-    kwargs = {"comms_lever": comms_lever} if comms is not None else {}
     sagt = await bana0.vakta_natet(
-        natet_nere=natet_nere, claim=lambda: claimed, say=say, **kwargs,
+        natet_nere=natet_nere, claim=lambda: claimed, say=say, comms_lever=comms_lever,
     )
     return sagt, said
 
@@ -228,3 +229,16 @@ async def test_comms_lever_raknar_varje_svar_under_500(monkeypatch, status, leve
 async def test_comms_lever_ar_falskt_utan_konfiguration(monkeypatch):
     monkeypatch.delenv("HA_API_URL", raising=False)
     assert await bana0.comms_lever(0.5) is False
+
+
+@pytest.mark.asyncio
+async def test_comms_fraga_som_kastar_ger_inget_lofte():
+    sagt, said = await _vakta(True, comms=RuntimeError("boom"))
+    assert sagt is True and said[0] in bana0.OFFLINE_UTAN_LOFTE
+
+
+def test_vakta_natet_kraver_comms_lever():
+    """Removing the wiring in websocket_handler must not silently mean 'Comms is up'."""
+    import inspect
+    p = inspect.signature(bana0.vakta_natet).parameters["comms_lever"]
+    assert p.default is inspect.Parameter.empty

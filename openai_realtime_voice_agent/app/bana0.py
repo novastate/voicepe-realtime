@@ -707,7 +707,7 @@ async def vakta_natet(
     natet_nere: Callable[[], Awaitable[bool]],
     claim: Callable[[], bool],
     say: Callable[[str], Awaitable[None]],
-    comms_lever: Callable[[], Awaitable[bool]] | None = None,
+    comms_lever: Callable[[], Awaitable[bool]],
 ) -> bool:
     """After a miss: if the model's engine cannot be reached, say a cached offline line.
 
@@ -723,13 +723,12 @@ async def vakta_natet(
     if not claim():
         return False
     logger.warning("bana0: the engine is unreachable, saying so")
-    lever = True
-    if comms_lever is not None:
-        try:
-            lever = bool(await comms_lever())
-        except Exception as e:
-            logger.warning(f"bana0: comms health check raised: {e!r}")
-            lever = False
+    # Required, no default: a caller that forgets it must fail loudly, never promise the lamps by omission.
+    try:
+        lever = bool(await comms_lever())
+    except Exception as e:
+        logger.warning(f"bana0: comms health check raised: {e!r}")
+        lever = False
     try:
         repliker = OFFLINE_VARIANTER if lever else OFFLINE_UTAN_LOFTE
         await saga(say, repliker)
