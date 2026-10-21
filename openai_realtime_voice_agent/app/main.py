@@ -32,6 +32,10 @@ SPRAKLAS = (
     "\n\nSPRÅK: Svara ALLTID på svenska, från första ordet. Det du hör kan vara brus, musik eller ett annat "
     "språk före det riktiga talet; det ändrar aldrig svarsspråket. Börja aldrig ett svar på ett annat språk."
 )
+HA_VERKTYG_SAKNAS = (
+    "\n\nHusets verktyg går inte att nå just nu. Säg det rakt om någon ber dig styra något, "
+    "och påstå aldrig att något är gjort."
+)
 # Over his reply the engine cuts him on any voice, a "ja" too (Kontoret 2026-10-14: "ja" cut him and he asked "...det?").
 # Telling a back-channel from an interruption is a matter of words, not of sound, so the words decide (raawr US-060 AC-8).
 AVBROTT = (
@@ -1085,11 +1089,15 @@ class Application:
                 except Exception as e:
                     logger.warning(f"⚠️ Idag: no weather/calendar for this session ({e!r})")
                 options = self.provider_options(provider, rum)
+            if connection.ha_verktyg_saknas:
+                options.instructions += HA_VERKTYG_SAKNAS
             options.rum = rum
             service = build_service(provider, options, all_tools)
             if provider == GEMINI:
                 # Rendered again on every (re)connect: a fresh time and block.
-                service.instructions_provider = self._instruktionskalla(rum)
+                service.instructions_provider = lambda: self._instructions(rum) + (
+                    HA_VERKTYG_SAKNAS if connection.ha_verktyg_saknas else ""
+                )
             service.speaker_probe = None
             service.male_only_tools = set()
             connection.turn_liveness = TurnLiveness()
