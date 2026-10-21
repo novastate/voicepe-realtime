@@ -440,6 +440,9 @@ async def prova(text: str, timeout: float) -> Optional[str]:
         return None
 
 
+COMMS_PROBE_S = 1.0
+
+
 async def comms_lever(timeout: float) -> bool:
     """True when comms answers at all on the HA API base URL within `timeout`.
 
@@ -707,7 +710,7 @@ async def vakta_natet(
     natet_nere: Callable[[], Awaitable[bool]],
     claim: Callable[[], bool],
     say: Callable[[str], Awaitable[None]],
-    comms_lever: Callable[[], Awaitable[bool]],
+    kolla_comms: Callable[[], Awaitable[bool]] | None = None,
 ) -> bool:
     """After a miss: if the model's engine cannot be reached, say a cached offline line.
 
@@ -723,9 +726,10 @@ async def vakta_natet(
     if not claim():
         return False
     logger.warning("bana0: the engine is unreachable, saying so")
-    # Required, no default: a caller that forgets it must fail loudly, never promise the lamps by omission.
+    # The check is part of the guard itself (kolla_comms only lets a test inject one): no caller can leave it out
+    # and so promise the lamps by omission.
     try:
-        lever = bool(await comms_lever())
+        lever = bool(await (kolla_comms() if kolla_comms is not None else comms_lever(COMMS_PROBE_S)))
     except Exception as e:
         logger.warning(f"bana0: comms health check raised: {e!r}")
         lever = False

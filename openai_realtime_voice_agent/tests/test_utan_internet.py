@@ -98,7 +98,7 @@ async def _vakta(nere, claimed=True, comms=True):
         return comms
 
     sagt = await bana0.vakta_natet(
-        natet_nere=natet_nere, claim=lambda: claimed, say=say, comms_lever=comms_lever,
+        natet_nere=natet_nere, claim=lambda: claimed, say=say, kolla_comms=comms_lever,
     )
     return sagt, said
 
@@ -226,19 +226,40 @@ async def test_comms_lever_raknar_varje_svar_under_500(monkeypatch, status, leve
 
 
 @pytest.mark.asyncio
-async def test_comms_lever_ar_falskt_utan_konfiguration(monkeypatch):
-    monkeypatch.delenv("HA_API_URL", raising=False)
-    assert await bana0.comms_lever(0.5) is False
-
-
-@pytest.mark.asyncio
 async def test_comms_fraga_som_kastar_ger_inget_lofte():
     sagt, said = await _vakta(True, comms=RuntimeError("boom"))
     assert sagt is True and said[0] in bana0.OFFLINE_UTAN_LOFTE
 
 
-def test_vakta_natet_kraver_comms_lever():
-    """Removing the wiring in websocket_handler must not silently mean 'Comms is up'."""
-    import inspect
-    p = inspect.signature(bana0.vakta_natet).parameters["comms_lever"]
-    assert p.default is inspect.Parameter.empty
+@pytest.mark.asyncio
+async def test_vakta_natet_frågar_comms_själv_utan_injektion(monkeypatch):
+    """The guard owns the Comms check: nothing at the call site can drop it."""
+    anropad = []
+
+    async def comms_nere(timeout):
+        anropad.append(timeout)
+        return False
+
+    monkeypatch.setattr(bana0, "comms_lever", comms_nere)
+    said = []
+
+    async def natet_nere():
+        return True
+
+    async def say(text):
+        said.append(text)
+
+    sagt = await bana0.vakta_natet(natet_nere=natet_nere, claim=lambda: True, say=say)
+    assert anropad == [bana0.COMMS_PROBE_S]
+    assert sagt is True and said[0] in bana0.OFFLINE_UTAN_LOFTE
+
+
+@pytest.mark.asyncio
+async def test_comms_lever_ar_falskt_utan_konfiguration_aven_om_nagon_svarar(monkeypatch):
+    monkeypatch.delenv("HA_API_URL", raising=False)
+
+    async def svar(*args, **kwargs):
+        return SimpleNamespace(status_code=200)
+
+    monkeypatch.setattr(bana0.httpx.AsyncClient, "get", svar)
+    assert await bana0.comms_lever(0.5) is False
