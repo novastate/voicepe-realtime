@@ -16,6 +16,8 @@ import logging
 import os
 import time
 
+from pipecat.frames.frames import FunctionCallResultProperties
+
 from app import bana0, skills
 from app.early_ack import paa as early_ack_paa
 
@@ -27,6 +29,13 @@ def _result_max_chars() -> int:
         return max(0, int(os.environ.get("TOOL_RESULT_MAX_CHARS", "6000")))
     except ValueError:
         return 6000
+
+
+def _tool_timeout_seconds() -> float:
+    try:
+        return max(0.0, float(os.environ.get("TOOL_TIMEOUT_SECONDS", "30")))
+    except ValueError:
+        return 30.0
 
 
 def cap_tool_result(result, max_chars: int):
@@ -290,10 +299,11 @@ class ToolRegistrationMixin:
         which then tells the user it failed (observed live: the lights turned
         ON while the assistant claimed they wouldn't). Or the request is cut
         off mid-flight and nothing happens at all, while the assistant still
-        says it did. Our tools are all short-lived (HA service calls, one web
-        search), so letting them finish and report the truth always beats
-        killing them halfway. This single override covers every registration
-        path (MCP tools via pipecat's MCPClient, web_search, disconnect).
+        says it did. Pipecat therefore never owns cancellation. TurnLiveness
+        instead cancels the wrapper task only for a real user-speech start;
+        Gemini's emulated start leaves it alone. This single override covers
+        every registration path (MCP tools via pipecat's MCPClient, web_search,
+        disconnect).
 
         The handler is also wrapped to tick its connection's liveness around its run, so
         the PhaseEmitter's thinking-watchdog knows a tool is in flight and a
@@ -306,11 +316,13 @@ class ToolRegistrationMixin:
             self._ra_handlers = {}
         self._ra_handlers[function_name] = handler
 
-        async def liveness_tracked(params):
+        async def run_liveness_tracked(params):
             # One line per call, every engine, every tool (MCP included):
             # `⏱ tool <name> <ms> ok|fel`, timed to the moment the result is
             # handed back -- that is what the person in the room waits for.
             started = time.monotonic()
+            call_key = _call_key(function_name, getattr(params, "arguments", None))
+            current_task = asyncio.current_task()
             logged = False
             utfall = "ok"
             ack_speaking = False
@@ -357,8 +369,15 @@ class ToolRegistrationMixin:
 
             async def tracked_callback(result, *args, **kwargs):
                 nonlocal callback_used
+                if (self.turn_liveness is not None
+                        and self.turn_liveness.tool_was_cancelled(current_task)):
+                    return None
                 callback_used = True
-                return await original_callback(result, *args, **kwargs)
+                # shielded: a cap or a barge-in landing mid-delivery must not leave the call half-answered.
+                # Accepted risk (Hemma 2026-10-21): a barge-in landing in the milliseconds while the handler's OWN result is
+                # being handed over lets that result through with default properties, so the model may speak after the
+                # interruption. A whole, true answer beats a half-delivered one.
+                return await asyncio.shield(original_callback(result, *args, **kwargs))
 
             async def capped_callback(result, *args, **kwargs):
                 nonlocal utfall
@@ -375,8 +394,14 @@ class ToolRegistrationMixin:
 
             params.result_callback = capped_callback
             if self.turn_liveness is not None:
-                self.turn_liveness.tool_started()
+                self.turn_liveness.tool_started(call_key, current_task)
             try:
+                if (self.turn_liveness is not None
+                        and self.turn_liveness.interrupted_recently(call_key)):
+                    await params.result_callback({
+                        "result": "Anropet avbröts av användaren och körs inte igen. Fråga vad han vill."
+                    })
+                    return
                 stop = loop_stop(self.turn_liveness, function_name, getattr(params, "arguments", None))
                 if stop is not None:
                     await params.result_callback({"result": stop})
@@ -419,14 +444,32 @@ class ToolRegistrationMixin:
                             )
                         })
                         return
+                target = handler
                 paus = media_paus(function_name, getattr(params, "arguments", None))
                 if paus is not None:
                     ny = next((n for n in (f"media_player__{paus[0]}", paus[0]) if n in self._ra_handlers), None)
                     if ny is not None:
                         logger.info(f"🎵 {function_name} on a speaker -> {ny} (a speaker cannot be turned off, it is paused)")
                         params.function_name, params.arguments = ny, paus[1]
-                        return await self._ra_handlers[ny](params)
-                return await handler(params)
+                        target = self._ra_handlers[ny]
+                timeout_seconds = _tool_timeout_seconds()
+                try:
+                    async with asyncio.timeout(timeout_seconds or None) as cap:  # 0 = no cap
+                        return await target(params)
+                except TimeoutError:
+                    if not cap.expired():
+                        raise  # the handler's own timeout, not our cap: the generic error path answers it
+                    utfall = "fel"
+                    log_timing("fel")
+                    if not callback_used:
+                        await params.result_callback({
+                            "error": (
+                                f"Verktyget svarade inte inom {timeout_seconds:g} sekunder. "
+                                "Säg att det inte gick att bekräfta att det blev gjort, och "
+                                "påstå aldrig att det är klart."
+                            )
+                        })
+                    return
             except Exception as e:
                 utfall = "fel"
                 logger.warning(f"⚠️ {function_name} kastade: {e!r}", exc_info=True)  # the model only gets the type name
@@ -445,13 +488,33 @@ class ToolRegistrationMixin:
             except BaseException:
                 utfall = "fel"
                 log_timing("fel")
+                if (self.turn_liveness is not None
+                        and self.turn_liveness.tool_was_cancelled(current_task)):
+                    # A real barge-in. Pipecat keeps the call IN_PROGRESS until it gets a result,
+                    # so close it quietly (run_llm False: the model must not start talking).
+                    # A write may already have gone out, so never claim it did not happen.
+                    if not callback_used:
+                        try:
+                            await asyncio.shield(original_callback(
+                                {"result": "Avbröts av användaren. Det är inte bekräftat om det hann utföras."},
+                                properties=FunctionCallResultProperties(run_llm=False),
+                            ))
+                        except Exception as cb_error:
+                            logger.warning(f"⚠️ {function_name}: closing the interrupted call failed: {cb_error!r}")
+                    return
                 raise
             finally:
                 stop_waiting_ack()
                 if utfall != "fel":
                     log_timing("ok")
                 if self.turn_liveness is not None:
-                    self.turn_liveness.tool_finished()
+                    self.turn_liveness.tool_finished(current_task)
+
+        async def liveness_tracked(params):
+            # Never register/cancel Pipecat's caller task (or a test's task).
+            # The handler wrapper owns a dedicated task which a real barge-in
+            # can safely cancel without affecting its caller's other work.
+            return await asyncio.create_task(run_liveness_tracked(params))
 
         super().register_function(
             function_name, liveness_tracked, start_callback, cancel_on_interruption=False
