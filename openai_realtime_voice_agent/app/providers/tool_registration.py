@@ -373,7 +373,10 @@ class ToolRegistrationMixin:
                         and self.turn_liveness.tool_was_cancelled(current_task)):
                     return None
                 callback_used = True
-                # shielded: a cap or a barge-in landing mid-delivery must not leave the call half-answered
+                # shielded: a cap or a barge-in landing mid-delivery must not leave the call half-answered.
+                # Accepted risk (Hemma 2026-10-21): a barge-in landing in the milliseconds while the handler's OWN result is
+                # being handed over lets that result through with default properties, so the model may speak after the
+                # interruption. A whole, true answer beats a half-delivered one.
                 return await asyncio.shield(original_callback(result, *args, **kwargs))
 
             async def capped_callback(result, *args, **kwargs):
