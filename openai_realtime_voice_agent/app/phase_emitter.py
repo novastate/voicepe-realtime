@@ -112,6 +112,12 @@ class TurnLiveness:
         self.woke_at = 0.0
         # Tool runs this user turn, per tool name (loop guard, 0.25.1).
         self.tool_counts = {}
+        # Running tool wrapper tasks and recently interrupted call keys. A real
+        # barge-in cancels every running tool; Gemini's emulated transcript
+        # start must not.
+        self.tool_tasks = {}
+        self.avbrutna = {}
+        self._cancelled_tool_tasks = set()
 
     def woke(self) -> None:
         self.woke_at = time.monotonic()
@@ -144,9 +150,15 @@ class TurnLiveness:
         """
         if emulated and self.user_started_at > self.turn_over_at:
             return
-        self.user_started_at = time.monotonic()
+        now = time.monotonic()
+        self.user_started_at = now
         self.acked = False
         self.tool_counts = {}
+        if not emulated:
+            for task, call_key in list(self.tool_tasks.items()):
+                self.avbrutna[call_key] = now
+                self._cancelled_tool_tasks.add(task)
+                task.cancel()
 
     def no_ack(self) -> None:
         """This stop is not a turn the model answers (dangling VAD, dead turn)."""
@@ -184,13 +196,30 @@ class TurnLiveness:
         self.acked = True
         return True
 
-    def tool_started(self) -> None:
+    def tool_started(self, call_key=None, task=None) -> None:
         self.in_flight += 1
         self.last_activity = time.monotonic()
+        if call_key is not None and task is not None:
+            self.tool_tasks[task] = call_key
 
-    def tool_finished(self) -> None:
+    def tool_finished(self, task=None) -> None:
         self.in_flight = max(0, self.in_flight - 1)
         self.last_activity = time.monotonic()
+        if task is not None:
+            self.tool_tasks.pop(task, None)
+            self._cancelled_tool_tasks.discard(task)
+
+    def tool_was_cancelled(self, task) -> bool:
+        return task in self._cancelled_tool_tasks
+
+    def interrupted_recently(self, call_key: str, max_age_s: float = 60.0) -> bool:
+        now = time.monotonic()
+        self.avbrutna = {
+            key: interrupted_at
+            for key, interrupted_at in self.avbrutna.items()
+            if now - interrupted_at < max_age_s
+        }
+        return call_key in self.avbrutna
 
 
 class PhaseEmitter(FrameProcessor):
