@@ -1613,6 +1613,18 @@ class Application:
         if isinstance(tools, list):
             have = {t.get("name") for t in tools if isinstance(t, dict)}
             tools.extend(t for t in ha_tools if t.get("name") not in have)
+        live = getattr(service, "_config", None)  # OpenAI Live: one dict, sent as-is in session.start
+        if isinstance(live, dict):
+            if isinstance(live.get("instructions"), str):
+                live["instructions"] = live["instructions"].replace(HA_VERKTYG_SAKNAS, "")
+            funcs = ((live.get("delegation") or {}).get("responses") or {}).get("tools")
+            if isinstance(funcs, list):
+                have = {t.get("name") for t in funcs if isinstance(t, dict)}
+                funcs.extend(
+                    {"type": "function", "name": t["name"], "description": t.get("description", ""),
+                     "parameters": t.get("parameters") or {"type": "object", "properties": {}}}
+                    for t in ha_tools if t.get("name") and t["name"] not in have
+                )
         gemini = getattr(service, "_tools_from_init", None)
         if isinstance(gemini, list):
             decls = to_gemini_tools(ha_tools)

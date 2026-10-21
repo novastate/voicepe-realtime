@@ -123,3 +123,26 @@ async def test_gemini_renders_the_warning_per_connect_and_follows_the_flag():
     assert HA_NERE in service.instructions_provider()
     connection.ha_verktyg_saknas = False  # what _markera_ha_verktyg does on a good fetch
     assert HA_NERE not in service.instructions_provider()
+
+
+@pytest.mark.asyncio
+async def test_openai_live_drops_the_warning_and_gets_the_tools_on_wake_refetch():
+    """G:s slutpass: Live skickar sin egen `_config` i session.start, inte `_session_properties`."""
+    from app.main import HA_VERKTYG_SAKNAS
+
+    app = _bare_app("openai")
+    service = type("Live", (), {})()
+    service._config = {
+        "instructions": "Du är Björn. " + HA_VERKTYG_SAKNAS,
+        "delegation": {"type": "responses", "responses": {"tools": []}},
+    }
+    schema = ToolsSchema(standard_tools=[FunctionSchema(name="HassTurnOn", description="d", properties={}, required=[])])
+
+    async def _inga(*a, **k):
+        return None
+
+    app._register_ha_handlers = _inga
+    await app._ladda_ha_verktyg(service, schema, "koket")
+
+    assert HA_VERKTYG_SAKNAS not in service._config["instructions"]
+    assert [t["name"] for t in service._config["delegation"]["responses"]["tools"]] == ["HassTurnOn"]
