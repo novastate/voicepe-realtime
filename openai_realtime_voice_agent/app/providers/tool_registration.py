@@ -29,6 +29,13 @@ def _result_max_chars() -> int:
         return 6000
 
 
+def _tool_timeout_seconds() -> float:
+    try:
+        return max(0.0, float(os.environ.get("TOOL_TIMEOUT_SECONDS", "30")))
+    except ValueError:
+        return 30.0
+
+
 def cap_tool_result(result, max_chars: int):
     """Shorten a tool result that would flood the conversation.
 
@@ -426,7 +433,21 @@ class ToolRegistrationMixin:
                         logger.info(f"🎵 {function_name} on a speaker -> {ny} (a speaker cannot be turned off, it is paused)")
                         params.function_name, params.arguments = ny, paus[1]
                         return await self._ra_handlers[ny](params)
-                return await handler(params)
+                timeout_seconds = _tool_timeout_seconds()
+                try:
+                    return await asyncio.wait_for(handler(params), timeout=timeout_seconds or None)  # 0 = no cap
+                except asyncio.TimeoutError:
+                    utfall = "fel"
+                    log_timing("fel")
+                    if not callback_used:
+                        await params.result_callback({
+                            "error": (
+                                f"Verktyget svarade inte inom {timeout_seconds:g} sekunder. "
+                                "Säg att det inte gick att bekräfta att det blev gjort, och "
+                                "påstå aldrig att det är klart."
+                            )
+                        })
+                    return
             except Exception as e:
                 utfall = "fel"
                 logger.warning(f"⚠️ {function_name} kastade: {e!r}", exc_info=True)  # the model only gets the type name
