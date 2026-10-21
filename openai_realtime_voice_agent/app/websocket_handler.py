@@ -1810,6 +1810,7 @@ class WebSocketHandler:
                     natet_nere=lambda: bana0.natet_nere(self.engine_probe, engines, OFFLINE_PROBE_S),
                     claim=lambda: liveness.claim_silence_ack(asked),
                     say=_say,
+                    comms_lever=lambda: bana0.comms_lever(OFFLINE_PROBE_S),
                 ))
                 # The loop keeps tasks weakly; hold it until it is done.
                 self._offline_tasks.add(task)

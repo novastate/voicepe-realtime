@@ -1,4 +1,6 @@
 """Without internet (raawr US-018): bana 0 still confirms, a question gets an honest no."""
+import asyncio
+from types import SimpleNamespace
 import time
 
 import pytest
@@ -79,7 +81,7 @@ async def test_miss_dar_modellen_inte_nas_kraschar_inte_och_vaktar(monkeypatch):
     assert calls == ["vakt"]
 
 
-async def _vakta(nere, claimed=True):
+async def _vakta(nere, claimed=True, comms=None):
     said = []
 
     async def natet_nere():
@@ -90,14 +92,41 @@ async def _vakta(nere, claimed=True):
     async def say(text):
         said.append(text)
 
-    sagt = await bana0.vakta_natet(natet_nere=natet_nere, claim=lambda: claimed, say=say)
+    async def comms_lever():
+        return comms
+
+    kwargs = {"comms_lever": comms_lever} if comms is not None else {}
+    sagt = await bana0.vakta_natet(
+        natet_nere=natet_nere, claim=lambda: claimed, say=say, **kwargs,
+    )
     return sagt, said
 
 
 @pytest.mark.asyncio
-async def test_natet_nere_sager_det():
-    sagt, said = await _vakta(True)
+async def test_comms_uppe_ger_offlinevariant_som_forut():
+    sagt, said = await _vakta(True, comms=True)
     assert sagt is True and len(said) == 1 and said[0] in bana0.OFFLINE_VARIANTER
+
+
+@pytest.mark.asyncio
+async def test_comms_nere_ger_inget_lofte_om_lamporna():
+    sagt, said = await _vakta(True, comms=False)
+    assert sagt is True and len(said) == 1
+    assert not any(lofte in said[0].lower() for lofte in ("fungerar", "funkar", "går att styra"))
+
+
+@pytest.mark.asyncio
+async def test_comms_probe_som_hanger_ger_replik_inom_taket(monkeypatch):
+    monkeypatch.setenv("HA_API_URL", "http://comms.test/kanal/rost/kontoret/api")
+    monkeypatch.setenv("COMMS_NYCKEL", "k")
+    async def hanger(*args, **kwargs):
+        await asyncio.sleep(2)
+
+    monkeypatch.setattr(bana0.httpx.AsyncClient, "get", hanger)
+    start = time.monotonic()
+    sagt, said = await _vakta(True, comms=await bana0.comms_lever(0.05))
+    assert time.monotonic() - start < 0.5
+    assert sagt is True and said[0] in bana0.OFFLINE_UTAN_LOFTE
 
 
 @pytest.mark.asyncio
@@ -180,3 +209,22 @@ def test_ny_fras_efter_traffen_far_inget_klart():
     _t.sleep(0.01)
     liv.user_started()
     assert bana0.ingen_bekraftelse_an(liv, asked) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,lever", [(200, True), (404, True), (401, True), (502, False), (503, False)])
+async def test_comms_lever_raknar_varje_svar_under_500(monkeypatch, status, lever):
+    monkeypatch.setenv("HA_API_URL", "http://comms.test/kanal/rost/kontoret/api")
+    monkeypatch.setenv("COMMS_NYCKEL", "k")
+
+    async def svar(*args, **kwargs):
+        return SimpleNamespace(status_code=status)
+
+    monkeypatch.setattr(bana0.httpx.AsyncClient, "get", svar)
+    assert await bana0.comms_lever(0.5) is lever
+
+
+@pytest.mark.asyncio
+async def test_comms_lever_ar_falskt_utan_konfiguration(monkeypatch):
+    monkeypatch.delenv("HA_API_URL", raising=False)
+    assert await bana0.comms_lever(0.5) is False
