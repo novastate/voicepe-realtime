@@ -32,6 +32,10 @@ SPRAKLAS = (
     "\n\nSPRÅK: Svara ALLTID på svenska, från första ordet. Det du hör kan vara brus, musik eller ett annat "
     "språk före det riktiga talet; det ändrar aldrig svarsspråket. Börja aldrig ett svar på ett annat språk."
 )
+HA_VERKTYG_SAKNAS = (
+    "\n\nHusets verktyg går inte att nå just nu. Säg det rakt om någon ber dig styra något, "
+    "och påstå aldrig att något är gjort."
+)
 # Over his reply the engine cuts him on any voice, a "ja" too (Kontoret 2026-10-14: "ja" cut him and he asked "...det?").
 # Telling a back-channel from an interruption is a matter of words, not of sound, so the words decide (raawr US-060 AC-8).
 AVBROTT = (
@@ -1085,11 +1089,15 @@ class Application:
                 except Exception as e:
                     logger.warning(f"⚠️ Idag: no weather/calendar for this session ({e!r})")
                 options = self.provider_options(provider, rum)
+            if connection.ha_verktyg_saknas:
+                options.instructions += HA_VERKTYG_SAKNAS
             options.rum = rum
             service = build_service(provider, options, all_tools)
             if provider == GEMINI:
                 # Rendered again on every (re)connect: a fresh time and block.
-                service.instructions_provider = self._instruktionskalla(rum)
+                service.instructions_provider = lambda: self._instructions(rum) + (
+                    HA_VERKTYG_SAKNAS if connection.ha_verktyg_saknas else ""
+                )
             service.speaker_probe = None
             service.male_only_tools = set()
             connection.turn_liveness = TurnLiveness()
@@ -1598,10 +1606,25 @@ class Application:
 
         ha_tools = with_ack_hint(self._ha_tool_definitions(schema))
         props = getattr(service, "_session_properties", None)
+        if props is not None and isinstance(getattr(props, "instructions", None), str):
+            # The warning was put there when the build could not reach HA; the tools are here now.
+            props.instructions = props.instructions.replace(HA_VERKTYG_SAKNAS, "")
         tools = getattr(props, "tools", None) if props is not None else None
         if isinstance(tools, list):
             have = {t.get("name") for t in tools if isinstance(t, dict)}
             tools.extend(t for t in ha_tools if t.get("name") not in have)
+        live = getattr(service, "_config", None)  # OpenAI Live: one dict, sent as-is in session.start
+        if isinstance(live, dict):
+            if isinstance(live.get("instructions"), str):
+                live["instructions"] = live["instructions"].replace(HA_VERKTYG_SAKNAS, "")
+            funcs = ((live.get("delegation") or {}).get("responses") or {}).get("tools")
+            if isinstance(funcs, list):
+                have = {t.get("name") for t in funcs if isinstance(t, dict)}
+                funcs.extend(
+                    {"type": "function", "name": t["name"], "description": t.get("description", ""),
+                     "parameters": t.get("parameters") or {"type": "object", "properties": {}}}
+                    for t in ha_tools if t.get("name") and t["name"] not in have
+                )
         gemini = getattr(service, "_tools_from_init", None)
         if isinstance(gemini, list):
             decls = to_gemini_tools(ha_tools)
