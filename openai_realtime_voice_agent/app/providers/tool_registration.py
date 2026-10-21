@@ -373,7 +373,8 @@ class ToolRegistrationMixin:
                         and self.turn_liveness.tool_was_cancelled(current_task)):
                     return None
                 callback_used = True
-                return await original_callback(result, *args, **kwargs)
+                # shielded: a cap or a barge-in landing mid-delivery must not leave the call half-answered
+                return await asyncio.shield(original_callback(result, *args, **kwargs))
 
             async def capped_callback(result, *args, **kwargs):
                 nonlocal utfall

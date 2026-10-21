@@ -83,9 +83,11 @@ async def test_the_cap_also_covers_the_media_pause_rewrite(monkeypatch):
     async def hanging_pause(params):
         await asyncio.sleep(5)
 
+    async def would_finish_at_once(params):  # the original call: only the REWRITE target hangs
+        await params.result_callback({"result": "klart utan omskrivning"})
+
     service.register_function("HassMediaPause", hanging_pause)
-    service.register_function("HassTurnOff", hanging_pause)
-    service._functions["HassTurnOff"]  # registered
+    service.register_function("HassTurnOff", would_finish_at_once)
     async def call():
         results = []
 
@@ -125,3 +127,24 @@ async def test_a_handlers_own_timeout_is_not_reported_as_our_cap(monkeypatch):
     service.register_function("own", own_timeout)
     results = await _call(service, "own")
     assert "svarade inte inom" not in str(results)
+
+
+@pytest.mark.asyncio
+async def test_a_result_being_delivered_when_the_cap_lands_is_still_delivered(monkeypatch):
+    monkeypatch.setenv("TOOL_TIMEOUT_SECONDS", "0.1")
+    service = _service()
+    delivered = []
+
+    async def slow_original(result, *args, **kwargs):
+        await asyncio.sleep(0.3)
+        delivered.append(result)
+
+    async def handler(params):
+        await params.result_callback({"result": "sent"})
+
+    service.register_function("late_delivery", handler)
+    await service._functions["late_delivery"].handler(
+        SimpleNamespace(arguments={}, result_callback=slow_original, function_name="late_delivery")
+    )
+    await asyncio.sleep(0.5)
+    assert delivered == [{"result": "sent"}]
