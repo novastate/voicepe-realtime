@@ -367,3 +367,79 @@ async def test_gemini_tjansten_raknar_ljud_och_vaeckar_den_som_vantar():
     assert t.skickat == {"text": "hej"} and await t.vanta_forsta_ljud(0.05) is False
     t._forsta_ljud.set()
     assert await t.vanta_forsta_ljud(0.05) is True
+
+
+def test_en_hjarna_tar_bort_kunskapsverktygen_bara_med_vag_till_core(monkeypatch):
+    verktyg = [{"name": n} for n in ("web_search", "ask_openclaw", "recall_memory", "HassTurnOn", "fraga_core")]
+    monkeypatch.setenv("CORE_STROM_URL", "http://x/fraga")
+    monkeypatch.delenv("EN_HJARNA", raising=False)
+    assert core_strom.en_hjarna_aktiv() is False
+    monkeypatch.setenv("EN_HJARNA", "1")
+    assert core_strom.en_hjarna_aktiv() is True
+    assert core_strom.core_stream_tala_paa() is True  # implies the stream, no second flag
+    assert [t["name"] for t in core_strom.utan_kunskapsverktyg(verktyg)] == ["HassTurnOn", "fraga_core"]
+    monkeypatch.delenv("CORE_STROM_URL")
+    monkeypatch.delenv("HA_API_URL", raising=False)
+    assert core_strom.en_hjarna_aktiv() is False  # no road to Core: the model keeps its own tools
+
+
+def test_gemini_google_sokning_stangs_av_under_en_hjarna(monkeypatch):
+    from app.providers import gemini_live
+
+    monkeypatch.setenv("CORE_STROM_URL", "http://x/fraga")
+    monkeypatch.delenv("GEMINI_GOOGLE_SEARCH", raising=False)
+    monkeypatch.delenv("EN_HJARNA", raising=False)
+    assert gemini_live._google_search_on("gemini-3.8-live") is True
+    monkeypatch.setenv("EN_HJARNA", "1")
+    assert gemini_live._google_search_on("gemini-3.8-live") is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("en_hjarna", ["1", "0"])
+async def test_en_hjarna_session_har_inga_kunskapsverktyg_trots_openclaw_och_mcp(monkeypatch, en_hjarna):
+    """Through create_service, with OPENCLAW_URL set and Home Assistant's tools fetched: the filter
+    must see the final list (A on #68: it ran before openclaw/MCP and left ask_openclaw behind)."""
+    from app import providers
+    from app.device_registry import DeviceConnection
+    from tests.test_provider_selection import _bare_app
+    from tests.test_token_budget import _McpClient
+
+    monkeypatch.setenv("OPENCLAW_URL", "http://openclaw.test:3400")
+    monkeypatch.setenv("CORE_STROM_URL", "http://x/fraga")
+    monkeypatch.setenv("CORE_STREAM_TALA", "1")
+    monkeypatch.setenv("EN_HJARNA", en_hjarna)
+    seen = {}
+    real_build = providers.build_service
+
+    def capture(provider, options, tools):
+        seen["tools"] = tools
+        return real_build(provider, options, tools)
+
+    monkeypatch.setattr(providers, "build_service", capture)
+    app = _bare_app(providers.GEMINI)
+    app.enable_web_search = True
+    app.web_search_model = "gpt-5.5"
+    app.mcp_client = _McpClient()
+    connection = DeviceConnection(device_id="kontor", websocket=object())
+    connection.provider = providers.GEMINI
+    await app.create_service(connection)
+    names = {t["name"] for t in seen["tools"]}
+    assert "fraga_core" in names
+    assert any(n.startswith("intent__HassTurnOn") for n in names)  # house control stays
+    for borta in ("web_search", "ask_openclaw", "recall_memory"):
+        assert (borta not in names) is (en_hjarna == "1"), borta
+
+
+def test_en_hjarna_tillagget_finns_i_instruktionen_i_bade_vag_b_och_c_och_forsvinner_utan_flaggan(monkeypatch):
+    """A:s FAIL på #68: i skills-läget (väg c) går instruktionen genom en egen gren; tillägget ska med dit."""
+    from app.core_strom import EN_HJARNA_TILLAGG
+    from tests.test_provider_selection import _bare_app
+
+    monkeypatch.setenv("CORE_STROM_URL", "http://comms.test/kanal/rost/kontoret/")
+    for lage in ("", "c"):
+        monkeypatch.setenv("ROST_SKILLS", lage)
+        monkeypatch.setenv("EN_HJARNA", "1")
+        app = _bare_app("gemini")
+        assert EN_HJARNA_TILLAGG in app._instructions("kontoret"), f"ROST_SKILLS={lage!r}"
+        monkeypatch.setenv("EN_HJARNA", "0")
+        assert EN_HJARNA_TILLAGG not in app._instructions("kontoret"), f"ROST_SKILLS={lage!r} utan flagga"
