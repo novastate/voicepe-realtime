@@ -428,3 +428,18 @@ async def test_en_hjarna_session_har_inga_kunskapsverktyg_trots_openclaw_och_mcp
     assert any(n.startswith("intent__HassTurnOn") for n in names)  # house control stays
     for borta in ("web_search", "ask_openclaw", "recall_memory"):
         assert (borta not in names) is (en_hjarna == "1"), borta
+
+
+def test_en_hjarna_tillagget_finns_i_instruktionen_i_bade_vag_b_och_c_och_forsvinner_utan_flaggan(monkeypatch):
+    """A:s FAIL på #68: i skills-läget (väg c) går instruktionen genom en egen gren; tillägget ska med dit."""
+    from app.core_strom import EN_HJARNA_TILLAGG
+    from tests.test_provider_selection import _bare_app
+
+    monkeypatch.setenv("CORE_STROM_URL", "http://comms.test/kanal/rost/kontoret/")
+    for lage in ("", "c"):
+        monkeypatch.setenv("ROST_SKILLS", lage)
+        monkeypatch.setenv("EN_HJARNA", "1")
+        app = _bare_app("gemini")
+        assert EN_HJARNA_TILLAGG in app._instructions("kontoret"), f"ROST_SKILLS={lage!r}"
+        monkeypatch.setenv("EN_HJARNA", "0")
+        assert EN_HJARNA_TILLAGG not in app._instructions("kontoret"), f"ROST_SKILLS={lage!r} utan flagga"
