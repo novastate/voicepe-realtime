@@ -347,3 +347,12 @@ def test_hamta_svar_trasig_kropp_pa_200_ar_ej_nu(monkeypatch):
     monkeypatch.setattr(sent_svar.httpx, "AsyncClient", K)
     with pytest.raises(sent_svar.EjNu):
         asyncio.run(sent_svar.hamta_svar("r1"))
+
+
+def test_the_level_after_a_question_is_logged_and_never_breaks_it(caplog):
+    import logging
+    caplog.set_level(logging.INFO)
+    sent_svar.SentSvar._mat_efter_fraga("kontoret", TYST + TAL, True)
+    assert "after the question (kontoret): 1.5 s heard" in caplog.text and "reached" in caplog.text
+    sent_svar.SentSvar._mat_efter_fraga("kontoret", b"", False)  # nothing heard: no error
+    sent_svar.SentSvar._mat_efter_fraga("kontoret", None, False)  # junk: swallowed
