@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Tuple
 import httpx
 
 from app import ha_api
+from app.core_strom import en_hjarna_aktiv, KUNSKAPSSKILLS
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,8 @@ def katalog_url() -> str:
 
 
 def block(skills: List[Tuple[str, str]]) -> str:
+    if en_hjarna_aktiv():
+        skills = [(n, r) for n, r in skills if n not in KUNSKAPSSKILLS]
     rader = "\n".join(f"- {namn}: {rad}" for namn, rad in skills)
     return ("\n\nHUSETS SKILLS. Läs en skill med las_skill innan du använder dess verktyg, kör sedan "
             "verktyget med anvand_verktyg. Säger svaret nej, säg det kort och gå vidare.\n" + rader)
@@ -98,7 +101,7 @@ class Katalog:
     """The last good catalogue per room, so a comms hiccup does not take the house away from a session."""
 
     def __init__(self):
-        self._senaste: Dict[str, str] = {}
+        self._senaste: Dict[str, List[Tuple[str, str]]] = {}
 
     async def _hamta(self) -> Optional[List[Tuple[str, str]]]:
         url = katalog_url()
@@ -121,10 +124,10 @@ class Katalog:
     async def text(self, rum: str) -> str:
         skills = await self._hamta()
         if skills:
-            self._senaste[rum] = block(skills)
+            self._senaste[rum] = skills
             logger.info(f"🧩 skills ({rum}): {len(skills)} i katalogen: {[n for n, _ in skills]}")
-            return self._senaste[rum]
+            return block(self._senaste[rum])
         if rum in self._senaste:
             logger.info(f"🧩 skills ({rum}): senast hämtade katalogen används")
-            return self._senaste[rum]
+            return block(self._senaste[rum])
         return "\n\n" + NAS_INTE

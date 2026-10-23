@@ -4,6 +4,9 @@ All notable changes to this add-on. Newest first.
 
 ## Unreleased (fork)
 
+### 0.29.11
+- **US-181:** Räkna Gemini-fel under obesvarade verktygsanrop, starta ny session vid utgånget sessionshandtag, dölj kunskapsskills med aktiv EN_HJARNA/Core och besvara okända verktyg med fel.
+
 - **Ett läsvärde sägs som svar, inte som en utförd handling** (raawr US-116/US-069). `bana0.prova` bär nu Comms märke `raawr_bana0.tala` på svaret, och `gjort()` säger då "Användaren frågade ... Home Assistant svarade ... det är svaret, säg det kort, inget du har gjort" i stället för "Huset har REDAN gjort det". Utan märke (en lampa) är texten oförändrad. Två prov i `test_bana0.py` som faller utan ändringen.
 - **Pengakollen läser bara "credits are depleted", inte ett löst "depleted"** (B:s notis på #76). Ett fel som bara säger "depleted" om något annat räknas inte längre som slut på pengar. Prov i `test_gemini_tak.py` faller utan ändringen.
 - **`GEMINI_NO_INTERRUPTION`: motorns egna avbrott kan stängas av per rum** (raawr US-060 AC-17, Henrik 2026-10-17). Syntax som `GEMINI_EGEN_TUR` (`1` eller rumsnamn, t.ex. `kontoret`). Med den på sätter anslutningen `ActivityHandling.NO_INTERRUPTION`: Google klipper aldrig på egen hand (idag klipper den 4 av 10 medhåll), och bara vår stoppordsvakt (`STOPP_VAKT`) klipper — stoppord, 'Björn' och allt högt tal som inte är medhåll. AV som standard: motorns avbrott är nätet för det vakten missar (en tyst röst). Provat mot live-nyckeln på core: `models/gemini-3.8-live` tar emot inställningen (ansluter, ingen 1011); att den verkligen stänger av klippen är inte mätt. 3 nya prov.

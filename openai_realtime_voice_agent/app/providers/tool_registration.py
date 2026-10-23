@@ -236,6 +236,17 @@ class ToolRegistrationMixin:
         class Foo(ToolRegistrationMixin, SomeLLMService): ...
     """
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        async def unknown_tool(params):
+            logger.warning(f"okänt verktyg: {params.function_name!r}")
+            await params.result_callback({"error": f"okänt verktyg: {params.function_name}"})
+
+        # Pipecat dispatches unregistered names to None, preserving the call ID
+        # and sending the result through the normal context/result pipeline.
+        super().register_function(None, unknown_tool, cancel_on_interruption=False)
+
     # main.py sets these on the service right after build_service(). The
     # defaults exist so a tool registered before that never raises.
     speaker_probe = None
