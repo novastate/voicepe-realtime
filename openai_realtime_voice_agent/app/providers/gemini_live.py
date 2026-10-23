@@ -1098,8 +1098,9 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
                 self.instructions_at = time.monotonic()
             except Exception as e:
                 logger.warning(f"⚠️ instruction not re-rendered, keeping the last ({e!r})")
-        if session_resumption_handle is None and not self._session:
-            self._unanswered_tools = set()
+        # A new connection cannot wait for answers the old one owed (a cancelled or crashed tool never answers).
+        # _handle_connection_error has already read the set by the time pipecat reconnects.
+        self._unanswered_tools = set()
         await super()._connect(session_resumption_handle)
 
     async def _ateranslut(self, forut: bool) -> None:  # SovlageMixin
