@@ -49,11 +49,12 @@ def en_hjarna_aktiv() -> bool:
 
 
 # Tools that answer a fact from somewhere else than Core. Under EN_HJARNA only `fraga_core` does.
-KUNSKAPSVERKTYG = frozenset({"web_search", "ask_openclaw", "recall_memory"})
+KUNSKAPSSKILLS = frozenset({"webb", "sport", "minne", "research"})
+KUNSKAPSVERKTYG = frozenset({"web_search", "ask_openclaw", "recall_memory"}) | KUNSKAPSSKILLS
 
 
 def utan_kunskapsverktyg(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    return [t for t in tools if t.get("name") not in KUNSKAPSVERKTYG]
+    return [t for t in tools if t.get("name", "").rsplit("__", 1)[-1] not in KUNSKAPSVERKTYG]
 
 
 EN_HJARNA_TILLAGG = (

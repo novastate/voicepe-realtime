@@ -20,6 +20,7 @@ from google.genai.types import (
     ActivityStart,
     EndSensitivity,
     HttpOptions,
+    FunctionResponse,
     ProactivityConfig,
     StartSensitivity,
     ThinkingConfig,
@@ -1097,6 +1098,9 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
                 self.instructions_at = time.monotonic()
             except Exception as e:
                 logger.warning(f"⚠️ instruction not re-rendered, keeping the last ({e!r})")
+        # A new connection cannot wait for answers the old one owed (a cancelled or crashed tool never answers).
+        # _handle_connection_error has already read the set by the time pipecat reconnects.
+        self._unanswered_tools = set()
         await super()._connect(session_resumption_handle)
 
     async def _ateranslut(self, forut: bool) -> None:  # SovlageMixin
@@ -1155,6 +1159,18 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
 
     ingen_avbrott = False   # set by build(): GEMINI_NO_INTERRUPTION covers this room
 
+    def _expired_resume(self, error):
+        text = str(error).lower()
+        return bool(self._session_resumption_handle) and "1008" in text and "session not found or expired" in text
+
+    async def _fresh_session(self):
+        logger.warning("☁️ Gemini session not found or expired — discarding handle and starting fresh")
+        self._session_resumption_handle = None
+        # We are the reader task: disconnect must not cancel its own caller.
+        self._connection_task = None
+        await self._disconnect()
+        await self._connect(None)
+
     async def _connection_task_handler(self, config):
         if self.ingen_avbrott and config is not None:
             from google.genai.types import ActivityHandling, RealtimeInputConfig
@@ -1165,6 +1181,9 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         try:
             await super()._connection_task_handler(config)
         except Exception as e:
+            if self._expired_resume(e) and not self._disconnecting:
+                await self._fresh_session()
+                return
             from app.provider_failures import Failure, classify
             if classify(str(e)) is Failure.MONEY:
                 self.vagran = "tak"
@@ -1245,8 +1264,34 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             return
         await session.send_realtime_input(audio_stream_end=True)
 
+    async def run_function_calls(self, function_calls):
+        if not hasattr(self, "_unanswered_tools"):
+            self._unanswered_tools = set()
+        self._unanswered_tools.update(c.tool_call_id for c in function_calls)
+        return await super().run_function_calls(function_calls)
+
+    async def _tool_result(self, tool_call_id, tool_name, tool_result_message):
+        if not self._session or self._disconnecting:
+            return
+        # Pipecat swallows send failures; only an actual successful send answers the call.
+        try:
+            await self._session.send_tool_response(function_responses=FunctionResponse(
+                name=tool_name, id=tool_call_id, response=tool_result_message))
+        except Exception as error:
+            await self._handle_send_error(error)
+        else:
+            getattr(self, "_unanswered_tools", set()).discard(tool_call_id)
+
+    def _check_and_reset_failure_counter(self):
+        # A quiet socket with an unanswered tool is still a busy conversation.
+        if not getattr(self, "_unanswered_tools", None):
+            super()._check_and_reset_failure_counter()
+
     async def _handle_connection_error(self, error: Exception) -> bool:
         """Forgive a connection that stood long enough before it dropped."""
+        if self._expired_resume(error) and not self._disconnecting:
+            await self._fresh_session()
+            return False  # the replacement reader already owns the new connection
         lifetime = None
         if self._connection_start_time:
             lifetime = time.time() - self._connection_start_time
@@ -1265,7 +1310,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         # Runs pipecat's own stable-connection rule, which the receive loop
         # can only reach while the server is talking to us.
         self._check_and_reset_failure_counter()
-        if lifetime is not None and self._consecutive_failures == 0:
+        if lifetime is not None and self._consecutive_failures == 0 and not getattr(self, "_unanswered_tools", None):
             logger.info(
                 f"🔁 Gemini socket closed after {lifetime:.0f}s of an idle house — "
                 f"reconnecting, not counting it against the engine"
