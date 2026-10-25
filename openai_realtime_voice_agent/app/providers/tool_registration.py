@@ -244,7 +244,7 @@ class ToolRegistrationMixin:
         super().__init__(*args, **kwargs)
 
         async def unknown_tool(params):
-            logger.warning(f"okänt verktyg: {params.function_name!r}")
+            logger.warning(f"okänt verktyg: {str(params.function_name)[:64]!r}")
             await params.result_callback({"error": f"okänt verktyg: {params.function_name}"})
 
         # Pipecat dispatches unregistered names to None, preserving the call ID
@@ -361,13 +361,13 @@ class ToolRegistrationMixin:
                             except (ValueError, TypeError):
                                 arguments = None
                         namn = arguments.get("namn") if isinstance(arguments, dict) else None
-                        if isinstance(namn, str) and namn.strip():
-                            # Only the selected name, never the payload or answer. A name the
-                            # model made up (too long, odd characters) is logged as okänt (US-206).
-                            if not NAMN_OK.fullmatch(namn):
-                                namn = "okänt"
-                            typ = "skill" if bas == "las_skill" else "verktyg"
-                            logger.info(f"🧰 {typ} {namn}")
+                        # Only the selected name, never the payload or answer. A missing, empty
+                        # or made-up name (too long, odd characters) is logged as okänt, so every
+                        # call is counted (US-206, US-215).
+                        if not (isinstance(namn, str) and NAMN_OK.fullmatch(namn)):
+                            namn = "okänt"
+                        typ = "skill" if bas == "las_skill" else "verktyg"
+                        logger.info(f"🧰 {typ} {namn}")
 
             async def ack_if_slow():
                 # The owner, 2026-10-02: a smart agent says it has understood
