@@ -143,6 +143,31 @@ async def test_comms_probe_som_hanger_ger_replik_inom_taket(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status,lovar", [(401, False), (403, False), (200, True), (404, True)])
+async def test_us197_offline_raden_foljer_om_snabbvagen_tar_emot_orden(monkeypatch, status, lovar):
+    monkeypatch.setenv("HA_API_URL", "http://comms.test/kanal/rost/kontoret/api")
+    monkeypatch.setenv("COMMS_NYCKEL", "k")
+
+    async def svar(*args, **kwargs):
+        return SimpleNamespace(status_code=status)
+
+    monkeypatch.setattr(bana0.httpx.AsyncClient, "get", svar)
+    said = []
+
+    async def natet_nere():
+        return True
+
+    async def say(t):
+        said.append(t)
+
+    sagt = await bana0.vakta_natet(natet_nere=natet_nere, claim=lambda: True, say=say,
+                                   kolla_comms=lambda: bana0.comms_lever(0.5))
+    assert sagt is True
+    assert (said[0] in bana0.OFFLINE_VARIANTER) is lovar
+    assert (said[0] in bana0.OFFLINE_UTAN_LOFTE) is (not lovar)
+
+
+@pytest.mark.asyncio
 async def test_natet_uppe_ingen_replik():
     assert await _vakta(False) == (False, [])
 
@@ -225,8 +250,8 @@ def test_ny_fras_efter_traffen_far_inget_klart():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status,lever", [(200, True), (404, True), (401, True), (502, False), (503, False)])
-async def test_comms_lever_raknar_varje_svar_under_500(monkeypatch, status, lever):
+@pytest.mark.parametrize("status,lever", [(200, True), (404, True), (401, False), (403, False), (502, False), (503, False)])
+async def test_comms_lever_raknar_svar_under_500_utom_nekad_nyckel(monkeypatch, status, lever):
     monkeypatch.setenv("HA_API_URL", "http://comms.test/kanal/rost/kontoret/api")
     monkeypatch.setenv("COMMS_NYCKEL", "k")
 
