@@ -447,7 +447,8 @@ async def comms_lever(timeout: float) -> bool:
     """True when comms answers at all on the HA API base URL within `timeout`.
 
     Any HTTP answer below 500 counts (the base path itself may be a 404): the question is whether the door is
-    up, and a proxy's 502/503/504 means it is not. Not configured means there is nobody to ask: False.
+    up, and a proxy's 502/503/504 means it is not. A 401/403 means the door is up but refuses this speaker's key
+    (US-197): the fast path would deny the order too, so the offline line must not promise the lamps. Not configured means there is nobody to ask: False.
     """
     if not ha_api.configured():
         return False
@@ -455,7 +456,7 @@ async def comms_lever(timeout: float) -> bool:
     async def hamta() -> bool:
         async with httpx.AsyncClient(timeout=timeout) as client:
             svar = await client.get(ha_api.base(), headers=ha_api.headers())
-        return svar.status_code < 500
+        return svar.status_code < 500 and svar.status_code not in (401, 403)
 
     try:
         return await asyncio.wait_for(hamta(), timeout)

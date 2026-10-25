@@ -4,6 +4,9 @@ All notable changes to this add-on. Newest first.
 
 ## Unreleased (fork)
 
+### 0.29.14
+- **US-197:** `comms_lever` räknar 401/403 (huset nekar högtalarens nyckel) som att snabbspåret inte tar emot orden, så offline-raden blir den utan löfte om lamporna. 200/404 och 5xx som förut.
+
 ### 0.29.13
 - **US-191:** Med EN_HJARNA på nekas `las_skill` för webb/sport/minne/research och `anvand_verktyg` för webbsok, webbsida, minne_las/skriv och research_bestall/hamta direkt i röstagenten, med besked att sakfrågor går via `fraga_core`. Comms anropas inte.
 
