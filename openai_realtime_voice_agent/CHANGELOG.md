@@ -4,6 +4,9 @@ All notable changes to this add-on. Newest first.
 
 ## Unreleased (fork)
 
+### 0.29.17
+- **US-215:** `las_skill` och `anvand_verktyg` utan användbart namn (saknas, tomt, inte en sträng) loggas som `🧰 … okänt` och räknas. Raden `okänt verktyg:` har tak på 64 tecken av namnet; modellen får fortfarande svaret.
+
 ### 0.29.16
 - **US-206:** Ett verktygs- eller skillnamn som är längre än 64 tecken eller har tecken utanför `A-Za-z0-9_` loggas som `🧰 … okänt`. `matvarden.py` räknar sådana rader (och äldre rader med blanksteg) som `okänt` i stället för att tappa dem.
 
