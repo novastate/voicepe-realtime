@@ -4,6 +4,9 @@ All notable changes to this add-on. Newest first.
 
 ## Unreleased (fork)
 
+### 0.29.13
+- **US-191:** Med EN_HJARNA på nekas `las_skill` för webb/sport/minne/research och `anvand_verktyg` för webbsok, webbsida, minne_las/skriv och research_bestall/hamta direkt i röstagenten, med besked att sakfrågor går via `fraga_core`. Comms anropas inte.
+
 ### 0.29.12
 - **US-189:** Bevara Geminis transkribering även tillsammans med ljud eller turavslut. Logga hörd text före svaret en gång per tur, även efter verktyg; vid stängning loggas deltexterna som avbrutna och buffertarna töms. Ingen ny lagring eller vidarebefordran av journalen införs.
 
