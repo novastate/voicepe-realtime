@@ -4,6 +4,9 @@ All notable changes to this add-on. Newest first.
 
 ## Unreleased (fork)
 
+### 0.29.12
+- **US-189:** Bevara Geminis transkribering även tillsammans med ljud eller turavslut. Logga hörd text före svaret en gång per tur, även efter verktyg; vid stängning loggas deltexterna som avbrutna och buffertarna töms. Ingen ny lagring eller vidarebefordran av journalen införs.
+
 ### 0.29.11
 - **US-181:** Räkna Gemini-fel under obesvarade verktygsanrop, starta ny session vid utgånget sessionshandtag, dölj kunskapsskills med aktiv EN_HJARNA/Core och besvara okända verktyg med fel.
 

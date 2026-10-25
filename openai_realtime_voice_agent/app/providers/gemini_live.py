@@ -335,6 +335,8 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         except Exception as e:  # logging must never touch the turn
             logger.debug(f"transcription language check failed: {e!r}")
         await super()._handle_msg_input_transcription(message)
+        if getattr(message.server_content, "output_transcription", None):
+            await self._handle_msg_output_transcription(message)
 
     _svar_text: str = ""
     svar = None  # eko_vakt.Svar: what he has said, for the full-duplex echo net (US-060)
@@ -343,6 +345,8 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         """Keep what the model says: for the journal when the turn ends (raawr D-97), and for the echo net."""
         try:
             text = message.server_content.output_transcription.text or ""
+            if text.strip():
+                self._answer_after_tool = False
             self._svar_text += text
             if self.svar is None:
                 self.svar = _eko.Svar()
@@ -350,6 +354,16 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         except Exception as e:  # logging must never touch the turn
             logger.debug(f"output transcription not kept: {e!r}")
         await super()._handle_msg_output_transcription(message)
+
+    async def _handle_bundled_transcriptions(self, message) -> None:
+        # Pipecat 0.0.97 dispatches with if/elif: model_turn and turn_complete
+        # hide co-delivered transcripts. The input handler also handles output
+        # when both arrive together. Each text chunk reaches its handler once.
+        content = getattr(message, "server_content", None)
+        if getattr(content, "input_transcription", None):
+            await self._handle_msg_input_transcription(message)
+        elif getattr(content, "output_transcription", None):
+            await self._handle_msg_output_transcription(message)
 
     async def _handle_msg_tool_call(self, message) -> None:
         self._stopp_tystnad_slut()   # a tool call after a cut is the engine acting on the NEW turn (G on #95)
@@ -364,6 +378,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         that is swallowed whole, pipecat's bookkeeping included, so the
         answer's turn continues the same reply for everything downstream.
         """
+        await self._handle_bundled_transcriptions(message)
         # ponytail: a tool step the model never follows with audio stays open
         # until the next activityEnd; PhaseEmitter's thinking watchdog (15 s)
         # and mid-turn grace (8 s) are the bound on the device.
@@ -374,6 +389,8 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         self._reply_awaited_at = None
         self._genererar = False
         self._stopp_tystnad_slut()
+        if self._tur_text.strip():
+            logger.info(f"🎤 Hörde: {self._tur_text.strip()[:400]}")
         if self._svar_text.strip():
             logger.info(f"💬 Björn sa: {self._svar_text.strip()[:400]}")
         self._svar_text = ""
@@ -1062,6 +1079,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         as if it had been said. pipecat also reads only parts[0], so an audio
         part behind a thought part was lost. Each part is handled on its own.
         """
+        await self._handle_bundled_transcriptions(msg)
         parts = list(msg.server_content.model_turn.parts or [])
         if any(p.inline_data and p.inline_data.data for p in parts):
             self._answer_after_tool = False
@@ -1289,6 +1307,14 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
 
     async def _handle_connection_error(self, error: Exception) -> bool:
         """Forgive a connection that stood long enough before it dropped."""
+        # Flush before the expired-resume shortcut too: it replaces the socket.
+        if self._tur_text.strip():
+            logger.info(f"🎤 Hörde (avbruten, anslutningen): {self._tur_text.strip()[:400]}")
+        self._logg_avbruten_text("anslutningen")
+        self._transkr_start, self._transkr_kollad, self._tur_text = "", False, ""
+        self._answer_after_tool = False
+        if self.svar is not None:
+            self.svar.klar()
         if self._expired_resume(error) and not self._disconnecting:
             await self._fresh_session()
             return False  # the replacement reader already owns the new connection
