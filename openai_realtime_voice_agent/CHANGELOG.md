@@ -4,6 +4,9 @@ All notable changes to this add-on. Newest first.
 
 ## Unreleased (fork)
 
+### 0.29.15
+- **US-203:** Journalen får separata `🧰`-rader med vald skill eller verktygets namn, utan argument eller svar. `matvarden.py` räknar `fraga_core`, skills och verktyg per rum i dygnets journal, i text och JSON; äldre journaler ger noll.
+
 ### 0.29.14
 - **US-197:** `comms_lever` räknar 401/403 (huset nekar högtalarens nyckel) som att snabbspåret inte tar emot orden, så offline-raden blir den utan löfte om lamporna. 200/404 och 5xx som förut.
 

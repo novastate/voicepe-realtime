@@ -10,7 +10,9 @@ hit since the room's previous tider line is a personal reply when it carries mod
 
 Only timestamps, states and the code's own close reasons are read. What was said
 (the "heard" and "hit" lines) is matched on its prefix and never copied.
-A "hit" line carries no room: it is given to the room that last went THINKING.
+A "hit" or tool-choice line carries no room: it is given to the room that last
+went THINKING. Tool choices count fraga_core, skills and tools by name for the
+day of journal input, without reading their arguments or answers.
 """
 import json
 import re
@@ -21,6 +23,7 @@ from datetime import datetime
 LINE = re.compile(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d[,.]\d{3}) - \S+ - \w+ - (.*)")
 TIDER = re.compile(r"⏱ tider (\S+) ((?:\w+=\d+ ?)+)(utan_ljud)?")  # US-047 AC-1: ms after the end of speech
 KEDJA = re.compile(r"🧭 (\S+): (\w+) -> (\w+) \((\w+): (.*)\)$")
+VERKTYG = re.compile(r"🧰 (skill|verktyg) (\S+)$")
 
 
 def tid(s):
@@ -38,13 +41,26 @@ def pct(v, p):
 def mat(rader):
     rum = defaultdict(lambda: {"sessioner": 0, "forsta_ljud": [], "reflex": [], "minuter": 0.0,
                                "avbrott": 0, "stangning": Counter(), "efter_tal": [], "efter_tal_verktyg": [],
-                               "traff_personligt": [], "traff_kort": []})
+                               "traff_personligt": [], "traff_kort": [], "fraga_core": 0,
+                               "las_skill": Counter(), "anvand_verktyg": Counter()})
     vak, tank, senast_tank, traff_oppen = {}, {}, None, set()
     for rad in rader:
         m = LINE.match(rad.strip().split(" env[", 1)[-1].split("]: ", 1)[-1])
         if not m:
             continue
         t, text = tid(m.group(1)), m.group(2)
+        vm = VERKTYG.fullmatch(text)
+        if vm:
+            if senast_tank:
+                typ, namn = vm.groups()
+                d = rum[senast_tank]
+                if typ == "skill":
+                    d["las_skill"][namn] += 1
+                elif namn == "fraga_core":
+                    d["fraga_core"] += 1
+                else:
+                    d["anvand_verktyg"][namn] += 1
+            continue
         tm = TIDER.match(text)
         if tm and not tm.group(3):  # a turn with sound; the steps are ms after the end of speech
             steg = dict(x.split("=") for x in tm.group(2).split())
@@ -95,6 +111,8 @@ def mat(rader):
                                      "p95": pct(d["traff_personligt"], 95)},
                 "traff_kort": {"n": len(d["traff_kort"]), "p50": pct(d["traff_kort"], 50),
                                "p95": pct(d["traff_kort"], 95)},
+                "fraga_core": d["fraga_core"], "las_skill": dict(d["las_skill"]),
+                "anvand_verktyg": dict(d["anvand_verktyg"]),
                 "avbrott": d["avbrott"], "stangningsorsaker": dict(d["stangning"])}
             for r, d in sorted(rum.items())}
 
@@ -113,3 +131,5 @@ if __name__ == "__main__":
             p, k = d["traff_personligt"], d["traff_kort"]
             print(f"  personligt svar P50/P95 {p['p50']}/{p['p95']} ms (n={p['n']})")
             print(f"  kort svar P50/P95 {k['p50']}/{k['p95']} ms (n={k['n']})")
+            print(f"  fraga_core: {d['fraga_core']}, las_skill: {d['las_skill']}, "
+                  f"anvand_verktyg: {d['anvand_verktyg']}")
