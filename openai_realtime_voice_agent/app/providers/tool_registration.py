@@ -18,7 +18,7 @@ import time
 
 from pipecat.frames.frames import FunctionCallResultProperties
 
-from app import bana0, skills
+from app import bana0, core_strom, skills
 from app.early_ack import paa as early_ack_paa
 
 logger = logging.getLogger(__name__)
@@ -416,6 +416,11 @@ class ToolRegistrationMixin:
                 stop = loop_stop(self.turn_liveness, function_name, getattr(params, "arguments", None))
                 if stop is not None:
                     await params.result_callback({"result": stop})
+                    return
+                omvag = core_strom.kunskap_nekas(function_name, getattr(params, "arguments", None))   # US-191
+                if omvag:
+                    logger.warning(f"🛡️ tool {function_name} NOT run: {omvag}")
+                    await params.result_callback({"result": omvag})
                     return
                 vakt = getattr(self, "verktygsvakt", None)   # echo guard (US-060): his own voice must not run a tool
                 skal = vakt() if vakt is not None else None

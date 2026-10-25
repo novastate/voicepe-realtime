@@ -53,6 +53,21 @@ KUNSKAPSSKILLS = frozenset({"webb", "sport", "minne", "research"})
 KUNSKAPSVERKTYG = frozenset({"web_search", "ask_openclaw", "recall_memory"}) | KUNSKAPSSKILLS
 
 
+# US-191: Comms-verktygen som hör till kunskapsskillarna; med EN hjärna går sakfrågor via fraga_core.
+KUNSKAPS_COMMSVERKTYG = frozenset({"webbsok", "webbsida", "minne_las", "minne_skriv", "research_bestall", "research_hamta"})
+
+
+def kunskap_nekas(function_name: str, arguments: Any) -> str:
+    """A refusal when EN_HJARNA is on and the call is las_skill / anvand_verktyg naming knowledge; '' otherwise."""
+    if not en_hjarna_aktiv() or not isinstance(arguments, dict):
+        return ""
+    bas = function_name.rsplit("__", 1)[-1]
+    namn = str(arguments.get("namn", "")).rsplit("__", 1)[-1]
+    if (bas == "las_skill" and namn in KUNSKAPSSKILLS) or (bas == "anvand_verktyg" and namn in KUNSKAPS_COMMSVERKTYG):
+        return "Sakfrågor (fakta, sport, minne, research) går via fraga_core, inte via den här skillen. Anropa fraga_core med frågan."
+    return ""
+
+
 def utan_kunskapsverktyg(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [t for t in tools if t.get("name", "").rsplit("__", 1)[-1] not in KUNSKAPSVERKTYG]
 
