@@ -4,6 +4,9 @@ All notable changes to this add-on. Newest first.
 
 ## Unreleased (fork)
 
+### 0.29.18
+- **US-189 (granskarens F2):** ett sent transkript av förspelet efter ett verktygsanrop (medan verktyget är obesvarat) rensar inte längre verktygsgränsen, så den tomma `turn_complete` sväljs som förut och förspelet får inte en egen `💬 Björn sa`-rad.
+
 ### 0.29.17
 - **US-215:** `las_skill` och `anvand_verktyg` utan användbart namn (saknas, tomt, inte en sträng) loggas som `🧰 … okänt` och räknas. Raden `okänt verktyg:` har tak på 64 tecken av namnet; modellen får fortfarande svaret.
 

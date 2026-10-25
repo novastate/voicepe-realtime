@@ -104,3 +104,26 @@ async def test_ac3_close_flushes_interrupted_text_and_clears_buffers(service, mo
     await service._handle_msg_turn_complete(message(turn_complete=True))
     assert [r.message for r in caplog.records if "Hörde:" in r.message or "Björn sa:" in r.message] == [
         "🎤 Hörde: Hej igen", "💬 Björn sa: Hej!"]
+
+
+@pytest.mark.asyncio
+async def test_late_preamble_while_tool_unanswered_does_not_flush_early(service, monkeypatch, caplog):
+    """US-189 F2: a preamble transcript arriving after the tool_call keeps the empty boundary swallowed."""
+    monkeypatch.setattr(GeminiLiveLLMService, "_handle_msg_tool_call", AsyncMock())
+    monkeypatch.setattr(GeminiLiveLLMService, "_handle_msg_model_turn", AsyncMock())
+
+    async def tool_call_then_wait(self, message):
+        self._answer_after_tool = True
+        self._unanswered_tools = {"t1"}
+    monkeypatch.setattr(type(service), "_handle_msg_tool_call", tool_call_then_wait, raising=True)
+    await receive_messages(service, monkeypatch, [
+        types.LiveServerMessage(tool_call=types.LiveServerToolCall(function_calls=[
+            types.FunctionCall(id="t1", name="list_timers", args={})])),
+        message(output_transcription=types.Transcription(text="Jag kollar. ")),  # late preamble
+        message(turn_complete=True),  # empty tool boundary
+    ])
+    assert not [r for r in caplog.records if "💬 Björn sa:" in r.message]
+    service._unanswered_tools.discard("t1")
+    await service._handle_msg_output_transcription(message(output_transcription=types.Transcription(text="Tänd.")))
+    await service._handle_msg_turn_complete(message(turn_complete=True))
+    assert [r.message for r in caplog.records if "💬 Björn sa:" in r.message] == ["💬 Björn sa: Jag kollar. Tänd."]
