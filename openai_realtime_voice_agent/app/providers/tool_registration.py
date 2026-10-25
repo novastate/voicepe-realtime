@@ -346,6 +346,22 @@ class ToolRegistrationMixin:
                     logged = True
                     ms = round((time.monotonic() - started) * 1000)
                     logger.info(f"⏱ tool {function_name} {ms} {status}")
+                    bas = function_name.rsplit("__", 1)[-1]
+                    if bas == "fraga_core":
+                        logger.info("🧰 verktyg fraga_core")
+                    elif bas in ("las_skill", "anvand_verktyg"):
+                        arguments = getattr(params, "arguments", None)
+                        if isinstance(arguments, str):
+                            try:
+                                arguments = json.loads(arguments)
+                            except (ValueError, TypeError):
+                                arguments = None
+                        namn = arguments.get("namn") if isinstance(arguments, dict) else None
+                        if isinstance(namn, str) and namn.strip():
+                            # Only the selected name, never the payload or answer; keep one journal line.
+                            namn = " ".join(namn.split())
+                            typ = "skill" if bas == "las_skill" else "verktyg"
+                            logger.info(f"🧰 {typ} {namn}")
 
             async def ack_if_slow():
                 # The owner, 2026-10-02: a smart agent says it has understood
