@@ -345,7 +345,9 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         """Keep what the model says: for the journal when the turn ends (raawr D-97), and for the echo net."""
         try:
             text = message.server_content.output_transcription.text or ""
-            if text.strip():
+            # Text while a tool is still unanswered is a late transcript of the preamble,
+            # not the answer: keep swallowing the empty tool-boundary turn_complete (US-189 F2).
+            if text.strip() and not getattr(self, "_unanswered_tools", None):
                 self._answer_after_tool = False
             self._svar_text += text
             if self.svar is None:
