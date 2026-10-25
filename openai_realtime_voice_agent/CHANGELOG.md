@@ -4,6 +4,9 @@ All notable changes to this add-on. Newest first.
 
 ## Unreleased (fork)
 
+### 0.29.16
+- **US-206:** Ett verktygs- eller skillnamn som är längre än 64 tecken eller har tecken utanför `A-Za-z0-9_` loggas som `🧰 … okänt`. `matvarden.py` räknar sådana rader (och äldre rader med blanksteg) som `okänt` i stället för att tappa dem.
+
 ### 0.29.15
 - **US-203:** Journalen får separata `🧰`-rader med vald skill eller verktygets namn, utan argument eller svar. `matvarden.py` räknar `fraga_core`, skills och verktyg per rum i dygnets journal, i text och JSON; äldre journaler ger noll.
 

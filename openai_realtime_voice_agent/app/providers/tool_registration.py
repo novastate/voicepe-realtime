@@ -11,6 +11,7 @@ is a rule that protects one engine.
 """
 import asyncio
 import json
+import re
 import inspect
 import logging
 import os
@@ -224,6 +225,9 @@ def ha_misslyckades(result):
     return {"error": text, "failed": fel, "success": ok}
 
 
+NAMN_OK = re.compile(r"[A-Za-z0-9_]{1,64}")
+
+
 def _is_error(result) -> bool:
     return isinstance(result, dict) and "error" in result
 
@@ -358,8 +362,10 @@ class ToolRegistrationMixin:
                                 arguments = None
                         namn = arguments.get("namn") if isinstance(arguments, dict) else None
                         if isinstance(namn, str) and namn.strip():
-                            # Only the selected name, never the payload or answer; keep one journal line.
-                            namn = " ".join(namn.split())
+                            # Only the selected name, never the payload or answer. A name the
+                            # model made up (too long, odd characters) is logged as okänt (US-206).
+                            if not NAMN_OK.fullmatch(namn):
+                                namn = "okänt"
                             typ = "skill" if bas == "las_skill" else "verktyg"
                             logger.info(f"🧰 {typ} {namn}")
 

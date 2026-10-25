@@ -23,7 +23,8 @@ from datetime import datetime
 LINE = re.compile(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d[,.]\d{3}) - \S+ - \w+ - (.*)")
 TIDER = re.compile(r"⏱ tider (\S+) ((?:\w+=\d+ ?)+)(utan_ljud)?")  # US-047 AC-1: ms after the end of speech
 KEDJA = re.compile(r"🧭 (\S+): (\w+) -> (\w+) \((\w+): (.*)\)$")
-VERKTYG = re.compile(r"🧰 (skill|verktyg) (\S+)$")
+VERKTYG = re.compile(r"🧰 (skill|verktyg) (.+)$")
+NAMN_OK = re.compile(r"[A-Za-z0-9_]{1,64}")
 
 
 def tid(s):
@@ -53,6 +54,8 @@ def mat(rader):
         if vm:
             if senast_tank:
                 typ, namn = vm.groups()
+                if not NAMN_OK.fullmatch(namn):
+                    namn = "okänt"  # old or odd line: counted, never dropped (US-206)
                 d = rum[senast_tank]
                 if typ == "skill":
                     d["las_skill"][namn] += 1
