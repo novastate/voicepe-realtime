@@ -58,11 +58,13 @@ KUNSKAPS_COMMSVERKTYG = frozenset({"webbsok", "webbsida", "minne_las", "minne_sk
 
 
 def kunskap_nekas(function_name: str, arguments: Any) -> str:
-    """A refusal when EN_HJARNA is on and the call is las_skill / anvand_verktyg naming knowledge; '' otherwise."""
+    """A refusal when EN_HJARNA is on and the call names knowledge (directly or via las_skill / anvand_verktyg); '' otherwise."""
     if not en_hjarna_aktiv() or not isinstance(arguments, dict):
         return ""
     bas = function_name.rsplit("__", 1)[-1]
     namn = str(arguments.get("namn", "")).rsplit("__", 1)[-1]
+    if bas in KUNSKAPSVERKTYG - KUNSKAPSSKILLS:   # US-225: the handler stays registered while the tool is hidden
+        return "Sakfrågor (fakta, sport, minne, research) går via fraga_core, inte via den här skillen. Anropa fraga_core med frågan."
     if (bas == "las_skill" and namn in KUNSKAPSSKILLS) or (bas == "anvand_verktyg" and namn in KUNSKAPS_COMMSVERKTYG):
         return "Sakfrågor (fakta, sport, minne, research) går via fraga_core, inte via den här skillen. Anropa fraga_core med frågan."
     return ""
