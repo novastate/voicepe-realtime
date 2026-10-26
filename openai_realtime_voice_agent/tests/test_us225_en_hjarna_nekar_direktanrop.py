@@ -22,3 +22,10 @@ async def test_ac3_en_hjarna_av_och_ovriga_verktyg_ar_oforandrade(monkeypatch):
     assert (await _kor(monkeypatch, "0", "web_search", {"query": "x"}))[0] == ["web_search"]
     assert (await _kor(monkeypatch, "1", "fraga_core", {"fraga": "x"}))[0] == ["fraga_core"]
     assert (await _kor(monkeypatch, "1", "las_skill", {"namn": "hus"}))[0] == ["las_skill"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("args", [None, "", "x"])
+async def test_nekas_aven_utan_dict_som_argument(monkeypatch, args):
+    ran, got = await _kor(monkeypatch, "1", "web_search", args)
+    assert ran == [] and "fraga_core" in got
