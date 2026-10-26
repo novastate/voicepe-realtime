@@ -480,6 +480,11 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         if event == "end" and self._tidigt:
             self._tidigt = False  # this turn was ended early (end_early); this is only its normal end
             event = None
+        elif event == "start" and self._avgjord and not self._vantar and self._forts is None and getattr(self, "_held", None):
+            # A new phrase while bana 0 is still deciding the one before (US-223, D-96): it is a turn of its own,
+            # decided after the first, so a hit on the first cannot throw it away. Same road as the early-end continuation.
+            self._tidigt = False
+            self._forts = []
         elif event == "start":
             self._tidigt = False
             self._avgjord = False
