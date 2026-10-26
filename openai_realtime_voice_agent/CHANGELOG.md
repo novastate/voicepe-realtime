@@ -4,6 +4,9 @@ All notable changes to this add-on. Newest first.
 
 ## Unreleased (fork)
 
+### 0.29.21
+- **US-225 (granskarens F1/F2):** direktanropet nekas även när argumenten inte är en ordbok, och felet säger "det här verktyget".
+
 ### 0.29.20
 - **US-225:** med EN hjärna nekas ett direktanrop av `web_search`, `ask_openclaw` och `recall_memory` vid namn (handlern fanns kvar fast verktyget var dolt), med besked att gå via `fraga_core`.
 
