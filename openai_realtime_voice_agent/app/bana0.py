@@ -496,8 +496,6 @@ def ur_ledtraden(text: Optional[str]) -> bool:
     the text may be invented. Anything said beyond the hint ("tänd i köket och hallen") makes it a person's words."""
     fraser = _meningar(STT_LEDTRAD)
     hort = _meningar(text)
-    if len(hort) == 1 and klocka.ar_klockfraga(text):
-        return False   # US-227: a lone clock question touches nothing; only the whole hint coming back is the noise signature
     return bool(fraser and hort) and all(
         any(difflib.SequenceMatcher(None, m, f).ratio() >= LEDTRAD_LIKA for f in fraser) for m in hort)
 
