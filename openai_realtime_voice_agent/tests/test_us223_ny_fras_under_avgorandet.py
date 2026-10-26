@@ -83,3 +83,38 @@ async def test_ac3_without_a_new_phrase_the_turn_is_decided_as_before():
     await asyncio.sleep(0.1)
     assert len(avgjorde) == 1 and len(avgjorde[0]) == 4  # the pre-roll frame plus three
     assert service._forts is None and service._held is None
+
+
+@pytest.mark.asyncio
+async def test_vanta_keeps_the_next_speech_in_the_same_held_turn():
+    """Granskarens F1: after "vänta" (fortsatt_tur) the held turn stays held and what he says next joins it."""
+    from test_gemini_provider import _frame
+
+    service = _service(["start", None, "end", "start", None, "end"])
+    service.on_user_turn_end = lambda: asyncio.sleep(10)
+    for b in range(3):
+        await service._send_user_audio(_frame(b))
+    service._vantar = True  # bana 0's fortsatt_tur: the turn was only "vänta"
+    held_before = service._held
+    for b in range(3, 5):
+        await service._send_user_audio(_frame(b))
+    assert service._forts is None, "vänta must not split the speech into a second turn"
+    assert service._held is held_before and _frame(4).audio in b"".join(f.audio for f in service._held)
+
+
+@pytest.mark.asyncio
+async def test_hit_while_the_second_phrase_is_still_spoken_keeps_it_as_preroll():
+    """Granskarens F2: drop_turn arrives before the second phrase ends; what was said of it goes back as pre-roll."""
+    from test_gemini_provider import _frame
+
+    service = _service(["start", None, "end", "start", None])
+    frisl, avgjorde = asyncio.Event(), []
+    await _first_turn_held(service, frisl, avgjorde, hit=True)
+    for b in range(5):
+        await service._send_user_audio(_frame(b))
+        if b == 2:
+            await asyncio.sleep(0.05)
+    assert service._forts is not None and len(service._forts) == 2
+    await service.drop_turn()
+    assert service._forts is None and service._held is None
+    assert bytes(service._preroll) == _frame(3).audio + _frame(4).audio
