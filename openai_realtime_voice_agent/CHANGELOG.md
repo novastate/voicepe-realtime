@@ -4,6 +4,9 @@ All notable changes to this add-on. Newest first.
 
 ## Unreleased (fork)
 
+### 0.29.19
+- **US-223 (D-96):** en ny fras som börjar medan bana 0 ännu avgör den förra blir en egen tur (samlas för sig, avgörs efter den första). En träff på den första kastar inte längre den andra.
+
 ### 0.29.18
 - **US-189 (granskarens F2):** ett sent transkript av förspelet efter ett verktygsanrop (medan verktyget är obesvarat) rensar inte längre verktygsgränsen, så den tomma `turn_complete` sväljs som förut och förspelet får inte en egen `💬 Björn sa`-rad.
 
