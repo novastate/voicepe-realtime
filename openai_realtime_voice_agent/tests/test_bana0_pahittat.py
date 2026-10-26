@@ -11,7 +11,7 @@ from app import bana0
 from tests.test_bana0 import FakeService, PCM, _ha, comms  # noqa: F401 -- the fake comms fixture
 
 
-@pytest.mark.parametrize("text", ["Tänd i köket.", "tänd i köket", "Tänd i követ.", "Vad är klockan?", "Björn.",
+@pytest.mark.parametrize("text", ["Tänd i köket.", "tänd i köket", "Tänd i követ.", "Björn.",
                                    "Björn. Tänd i köket.", "Vad är klockan? Tänd i köket. Björn."])
 def test_the_hint_coming_back_is_no_proof_anyone_said_it(text):
     assert bana0.ur_ledtraden(text)
@@ -64,3 +64,21 @@ async def test_the_hint_follows_the_bridge_setting(monkeypatch):
     assert bana0.ur_ledtraden("Släck allt.") and not bana0.ur_ledtraden("Tänd i köket.")
     monkeypatch.setattr(bana0, "STT_LEDTRAD", "")
     assert not bana0.ur_ledtraden("Tänd i köket.")
+
+
+@pytest.mark.parametrize("text", ["Vad är klockan?", "vad är klockan", "Hur mycket är klockan?"])
+def test_us227_a_lone_clock_question_is_sent_to_the_house(text):
+    assert not bana0.ur_ledtraden(text)
+
+
+@pytest.mark.parametrize("text", ["Vad är klockan? Tänd i köket. Björn.", "Vad är klockan? Tänd i köket.", "Tänd i köket."])
+def test_us227_the_whole_hint_and_the_lamp_phrase_stay_guarded(text):
+    assert bana0.ur_ledtraden(text)
+
+
+@pytest.mark.asyncio
+async def test_us227_the_clock_question_reaches_comms(comms):  # noqa: F811
+    comms.svar = _ha("Klockan är sju")
+    service = FakeService()
+    assert await _tur("Vad är klockan?", service) == "bana0"
+    assert len(comms.seen) == 1
