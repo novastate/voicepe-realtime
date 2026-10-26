@@ -4,6 +4,9 @@ All notable changes to this add-on. Newest first.
 
 ## Unreleased (fork)
 
+### 0.29.24
+- **US-229:** med skillkatalogen på (`ROST_SKILLS`) behåller sessionen `fraga_core`. Före: filtret släppte bara skill-verktygen, så under EN_HJARNA hade modellen ingen väg till en sakfråga och svarade "jag kan inte kolla upp" (tyst körning på core, fyra sportfrågor).
+
 ### 0.29.23
 - **US-227 (0.29.22) återtaget:** en ensam klockfråga går tillbaka till modellen. Tyst körning på core visade att huset svarade på 130 ms men att Gemini inte talar svaret (texten gör enheten stum): efter 2,5 s sa rösten ett ersättnings-"Klart." i stället för tiden. Görs om så att röstagenten själv talar HA:s text.
 
