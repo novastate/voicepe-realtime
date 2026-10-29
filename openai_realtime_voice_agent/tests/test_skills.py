@@ -151,6 +151,11 @@ def test_matningen_laser_verktyg_och_ratt_svar():
     assert ratt({"vantat": ["-"], "ord": ["34"]}, [], "Det blir 34.")
     assert not ratt({"vantat": ["-"], "ord": ["34"]}, [], "Det blir 35.")
     assert not ratt({"vantat": ["-"]}, ["HassTurnOn"], "Tänt.")
+    # G on US-098: silence is not right, and a read question that also switched something is wrong
+    assert not ratt({"vantat": ["kalender_sok", "-"]}, [], "")
+    assert ratt({"vantat": ["kalender_sok", "-"]}, [], "Du har gymnastik klockan fyra.")
+    assert not ratt({"vantat": ["hus_lage"]}, ["hus_lage", "styr"], "mörkt")
+    assert ratt({"vantat": ["styr"]}, ["anvand_verktyg:styr"], "Klart.")
     from skills_matning import verktygstider
     tid = ["x - INFO - ⏱ tool las_skill 40 ok", "x - INFO - ⏱ tool rost__anvand_verktyg 610 ok",
            "x - INFO - ⏱ tool homeassistant__GetLiveContext 300 fel"]

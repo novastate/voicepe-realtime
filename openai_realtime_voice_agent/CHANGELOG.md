@@ -4,6 +4,9 @@ All notable changes to this add-on. Newest first.
 
 ## Unreleased (fork)
 
+### 0.29.25
+- **US-098 (G:s slutpass):** frågevakten dömer `fraga_core` efter frågetexten: en order ("Tänd ...") i `question` på en lästur ignoreras, eftersom Cores snabbspår kör den. Mätverktyget `skills_matning.py` räknar inte längre en tyst tur som rätt och underkänner en lästur som också anropar `styr`/`HassTurn*`.
+
 ### 0.29.24
 - **US-229:** med skillkatalogen på (`ROST_SKILLS`) behåller sessionen `fraga_core`. Före: filtret släppte bara skill-verktygen, så under EN_HJARNA hade modellen ingen väg till en sakfråga och svarade "jag kan inte kolla upp" (tyst körning på core, fyra sportfrågor).
 

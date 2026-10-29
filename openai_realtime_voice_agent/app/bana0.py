@@ -168,6 +168,9 @@ def andrar(namn: str, argument: Optional[dict], lasande: Optional[dict] = None) 
         bas = str((argument or {}).get("namn", "")).rsplit("__", 1)[-1]
     if bas in SKRIV_VERKTYG:
         return True
+    if bas == "fraga_core":  # Core runs an order in the question text (its fast path), so judge the text (G on US-098)
+        fraga = str((argument or {}).get("question", ""))
+        return bool(_BEFALL.search(fraga)) and not ar_fraga(fraga)
     if bas in lasande:
         return not lasande[bas]
     return genom or bas in SKRIV_VERKTYG

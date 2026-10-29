@@ -177,3 +177,11 @@ async def test_sessionen_far_dorrens_markning():
     app.dorr_client.las = {"lage_drift": True, "kasta_in": False}
     _, service = await _connect(app)
     assert service.lasande == {"lage_drift": True, "kasta_in": False}
+
+
+def test_fraga_core_med_en_order_i_fragetexten_ar_andrande():
+    """G on US-098: Core runs 'Tänd ...' in its fast path, so a read turn must not carry it through fraga_core."""
+    fraga = "Är det tänt i kontoret?"
+    assert bana0.fraga_inte_order(fraga, "fraga_core", {"question": "Tänd fönsterlampan i kontoret."}) is not None
+    assert bana0.fraga_inte_order(fraga, "fraga_core", {"question": "Är lampan i kontoret tänd?"}) is None
+    assert bana0.fraga_inte_order(fraga, "fraga_core", {"question": "Hur är läget i huset?"}) is None
