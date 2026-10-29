@@ -58,12 +58,20 @@ def verktygstider(rader: list[str], anrop: list[str]) -> list[list]:
     return ut
 
 
+# Same list as app/bana0.py SKRIV_VERKTYG (tools/ does not import app/).
+SKRIVANDE = frozenset({"HassTurnOn", "HassTurnOff", "HassLightSet", "styr"})
+
+
 def ratt(fraga: dict, verktyg: list[str], sagt: str) -> bool:
     """Right = a wanted tool was called (or none, when "-" is allowed), and one key word was said if any are set."""
     kallade = {v.split(":", 1)[-1] for v in verktyg if not v.startswith("las_skill")}
     vantat = set(fraga.get("vantat", []))
     verktyg_ok = bool(kallade & vantat) or ("-" in vantat and not kallade)
+    if kallade & SKRIVANDE and not vantat & SKRIVANDE:  # a read question that also switched something is wrong (AC-6)
+        return False
     ord = [o.lower() for o in fraga.get("ord", [])]
+    if not kallade and not ord and not sagt.strip():  # silence is not an answer (G on US-098)
+        return False
     return verktyg_ok and (not ord or any(o in sagt.lower() for o in ord))
 
 
