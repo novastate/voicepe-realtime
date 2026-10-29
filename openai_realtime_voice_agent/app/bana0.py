@@ -141,6 +141,9 @@ _BON = re.compile(r"^\W*((kan|kunde|skulle|vill|får|orkar)\s+(du|ni)|(är|var)\
 _TILLSTAND = re.compile(r"\b(tänt|tända|tänd|släckt|släckta|lyser|brinner|på|av|igång|funkar|fungerar)\b", re.I)
 _BEFALL = re.compile(r"\b(tänd|tända|släck|släcka|slå\s+(på|av)|sätt\s+(på|av)|stäng\s+av|stänga\s+av)\b", re.I)
 _SAG_OM = re.compile(r"^\W*(kan|kunde|skulle)\s+(du|ni)\s+(säga|berätta|kolla|se(?!\s+till)|titta)\b", re.I)
+# What Core's fast path (Backend/Core/src/home/intent/grammar.ts) runs as an order when it arrives as text through
+# fraga_core: the verbs above plus its other order words (G on US-098, round 2: 'godnatt', 'sätt igång köket').
+_CORE_ORDER = re.compile(r"\b(godnatt|natti|sätt\s+igång|dra\s+(ner|upp)|aktivera|kör|starta|öppna)\b", re.I)
 # The tools that switch something; a question may read with every other tool.
 SKRIV_VERKTYG = frozenset({"HassTurnOn", "HassTurnOff", "HassLightSet", "styr"})
 
@@ -170,7 +173,7 @@ def andrar(namn: str, argument: Optional[dict], lasande: Optional[dict] = None) 
         return True
     if bas == "fraga_core":  # Core runs an order in the question text (its fast path), so judge the text (G on US-098)
         fraga = str((argument or {}).get("question", ""))
-        return bool(_BEFALL.search(fraga)) and not ar_fraga(fraga)
+        return bool(_BEFALL.search(fraga) or _CORE_ORDER.search(fraga)) and not ar_fraga(fraga)
     if bas in lasande:
         return not lasande[bas]
     return genom or bas in SKRIV_VERKTYG

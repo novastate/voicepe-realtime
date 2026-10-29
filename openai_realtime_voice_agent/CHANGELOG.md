@@ -4,6 +4,9 @@ All notable changes to this add-on. Newest first.
 
 ## Unreleased (fork)
 
+### 0.29.26
+- **US-098 (G:s slutpass, omgång 2):** `fraga_core` dömer även Cores övriga orderord i frågetexten (godnatt, sätt igång, starta, öppna, kör, aktivera, dra ner/upp) som skrivande på en lästur.
+
 ### 0.29.25
 - **US-098 (G:s slutpass):** frågevakten dömer `fraga_core` efter frågetexten: en order ("Tänd ...") i `question` på en lästur ignoreras, eftersom Cores snabbspår kör den. Mätverktyget `skills_matning.py` räknar inte längre en tyst tur som rätt och underkänner en lästur som också anropar `styr`/`HassTurn*`.
 
