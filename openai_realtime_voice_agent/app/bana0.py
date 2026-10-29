@@ -228,6 +228,16 @@ def vanta_pa_text_tak_s(env: Optional[dict] = None) -> float:
     return min(max(0.0, ms) / 1000.0, 2.0)   # never more than 2 s, whatever the env says
 
 
+def skriv_hort(connection, tur: int, heard: str) -> None:
+    """US-256: bana 0's text for turn `tur`. It is kept per turn (the last four), so a tool of that turn is judged on its own
+    sentence; it only becomes `bana0_heard` (the current turn's sentence) if that turn is still the current one."""
+    connection.bana0_per_tur[tur] = heard
+    for gammal in [k for k in connection.bana0_per_tur if k <= connection.tur_nr - 4]:
+        del connection.bana0_per_tur[gammal]
+    if tur == connection.tur_nr:
+        connection.bana0_heard = heard
+
+
 async def fraga_inte_order_vanta(las_text: Callable[[], Optional[str]], namn: str, argument: Optional[dict],
                                  lasande: Optional[dict] = None, tak_s: Optional[float] = None,
                                  bana0_text: Optional[Callable[[], Optional[str]]] = None) -> Optional[str]:

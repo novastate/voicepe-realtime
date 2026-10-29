@@ -114,6 +114,8 @@ class DeviceConnection:
     recovery: Any = None
     phase_emitter: Any = None
     records_audio: bool = False
+    tur_nr: int = 0  # counts turn starts (US-256): the id a speech-to-text answer and a tool call are matched by
+    bana0_per_tur: dict = field(default_factory=dict)  # tur_nr -> bana 0 text, the last few turns (US-256)
     bana0_heard: str = ""  # what bana 0's local speech-to-text heard in the latest turn ("" if nothing or noise)
     # The background task publishing this connection's provider sensor to
     # Home Assistant (see WebSocketHandler.serve_connection). Held here, on

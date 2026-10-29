@@ -4,6 +4,9 @@ All notable changes to this add-on. Newest first.
 
 ## Unreleased (fork)
 
+### 0.29.29
+- **US-256 (raawr INKAST #1514, G på #133):** varje tur har ett id (`connection.tur_nr`). Bana 0:s text sparas per tur, och ett sent STT-svar för en gammal tur skrivs aldrig in som nästa turs mening. Ett verktygsanrop får sin tur när det tas emot och döms på just den turens text. Prov: `tests/test_fraga_inte_order.py` (US-256), rött utan rättningen.
+
 ### 0.29.28
 - **US-253 (G:s slutpass på US-098, omgång 4):** ett skrivande verktyg som anropas innan bana 0 skrivit turens text väntar på BANA 0:s text (aldrig på motorns växande avskrift; G på #133), högst `BANA0_VANTA_TEXT_MS` (standard 300 ms, 0 = av), och nekas om det var en fråga; kommer ingen text körs anropet som förut. Läsande verktyg och en tur som redan har text väntar aldrig. Före: `fraga_inte_order("", "styr", …)` var `None`, så "Är det tänt i kontoret?" kunde tända innan avskriften (2026-10-17).
 

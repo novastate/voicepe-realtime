@@ -119,6 +119,11 @@ def _norm(value):
     return value
 
 
+def _bana0_for_tur(f, tur):
+    """US-256: bana 0's text for the turn the call arrived in; a reader without turn ids is called as before."""
+    return f if f is None or tur is None else (lambda: f(tur))
+
+
 def _call_key(function_name, arguments) -> str:
     """The tool and its arguments, normalized (key order, case, spaces)."""
     if isinstance(arguments, str):
@@ -336,6 +341,8 @@ class ToolRegistrationMixin:
             # `⏱ tool <name> <ms> ok|fel`, timed to the moment the result is
             # handed back -- that is what the person in the room waits for.
             started = time.monotonic()
+            tur_nr = getattr(self, "tur_nr", None)
+            tur = tur_nr() if callable(tur_nr) else None   # US-256: the turn this call belongs to, fixed on arrival
             call_key = _call_key(function_name, getattr(params, "arguments", None))
             current_task = asyncio.current_task()
             logged = False
@@ -455,7 +462,7 @@ class ToolRegistrationMixin:
                 fraga = getattr(self, "fragevakt", None)  # a question is no order (raawr US-098, 2026-10-17)
                 nej = await bana0.fraga_inte_order_vanta(fraga, function_name, getattr(params, "arguments", None),
                                                          getattr(self, "lasande", None),
-                                                         bana0_text=getattr(self, "fragevakt_bana0", None)) if fraga else None   # US-253
+                                                         bana0_text=_bana0_for_tur(getattr(self, "fragevakt_bana0", None), tur)) if fraga else None   # US-253
                 if nej:
                     logger.warning(f"🛡️ tool {function_name} NOT run: {nej}")
                     await params.result_callback({"result": nej})
