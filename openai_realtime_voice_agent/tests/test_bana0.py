@@ -1073,14 +1073,17 @@ async def test_us256_gemini_fastlas_turens_id_innan_sluthandelse_uppgiften_koas(
 
 
 def test_us256_varje_plats_som_koar_sluthandelsen_fastlaser_turens_id_forst():
-    """Codex found the queue sites one at a time: any place that queues the end-of-turn task must fix the id first."""
+    """Codex found the queue sites one at a time. Any non-awaited use of the end-of-turn callback in a provider (create_task,
+    ensure_future, run_in_executor, a call split over lines) must have a real bana0.fasta_tur(...) call just above it."""
     import pathlib
     import re
     hittade = 0
     for fil in pathlib.Path("app/providers").glob("*.py"):
         rader = fil.read_text().splitlines()
         for i, rad in enumerate(rader):
-            if re.search(r"create_task\(\s*(self\.)?(_run_turn_end|on_user_turn_end)\(", rad):
+            kod = rad.split("#", 1)[0]
+            if re.search(r"\b(_run_turn_end|on_user_turn_end)\(\)", kod) and not re.search(r"await\s+(self\.)?(_run_turn_end|on_user_turn_end)\(\)|def\s", kod):
                 hittade += 1
-                assert any("fasta_tur" in r for r in rader[max(0, i - 4):i]), f"{fil}:{i + 1} queues the turn end without bana0.fasta_tur"
-    assert hittade >= 3
+                over = [r.split("#", 1)[0] for r in rader[max(0, i - 6):i + 1]]
+                assert any("bana0.fasta_tur(" in r for r in over), f"{fil}:{i + 1} queues the turn end without bana0.fasta_tur"
+    assert hittade >= 3, hittade
