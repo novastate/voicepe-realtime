@@ -1031,3 +1031,21 @@ def test_US_131_feltexten_rensas_och_kortas_for_rosten_och_modellen():
     svar = bana0.Svar(lang)
     svar.fel = True
     assert "\n" not in bana0.gjort("tänd", svar).split("Home Assistant svarade")[1]
+
+
+@pytest.mark.asyncio
+async def test_us256_turens_id_fastlas_i_sluthandelsen_aven_om_nasta_tur_hinner_starta():
+    server, port, _ = await _wyoming(_transcript("är det tänt i kontoret"))
+    handler, connection, service, sent = _koppling(("127.0.0.1", port))
+    state, sett = {"tur": 1}, []
+
+    async def sonda():
+        sett.append(bana0.TUR_SLUT.get())
+
+    service.tur_nr = lambda: state["tur"]
+    service.on_user_turn_end = sonda
+    async with server:
+        await service._handle_evt_speech_stopped(None)
+        state["tur"] = 2          # the next turn starts before the queued end-of-turn task has run
+        await service._turn_end_task
+    assert sett == [1]

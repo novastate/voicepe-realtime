@@ -1940,7 +1940,9 @@ class WebSocketHandler:
                 await openai_service.ping_and_answer(bana0.ping_text(hort, svar))
 
             async def _on_user_turn_end():
-                min_tur = connection.tur_nr   # US-256: the turn that ended, fixed now, before any await
+                min_tur = bana0.TUR_SLUT.get()   # US-256: the id fixed in the event that ended the turn
+                if min_tur is None:   # an engine that runs this directly, not as a queued task
+                    min_tur = connection.tur_nr
                 serializer.tysta_slut()  # the next reply is wanted again (US-060)
                 pcm = serializer.take_turn_audio()
                 tur_ljud.spara(pcm, getattr(connection, "device_id", None) or "enhet")
