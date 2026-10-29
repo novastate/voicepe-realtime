@@ -233,11 +233,17 @@ async def fraga_inte_order_vanta(las_text: Callable[[], Optional[str]], namn: st
     time = the call runs as before (fail-open for an order)."""
     tak = vanta_pa_text_tak_s() if tak_s is None else tak_s
     text = las_text() or ""
+    vantade = False
+    borjade = time.monotonic()
     if not text.strip() and tak > 0 and andrar(namn, argument, lasande):
-        slut = time.monotonic() + tak
+        vantade = True
+        slut = borjade + tak
         while not text.strip() and time.monotonic() < slut:
             await asyncio.sleep(0.02)
             text = las_text() or ""
+    if vantade:
+        logger.info(f"⏳ tool {namn} waited {1000 * (time.monotonic() - borjade):.0f} ms for bana 0's text: "
+                    f"{'got it' if text.strip() else 'cap hit, ran without it'}")
     return fraga_inte_order(text, namn, argument, lasande)
 
 
