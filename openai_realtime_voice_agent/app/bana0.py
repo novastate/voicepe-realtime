@@ -217,6 +217,30 @@ def omrade_utan_doman(namn: str, argument: Optional[dict]) -> Optional[str]:
     return None
 
 
+def vanta_pa_text_tak_s(env: Optional[dict] = None) -> float:
+    """US-253: how long a changing tool may wait for bana 0's text of the turn (BANA0_VANTA_TEXT_MS, default 300 ms, 0 = never)."""
+    try:
+        return max(0.0, float((env if env is not None else os.environ).get("BANA0_VANTA_TEXT_MS", "300"))) / 1000.0
+    except ValueError:
+        return 0.3
+
+
+async def fraga_inte_order_vanta(las_text: Callable[[], Optional[str]], namn: str, argument: Optional[dict],
+                                 lasande: Optional[dict] = None, tak_s: Optional[float] = None) -> Optional[str]:
+    """`fraga_inte_order`, but a changing tool whose turn has no text yet waits for it, at most `tak_s` (US-253, G on US-098).
+    The model may call `styr` before bana 0 has written what it heard; empty text is no question, so the call used to run
+    ("Är det tänt i kontoret?" turned the office on, 2026-10-17). A read tool, or a turn with text, never waits. No text in
+    time = the call runs as before (fail-open for an order)."""
+    tak = vanta_pa_text_tak_s() if tak_s is None else tak_s
+    text = las_text() or ""
+    if not text.strip() and tak > 0 and andrar(namn, argument, lasande):
+        slut = time.monotonic() + tak
+        while not text.strip() and time.monotonic() < slut:
+            await asyncio.sleep(0.02)
+            text = las_text() or ""
+    return fraga_inte_order(text, namn, argument, lasande)
+
+
 def fraga_inte_order(turtext: Optional[str], namn: str, argument: Optional[dict],
                      lasande: Optional[dict] = None) -> Optional[str]:
     """Why a changing tool must not run on this turn, or None: the turn (bana 0's local text) was a question."""

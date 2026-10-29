@@ -194,3 +194,60 @@ def test_fraga_core_med_corens_andra_orderord_ar_andrande():
         assert bana0.fraga_inte_order(fraga, "fraga_core", {"question": order}) is not None, order
     for lasning in ("Hur är läget i huset?", "Vad minns du om mig?", "Vad har jag i kalendern i morgon?"):
         assert bana0.fraga_inte_order(fraga, "fraga_core", {"question": lasning}) is None, lasning
+
+
+# US-253 (G on US-098, round 4): a changing tool called before bana 0 has written the turn's text waits for it.
+
+@pytest.mark.asyncio
+async def test_ett_skrivande_verktyg_fore_texten_vantar_och_nekas_om_det_var_en_fraga():
+    import asyncio
+    text = {"v": ""}
+    service = _service()
+    ran = []
+
+    async def tool(params):
+        ran.append(params.function_name)
+        await params.result_callback("ok")
+
+    service.register_function("intent__HassTurnOn", tool)
+    service.fragevakt = lambda: text["v"]
+    asyncio.get_event_loop().call_later(0.1, lambda: text.update(v="Är det tänt i kontoret?"))  # STT lands 100 ms late
+    got = await _call(service, "intent__HassTurnOn", {"area": "kontoret", "domain": ["light"]})
+    assert ran == [] and "question" in str(got)
+
+
+@pytest.mark.asyncio
+async def test_en_order_som_kommer_fore_texten_kors_nar_texten_ar_en_order():
+    import asyncio
+    text = {"v": ""}
+    service = _service()
+    ran = []
+
+    async def tool(params):
+        ran.append(params.function_name)
+        await params.result_callback("ok")
+
+    service.register_function("intent__HassTurnOn", tool)
+    service.fragevakt = lambda: text["v"]
+    asyncio.get_event_loop().call_later(0.1, lambda: text.update(v="Tänd det i kontoret"))
+    await _call(service, "intent__HassTurnOn", {"area": "kontoret", "domain": ["light"]})
+    assert ran == ["intent__HassTurnOn"]
+
+
+@pytest.mark.asyncio
+async def test_utan_text_i_tid_kors_anropet_efter_taket_och_en_lasning_vantar_aldrig(monkeypatch):
+    import time
+    monkeypatch.setenv("BANA0_VANTA_TEXT_MS", "150")
+    t0 = time.monotonic()
+    assert await bana0.fraga_inte_order_vanta(lambda: "", "styr", {"vad": "kontoret", "atgard": "pa"}) is None
+    assert 0.12 <= time.monotonic() - t0 < 0.6            # waited about the cap, then ran (fail-open for an order)
+    t0 = time.monotonic()
+    assert await bana0.fraga_inte_order_vanta(lambda: "", "hus_lage", {}, {"hus_lage": True}) is None
+    assert time.monotonic() - t0 < 0.05                    # a read tool never waits
+    t0 = time.monotonic()
+    assert await bana0.fraga_inte_order_vanta(lambda: "Är det tänt i kontoret?", "styr", {}) is not None
+    assert time.monotonic() - t0 < 0.05                    # text already there: no wait
+    monkeypatch.setenv("BANA0_VANTA_TEXT_MS", "0")
+    t0 = time.monotonic()
+    assert await bana0.fraga_inte_order_vanta(lambda: "", "styr", {}) is None
+    assert time.monotonic() - t0 < 0.05                    # 0 = off
