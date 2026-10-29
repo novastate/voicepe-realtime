@@ -210,3 +210,25 @@ async def test_turens_tider_fylls_av_motorn_och_bana_0(ha_svarar, monkeypatch):
     t = service.tider.t
     assert t is not None and {"talets_slut", "turslut", "stt", "comms"} <= set(t)
     assert t["talets_slut"] < t["turslut"] <= t["stt"] <= t["comms"]
+
+
+@pytest.mark.asyncio
+async def test_en_ny_tur_nollstaller_vad_banan_hort_i_forra_turen(ha_svarar, monkeypatch):
+    """G on US-098: the guard reads bana0_heard; the last turn's order must not judge the next turn's tools."""
+    server, port, seen = await _wyoming(_transcript("tänd kontoret"))
+    connection, service, google, said, idle = _gemini_koppling(
+        ("127.0.0.1", port), [None, "start", "preend", None, "end"])
+    connection.bana0_heard = "Tänd fönsterlampan i kontoret."
+    seen_vid_start = []
+    orig = bana0.transkribera
+
+    async def transkribera(pcm, host, port_, timeout):
+        seen_vid_start.append(connection.bana0_heard)  # STT has not written the new text yet
+        return await orig(pcm, host, port_, timeout)
+
+    monkeypatch.setattr(bana0, "transkribera", transkribera)
+    async with server:
+        await _speak(connection, service, 5)
+        await service._turn_end_task
+        await asyncio.sleep(0.2)
+    assert seen_vid_start and seen_vid_start[0] == ""

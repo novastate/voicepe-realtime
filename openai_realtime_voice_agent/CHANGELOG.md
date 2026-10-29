@@ -4,6 +4,9 @@ All notable changes to this add-on. Newest first.
 
 ## Unreleased (fork)
 
+### 0.29.27
+- **US-098 (G:s slutpass, omgång 2, punkt 2):** `bana0_heard` nollställs när en ny tur börjar, så frågevakten inte dömer den här turens verktyg efter förra turens text.
+
 ### 0.29.26
 - **US-098 (G:s slutpass, omgång 2):** `fraga_core` dömer även Cores övriga orderord i frågetexten (godnatt, sätt igång, starta, öppna, kör, aktivera, dra ner/upp) som skrivande på en lästur.
 
