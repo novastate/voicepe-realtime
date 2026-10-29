@@ -372,3 +372,23 @@ async def test_ett_verktyg_fran_en_fraga_doms_pa_fragans_text_aven_nar_en_order_
     loop.call_later(0.1, lambda: texts.update({1: "Är det tänt i kontoret?"}))                 # the question's text lands late
     got = await _call(service, "intent__HassTurnOn", {"area": "kontoret", "domain": ["light"]})
     assert ran == [] and "question" in str(got)
+
+
+@pytest.mark.asyncio
+async def test_en_gammal_turs_verktyg_doms_inte_pa_nasta_turs_fraga_nar_den_egna_texten_saknas():
+    texts, state = {}, {"tur": 1}
+    service = _service()
+    ran = []
+
+    async def tool(params):
+        ran.append(params.function_name)
+        await params.result_callback("ok")
+
+    service.register_function("intent__HassTurnOn", tool)
+    service.tur_nr = lambda: state["tur"]
+    service.fragevakt = lambda: texts.get(state["tur"], "")          # the fallback reads the CURRENT turn
+    service.fragevakt_bana0 = lambda tur=None: texts.get(state["tur"] if tur is None else tur, "")
+    import asyncio
+    asyncio.get_event_loop().call_later(0.02, lambda: (state.update(tur=2), texts.update({2: "Är det tänt i kontoret?"})))
+    got = await _call(service, "intent__HassTurnOn", {"area": "kontoret", "domain": ["light"]})   # turn 1 was an order with no text
+    assert ran == ["intent__HassTurnOn"], got

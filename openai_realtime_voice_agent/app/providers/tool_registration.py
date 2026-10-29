@@ -124,6 +124,14 @@ def _bana0_for_tur(f, tur):
     return f if f is None or tur is None else (lambda: f(tur))
 
 
+def _las_for_tur(las, tur, tur_nr):
+    """US-256 (A, B): when the call's own turn is no longer the current one and has no text of its own, the fallback is empty,
+    never the newer turn's sentence."""
+    if las is None or tur is None or not callable(tur_nr):
+        return las
+    return lambda: "" if tur != tur_nr() else las()
+
+
 def _call_key(function_name, arguments) -> str:
     """The tool and its arguments, normalized (key order, case, spaces)."""
     if isinstance(arguments, str):
@@ -460,7 +468,7 @@ class ToolRegistrationMixin:
                     await params.result_callback({"result": skal})
                     return
                 fraga = getattr(self, "fragevakt", None)  # a question is no order (raawr US-098, 2026-10-17)
-                nej = await bana0.fraga_inte_order_vanta(fraga, function_name, getattr(params, "arguments", None),
+                nej = await bana0.fraga_inte_order_vanta(_las_for_tur(fraga, tur, tur_nr), function_name, getattr(params, "arguments", None),
                                                          getattr(self, "lasande", None),
                                                          bana0_text=_bana0_for_tur(getattr(self, "fragevakt_bana0", None), tur)) if fraga else None   # US-253
                 if nej:
