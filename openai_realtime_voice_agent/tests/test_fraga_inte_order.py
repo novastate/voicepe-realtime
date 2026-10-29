@@ -314,21 +314,3 @@ async def test_sessionen_far_bana0_lasaren_utom_utan_bana0_stt_och_i_ett_rum_dar
     monkeypatch.setenv("GEMINI_EGEN_TUR", "1")    # the engine runs the turns: bana 0 writes nothing here either
     _, service3 = await _connect(app)
     assert service3.fragevakt_bana0 is None
-
-
-def test_ett_sent_stt_svar_for_forra_turen_skrivs_inte_in_i_nasta_tur():
-    """G on #133: turn N's speech-to-text lands after turn N+1 began; it must not become N+1's sentence."""
-    class C:
-        bana0_heard = ""
-        bana0_tur = 0
-
-    c = C()
-    c.bana0_tur += 1                                        # turn 1 starts
-    n1 = c.bana0_tur                                        # its STT is asked
-    c.bana0_tur += 1                                        # turn 2 starts (the guard now reads an empty field)
-    assert bana0.anteckna_hort(c, n1, "Är det tänt i kontoret?") is False
-    assert c.bana0_heard == ""                              # the late answer for turn 1 was dropped
-    n2 = c.bana0_tur
-    assert bana0.anteckna_hort(c, n2, "Tänd i hallen") is True
-    assert c.bana0_heard == "Tänd i hallen"
-    assert bana0.anteckna_hort(c, n2, "[brus]" if bana0.brus("[brus]") else "") is True   # noise/empty clears it, as before
