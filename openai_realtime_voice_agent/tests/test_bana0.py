@@ -1070,3 +1070,17 @@ async def test_us256_gemini_fastlas_turens_id_innan_sluthandelse_uppgiften_koas(
     state["tur"] = 2              # the next turn starts before the queued task has run
     await svc._turn_end_task
     assert sett == [1]
+
+
+def test_us256_varje_plats_som_koar_sluthandelsen_fastlaser_turens_id_forst():
+    """Codex found the queue sites one at a time: any place that queues the end-of-turn task must fix the id first."""
+    import pathlib
+    import re
+    hittade = 0
+    for fil in pathlib.Path("app/providers").glob("*.py"):
+        rader = fil.read_text().splitlines()
+        for i, rad in enumerate(rader):
+            if re.search(r"create_task\(\s*(self\.)?(_run_turn_end|on_user_turn_end)\(", rad):
+                hittade += 1
+                assert any("fasta_tur" in r for r in rader[max(0, i - 4):i]), f"{fil}:{i + 1} queues the turn end without bana0.fasta_tur"
+    assert hittade >= 3

@@ -600,6 +600,8 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
 
     def _decide_turn(self) -> None:
         if self._turn_end_task is None or self._turn_end_task.done():
+            from app import bana0
+            bana0.fasta_tur(self)   # US-256: the ended turn's id, before the task is queued
             self._turn_end_task = asyncio.get_running_loop().create_task(self._run_turn_end())
 
     async def _run_turn_end(self) -> None:
