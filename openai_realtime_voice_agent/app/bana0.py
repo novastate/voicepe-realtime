@@ -220,9 +220,12 @@ def omrade_utan_doman(namn: str, argument: Optional[dict]) -> Optional[str]:
 def vanta_pa_text_tak_s(env: Optional[dict] = None) -> float:
     """US-253: how long a changing tool may wait for bana 0's text of the turn (BANA0_VANTA_TEXT_MS, default 300 ms, 0 = never)."""
     try:
-        return max(0.0, float((env if env is not None else os.environ).get("BANA0_VANTA_TEXT_MS", "300"))) / 1000.0
+        ms = float((env if env is not None else os.environ).get("BANA0_VANTA_TEXT_MS", "300"))
     except ValueError:
         return 0.3
+    if ms != ms or ms in (float("inf"), float("-inf")):   # nan / inf: not a number of milliseconds
+        return 0.3
+    return min(max(0.0, ms) / 1000.0, 2.0)   # never more than 2 s, whatever the env says
 
 
 async def fraga_inte_order_vanta(las_text: Callable[[], Optional[str]], namn: str, argument: Optional[dict],

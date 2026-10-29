@@ -251,3 +251,12 @@ async def test_utan_text_i_tid_kors_anropet_efter_taket_och_en_lasning_vantar_al
     t0 = time.monotonic()
     assert await bana0.fraga_inte_order_vanta(lambda: "", "styr", {}) is None
     assert time.monotonic() - t0 < 0.05                    # 0 = off
+
+
+def test_vantetaket_klipps_vid_tva_sekunder_och_skräp_ger_standard():
+    assert bana0.vanta_pa_text_tak_s({"BANA0_VANTA_TEXT_MS": "inf"}) == 0.3
+    assert bana0.vanta_pa_text_tak_s({"BANA0_VANTA_TEXT_MS": "nan"}) == 0.3
+    assert bana0.vanta_pa_text_tak_s({"BANA0_VANTA_TEXT_MS": "x"}) == 0.3
+    assert bana0.vanta_pa_text_tak_s({"BANA0_VANTA_TEXT_MS": "99999"}) == 2.0
+    assert bana0.vanta_pa_text_tak_s({"BANA0_VANTA_TEXT_MS": "-5"}) == 0.0
+    assert bana0.vanta_pa_text_tak_s({}) == 0.3
