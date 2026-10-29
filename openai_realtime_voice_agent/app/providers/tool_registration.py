@@ -453,8 +453,9 @@ class ToolRegistrationMixin:
                     await params.result_callback({"result": skal})
                     return
                 fraga = getattr(self, "fragevakt", None)  # a question is no order (raawr US-098, 2026-10-17)
-                nej = bana0.fraga_inte_order(fraga(), function_name, getattr(params, "arguments", None),
-                                             getattr(self, "lasande", None)) if fraga else None
+                nej = await bana0.fraga_inte_order_vanta(fraga, function_name, getattr(params, "arguments", None),
+                                                         getattr(self, "lasande", None),
+                                                         bana0_text=getattr(self, "fragevakt_bana0", None)) if fraga else None   # US-253
                 if nej:
                     logger.warning(f"🛡️ tool {function_name} NOT run: {nej}")
                     await params.result_callback({"result": nej})

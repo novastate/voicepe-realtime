@@ -1136,6 +1136,10 @@ class Application:
             # A question is no order (raawr US-098): the tool layer reads what bana 0 heard this turn before a switching
             # tool runs. ponytail: the latest turn's text; a tool call faster than bana 0's STT reads the turn before.
             service.fragevakt = lambda: connection.bana0_heard or (getattr(service, "tur_text", lambda: "")() or "")
+            # US-253: the guard waits for bana 0's whole sentence, never for the engine's growing transcript; in a room where
+            # the engine runs the turns (GEMINI_EGEN_TUR) bana 0 writes nothing, so there is nothing to wait for.
+            from app.eko_vakt import egen_tur as _eko_egen_tur
+            service.fragevakt_bana0 = None if (_eko_egen_tur(connection.device_id) or not self.bana0_stt) else (lambda: connection.bana0_heard)   # no bana 0 STT = no text to wait for (A)
             service.register_function("search_home", create_search_home_tool_handler())
             logger.info("✅ Registered search_home tool handler")
 

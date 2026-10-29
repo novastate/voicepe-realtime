@@ -194,3 +194,123 @@ def test_fraga_core_med_corens_andra_orderord_ar_andrande():
         assert bana0.fraga_inte_order(fraga, "fraga_core", {"question": order}) is not None, order
     for lasning in ("Hur är läget i huset?", "Vad minns du om mig?", "Vad har jag i kalendern i morgon?"):
         assert bana0.fraga_inte_order(fraga, "fraga_core", {"question": lasning}) is None, lasning
+
+
+# US-253 (G on US-098, round 4; G on #133): a changing tool called before bana 0 has written the turn's text waits for BANA 0's text.
+
+def _vakt(service, bana0, motor=lambda: ""):
+    service.fragevakt_bana0 = lambda: bana0["v"]
+    service.fragevakt = lambda: bana0["v"] or motor()
+
+
+@pytest.mark.asyncio
+async def test_ett_skrivande_verktyg_fore_texten_vantar_och_nekas_om_det_var_en_fraga():
+    import asyncio
+    text = {"v": ""}
+    service = _service()
+    ran = []
+
+    async def tool(params):
+        ran.append(params.function_name)
+        await params.result_callback("ok")
+
+    service.register_function("intent__HassTurnOn", tool)
+    _vakt(service, text)
+    asyncio.get_event_loop().call_later(0.1, lambda: text.update(v="Är det tänt i kontoret?"))  # STT lands 100 ms late
+    got = await _call(service, "intent__HassTurnOn", {"area": "kontoret", "domain": ["light"]})
+    assert ran == [] and "question" in str(got)
+
+
+@pytest.mark.asyncio
+async def test_en_order_som_kommer_fore_texten_kors_nar_texten_ar_en_order():
+    import asyncio
+    text = {"v": ""}
+    service = _service()
+    ran = []
+
+    async def tool(params):
+        ran.append(params.function_name)
+        await params.result_callback("ok")
+
+    service.register_function("intent__HassTurnOn", tool)
+    _vakt(service, text)
+    asyncio.get_event_loop().call_later(0.1, lambda: text.update(v="Tänd det i kontoret"))
+    await _call(service, "intent__HassTurnOn", {"area": "kontoret", "domain": ["light"]})
+    assert ran == ["intent__HassTurnOn"]
+
+
+@pytest.mark.asyncio
+async def test_motorns_vaxande_text_dömer_inte_for_tidigt():
+    """G on #133: the engine's own transcript grows ('Tänd i kontoret' before 'Är det tänt i kontoret?'); the wait must
+    judge bana 0's whole sentence, not the first crumb. And 'Var' (a crumb that reads as a question) must not deny the order
+    'Var snäll och tänd i hallen'."""
+    import asyncio
+    for krummel, hel, ska_koras in (("Tänd i kontoret", "Är det tänt i kontoret?", False),
+                                    ("Var", "Var snäll och tänd i hallen", True)):
+        bana0_t = {"v": ""}
+        motor = {"v": krummel}
+        service = _service()
+        ran = []
+
+        async def tool(params):
+            ran.append(params.function_name)
+            await params.result_callback("ok")
+
+        service.register_function("intent__HassTurnOn", tool)
+        _vakt(service, bana0_t, lambda: motor["v"])
+        asyncio.get_event_loop().call_later(0.1, lambda: bana0_t.update(v=hel))
+        await _call(service, "intent__HassTurnOn", {"area": "kontoret", "domain": ["light"]})
+        assert (ran == ["intent__HassTurnOn"]) is ska_koras, (krummel, hel, ran)
+
+
+@pytest.mark.asyncio
+async def test_utan_text_i_tid_kors_anropet_efter_taket_och_en_lasning_vantar_aldrig(monkeypatch):
+    import time
+    monkeypatch.setenv("BANA0_VANTA_TEXT_MS", "150")
+    tom = lambda: ""
+    t0 = time.monotonic()
+    assert await bana0.fraga_inte_order_vanta(tom, "styr", {"vad": "kontoret", "atgard": "pa"}, bana0_text=tom) is None
+    assert 0.12 <= time.monotonic() - t0 < 0.6            # waited about the cap, then ran (fail-open for an order)
+    t0 = time.monotonic()
+    assert await bana0.fraga_inte_order_vanta(tom, "hus_lage", {}, {"hus_lage": True}, bana0_text=tom) is None
+    assert time.monotonic() - t0 < 0.05                    # a read tool never waits
+    fraga = lambda: "Är det tänt i kontoret?"
+    t0 = time.monotonic()
+    assert await bana0.fraga_inte_order_vanta(tom, "styr", {}, bana0_text=fraga) is not None
+    assert time.monotonic() - t0 < 0.05                    # bana 0's text already there: no wait
+    t0 = time.monotonic()
+    assert await bana0.fraga_inte_order_vanta(tom, "styr", {}) is None
+    assert time.monotonic() - t0 < 0.05                    # a room without bana 0 (GEMINI_EGEN_TUR): nothing to wait for
+    monkeypatch.setenv("BANA0_VANTA_TEXT_MS", "0")
+    t0 = time.monotonic()
+    assert await bana0.fraga_inte_order_vanta(tom, "styr", {}, bana0_text=tom) is None
+    assert time.monotonic() - t0 < 0.05                    # 0 = off
+
+
+def test_vantetaket_klipps_vid_tva_sekunder_och_skräp_ger_standard():
+    assert bana0.vanta_pa_text_tak_s({"BANA0_VANTA_TEXT_MS": "inf"}) == 0.3
+    assert bana0.vanta_pa_text_tak_s({"BANA0_VANTA_TEXT_MS": "nan"}) == 0.3
+    assert bana0.vanta_pa_text_tak_s({"BANA0_VANTA_TEXT_MS": "x"}) == 0.3
+    assert bana0.vanta_pa_text_tak_s({"BANA0_VANTA_TEXT_MS": "99999"}) == 2.0
+    assert bana0.vanta_pa_text_tak_s({"BANA0_VANTA_TEXT_MS": "-5"}) == 0.0
+    assert bana0.vanta_pa_text_tak_s({}) == 0.3
+
+
+@pytest.mark.asyncio
+async def test_sessionen_far_bana0_lasaren_utom_utan_bana0_stt_och_i_ett_rum_dar_motorn_kor_turerna(monkeypatch):
+    from tests.test_ha_tools_recovery import _connect
+    from tests.test_provider_selection import _bare_app
+
+    monkeypatch.delenv("GEMINI_EGEN_TUR", raising=False)
+    app = _bare_app("openai")
+    app.bana0_stt = ("127.0.0.1", 10300)          # what initialize() reads from BANA0_STT
+    connection, service = await _connect(app)
+    connection.bana0_heard = "Tänd i hallen"
+    assert service.fragevakt_bana0() == "Tänd i hallen"
+    app.bana0_stt = None                          # bana 0 off: nothing will ever write bana0_heard, so nothing to wait for
+    _, service2 = await _connect(app)
+    assert service2.fragevakt_bana0 is None
+    app.bana0_stt = ("127.0.0.1", 10300)
+    monkeypatch.setenv("GEMINI_EGEN_TUR", "1")    # the engine runs the turns: bana 0 writes nothing here either
+    _, service3 = await _connect(app)
+    assert service3.fragevakt_bana0 is None

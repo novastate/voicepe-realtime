@@ -217,6 +217,42 @@ def omrade_utan_doman(namn: str, argument: Optional[dict]) -> Optional[str]:
     return None
 
 
+def vanta_pa_text_tak_s(env: Optional[dict] = None) -> float:
+    """US-253: how long a changing tool may wait for bana 0's text of the turn (BANA0_VANTA_TEXT_MS, default 300 ms, 0 = never)."""
+    try:
+        ms = float((env if env is not None else os.environ).get("BANA0_VANTA_TEXT_MS", "300"))
+    except ValueError:
+        return 0.3
+    if ms != ms or ms in (float("inf"), float("-inf")):   # nan / inf: not a number of milliseconds
+        return 0.3
+    return min(max(0.0, ms) / 1000.0, 2.0)   # never more than 2 s, whatever the env says
+
+
+async def fraga_inte_order_vanta(las_text: Callable[[], Optional[str]], namn: str, argument: Optional[dict],
+                                 lasande: Optional[dict] = None, tak_s: Optional[float] = None,
+                                 bana0_text: Optional[Callable[[], Optional[str]]] = None) -> Optional[str]:
+    """`fraga_inte_order`, but a changing tool called before bana 0 has written what it heard waits for that text, at most
+    `tak_s` (US-253, G on US-098). Empty text is no question, so the call used to run ("Är det tänt i kontoret?" turned the
+    office on, 2026-10-17). It waits for BANA 0's text (`bana0_text`), never for the engine's own growing transcript: that one
+    is partial ("Tänd i kontoret" before "Är det tänt i kontoret?") and judging its first crumb let a question through (G on
+    #133). Bana 0's text is the whole sentence. A read tool, a turn whose bana 0 text is there, or a room where bana 0 does not
+    run (`bana0_text` is None) never waits. No bana 0 text in time = judged on `las_text()` as before (fail-open for an order)."""
+    tak = vanta_pa_text_tak_s() if tak_s is None else tak_s
+    text = ((bana0_text() if bana0_text else "") or "").strip()
+    vantade = False
+    borjade = time.monotonic()
+    if not text and bana0_text is not None and tak > 0 and andrar(namn, argument, lasande):
+        vantade = True
+        slut = borjade + tak
+        while not text and time.monotonic() < slut:
+            await asyncio.sleep(0.02)
+            text = (bana0_text() or "").strip()
+    if vantade:
+        logger.info(f"⏳ tool {namn} waited {1000 * (time.monotonic() - borjade):.0f} ms for bana 0's text: "
+                    f"{'got it' if text else 'cap hit, judged on what there is'}")
+    return fraga_inte_order(text or las_text() or "", namn, argument, lasande)
+
+
 def fraga_inte_order(turtext: Optional[str], namn: str, argument: Optional[dict],
                      lasande: Optional[dict] = None) -> Optional[str]:
     """Why a changing tool must not run on this turn, or None: the turn (bana 0's local text) was a question."""
