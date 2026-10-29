@@ -185,3 +185,12 @@ def test_fraga_core_med_en_order_i_fragetexten_ar_andrande():
     assert bana0.fraga_inte_order(fraga, "fraga_core", {"question": "Tänd fönsterlampan i kontoret."}) is not None
     assert bana0.fraga_inte_order(fraga, "fraga_core", {"question": "Är lampan i kontoret tänd?"}) is None
     assert bana0.fraga_inte_order(fraga, "fraga_core", {"question": "Hur är läget i huset?"}) is None
+
+
+def test_fraga_core_med_corens_andra_orderord_ar_andrande():
+    """G on US-098, round 2: Core's fast path also runs 'godnatt' (off_all) and 'sätt igång köket' (on)."""
+    fraga = "Är det tänt i kontoret?"
+    for order in ("godnatt", "Sätt igång köket", "Starta kvällsscenen", "Öppna garaget"):
+        assert bana0.fraga_inte_order(fraga, "fraga_core", {"question": order}) is not None, order
+    for lasning in ("Hur är läget i huset?", "Vad minns du om mig?", "Vad har jag i kalendern i morgon?"):
+        assert bana0.fraga_inte_order(fraga, "fraga_core", {"question": lasning}) is None, lasning
