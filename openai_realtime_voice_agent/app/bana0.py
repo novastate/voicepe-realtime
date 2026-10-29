@@ -228,6 +228,17 @@ def vanta_pa_text_tak_s(env: Optional[dict] = None) -> float:
     return min(max(0.0, ms) / 1000.0, 2.0)   # never more than 2 s, whatever the env says
 
 
+def anteckna_hort(connection, tur_vid_start: int, text: Optional[str]) -> bool:
+    """Write what bana 0 heard into `connection.bana0_heard`, but only if no newer turn has started since this speech-to-text
+    was asked (US-253, G on #133): a late answer for turn N must not become turn N+1's sentence, or the question guard judges
+    the next turn's tools by the last turn's words. True = written."""
+    if getattr(connection, "bana0_tur", 0) != tur_vid_start:
+        logger.info("bana0: a speech-to-text answer for an earlier turn arrived after a new turn began; not noted")
+        return False
+    connection.bana0_heard = "" if brus(text) else (text or "")
+    return True
+
+
 async def fraga_inte_order_vanta(las_text: Callable[[], Optional[str]], namn: str, argument: Optional[dict],
                                  lasande: Optional[dict] = None, tak_s: Optional[float] = None,
                                  bana0_text: Optional[Callable[[], Optional[str]]] = None) -> Optional[str]:

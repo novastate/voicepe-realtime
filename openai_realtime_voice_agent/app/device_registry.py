@@ -115,6 +115,7 @@ class DeviceConnection:
     phase_emitter: Any = None
     records_audio: bool = False
     bana0_heard: str = ""  # what bana 0's local speech-to-text heard in the latest turn ("" if nothing or noise)
+    bana0_tur: int = 0  # counts turn starts; a late speech-to-text of an earlier turn must not write bana0_heard (US-253, G on #133)
     # The background task publishing this connection's provider sensor to
     # Home Assistant (see WebSocketHandler.serve_connection). Held here, on
     # the per-connection object, so asyncio's weak reference to a running

@@ -1914,8 +1914,9 @@ class WebSocketHandler:
                 return await bana0.transkribera(pcm, host, port, t)
 
             async def _stt_noterad(pcm, t):
+                tur_vid_start = getattr(connection, "bana0_tur", 0)
                 text = await _stt(pcm, t)
-                connection.bana0_heard = "" if bana0.brus(text) else (text or "")
+                bana0.anteckna_hort(connection, tur_vid_start, text)   # not if a newer turn began meanwhile (US-253)
                 return text
 
             tider = TurnTider(client_id)
@@ -2029,6 +2030,7 @@ class WebSocketHandler:
             def _tur_borjar():
                 _spec_rensa()
                 connection.bana0_heard = ""  # the guard must not judge this turn's tools by the last turn's text (G on US-098)
+                connection.bana0_tur = getattr(connection, "bana0_tur", 0) + 1   # a late STT answer for the last turn is dropped (US-253)
                 avbryt = getattr(connection, "avbryt_core", None)
                 if avbryt is not None:
                     avbryt()  # he starts to speak: a Core answer still being spoken stops
