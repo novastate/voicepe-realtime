@@ -297,13 +297,20 @@ def test_vantetaket_klipps_vid_tva_sekunder_och_skräp_ger_standard():
 
 
 @pytest.mark.asyncio
-async def test_sessionen_far_bana0_lasaren_utom_i_ett_rum_dar_motorn_kor_turerna(monkeypatch):
+async def test_sessionen_far_bana0_lasaren_utom_utan_bana0_stt_och_i_ett_rum_dar_motorn_kor_turerna(monkeypatch):
     from tests.test_ha_tools_recovery import _connect
     from tests.test_provider_selection import _bare_app
 
-    connection, service = await _connect(_bare_app("openai"))
+    monkeypatch.delenv("GEMINI_EGEN_TUR", raising=False)
+    app = _bare_app("openai")
+    app.bana0_stt = ("127.0.0.1", 10300)          # what initialize() reads from BANA0_STT
+    connection, service = await _connect(app)
     connection.bana0_heard = "Tänd i hallen"
     assert service.fragevakt_bana0() == "Tänd i hallen"
-    monkeypatch.setenv("GEMINI_EGEN_TUR", "1")
-    connection2, service2 = await _connect(_bare_app("openai"))
-    assert service2.fragevakt_bana0 is None   # bana 0 writes nothing there: the guard must not wait for it
+    app.bana0_stt = None                          # bana 0 off: nothing will ever write bana0_heard, so nothing to wait for
+    _, service2 = await _connect(app)
+    assert service2.fragevakt_bana0 is None
+    app.bana0_stt = ("127.0.0.1", 10300)
+    monkeypatch.setenv("GEMINI_EGEN_TUR", "1")    # the engine runs the turns: bana 0 writes nothing here either
+    _, service3 = await _connect(app)
+    assert service3.fragevakt_bana0 is None
