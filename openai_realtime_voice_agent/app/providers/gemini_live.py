@@ -940,6 +940,8 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
     def _decide_turn(self) -> None:
         """Run bana 0's decision once per held turn, off the audio path."""
         if self._turn_end_task is None or self._turn_end_task.done():
+            from app import bana0
+            bana0.fasta_tur(self)   # US-256: the ended turn's id, before the task is queued
             self._turn_end_task = asyncio.get_running_loop().create_task(self._run_turn_end())
 
     _vantar = False  # the held turn only cut him off ("vänta"): it stays held, and what the person says next joins it

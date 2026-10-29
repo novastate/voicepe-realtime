@@ -1049,3 +1049,24 @@ async def test_us256_turens_id_fastlas_i_sluthandelsen_aven_om_nasta_tur_hinner_
         state["tur"] = 2          # the next turn starts before the queued end-of-turn task has run
         await service._turn_end_task
     assert sett == [1]
+
+
+@pytest.mark.asyncio
+async def test_us256_gemini_fastlas_turens_id_innan_sluthandelse_uppgiften_koas():
+    import asyncio
+    from types import SimpleNamespace
+    from app.providers.gemini_live import ResilientGeminiLiveService
+
+    state, sett = {"tur": 1}, []
+
+    async def sonda():
+        sett.append(bana0.TUR_SLUT.get())
+
+    async def kor():
+        await sonda()
+
+    svc = SimpleNamespace(tur_nr=lambda: state["tur"], _turn_end_task=None, _run_turn_end=kor)
+    ResilientGeminiLiveService._decide_turn(svc)
+    state["tur"] = 2              # the next turn starts before the queued task has run
+    await svc._turn_end_task
+    assert sett == [1]

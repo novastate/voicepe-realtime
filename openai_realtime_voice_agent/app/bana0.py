@@ -235,6 +235,13 @@ import contextvars
 TUR_SLUT: contextvars.ContextVar = contextvars.ContextVar("tur_slut", default=None)
 
 
+def fasta_tur(service) -> None:
+    """Fix the ended turn's id for the task about to be queued (it copies the context when it is created)."""
+    tur_nr = getattr(service, "tur_nr", None)
+    if callable(tur_nr):
+        TUR_SLUT.set(tur_nr())
+
+
 def skriv_hort(connection, tur: int, heard: str) -> None:
     """US-256: bana 0's text for turn `tur`. It is kept per turn (the last four), so a tool of that turn is judged on its own
     sentence; it only becomes `bana0_heard` (the current turn's sentence) if that turn is still the current one."""
