@@ -229,25 +229,28 @@ def vanta_pa_text_tak_s(env: Optional[dict] = None) -> float:
 
 
 async def fraga_inte_order_vanta(las_text: Callable[[], Optional[str]], namn: str, argument: Optional[dict],
-                                 lasande: Optional[dict] = None, tak_s: Optional[float] = None) -> Optional[str]:
-    """`fraga_inte_order`, but a changing tool whose turn has no text yet waits for it, at most `tak_s` (US-253, G on US-098).
-    The model may call `styr` before bana 0 has written what it heard; empty text is no question, so the call used to run
-    ("Är det tänt i kontoret?" turned the office on, 2026-10-17). A read tool, or a turn with text, never waits. No text in
-    time = the call runs as before (fail-open for an order)."""
+                                 lasande: Optional[dict] = None, tak_s: Optional[float] = None,
+                                 bana0_text: Optional[Callable[[], Optional[str]]] = None) -> Optional[str]:
+    """`fraga_inte_order`, but a changing tool called before bana 0 has written what it heard waits for that text, at most
+    `tak_s` (US-253, G on US-098). Empty text is no question, so the call used to run ("Är det tänt i kontoret?" turned the
+    office on, 2026-10-17). It waits for BANA 0's text (`bana0_text`), never for the engine's own growing transcript: that one
+    is partial ("Tänd i kontoret" before "Är det tänt i kontoret?") and judging its first crumb let a question through (G on
+    #133). Bana 0's text is the whole sentence. A read tool, a turn whose bana 0 text is there, or a room where bana 0 does not
+    run (`bana0_text` is None) never waits. No bana 0 text in time = judged on `las_text()` as before (fail-open for an order)."""
     tak = vanta_pa_text_tak_s() if tak_s is None else tak_s
-    text = las_text() or ""
+    text = ((bana0_text() if bana0_text else "") or "").strip()
     vantade = False
     borjade = time.monotonic()
-    if not text.strip() and tak > 0 and andrar(namn, argument, lasande):
+    if not text and bana0_text is not None and tak > 0 and andrar(namn, argument, lasande):
         vantade = True
         slut = borjade + tak
-        while not text.strip() and time.monotonic() < slut:
+        while not text and time.monotonic() < slut:
             await asyncio.sleep(0.02)
-            text = las_text() or ""
+            text = (bana0_text() or "").strip()
     if vantade:
         logger.info(f"⏳ tool {namn} waited {1000 * (time.monotonic() - borjade):.0f} ms for bana 0's text: "
-                    f"{'got it' if text.strip() else 'cap hit, ran without it'}")
-    return fraga_inte_order(text, namn, argument, lasande)
+                    f"{'got it' if text else 'cap hit, judged on what there is'}")
+    return fraga_inte_order(text or las_text() or "", namn, argument, lasande)
 
 
 def fraga_inte_order(turtext: Optional[str], namn: str, argument: Optional[dict],

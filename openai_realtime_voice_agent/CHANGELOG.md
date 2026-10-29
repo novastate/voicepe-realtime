@@ -5,7 +5,7 @@ All notable changes to this add-on. Newest first.
 ## Unreleased (fork)
 
 ### 0.29.28
-- **US-253 (G:s slutpass på US-098, omgång 4):** ett skrivande verktyg som anropas innan bana 0 skrivit turens text väntar på texten, högst `BANA0_VANTA_TEXT_MS` (standard 300 ms, 0 = av), och nekas om det var en fråga; kommer ingen text körs anropet som förut. Läsande verktyg och en tur som redan har text väntar aldrig. Före: `fraga_inte_order("", "styr", …)` var `None`, så "Är det tänt i kontoret?" kunde tända innan avskriften (2026-10-17).
+- **US-253 (G:s slutpass på US-098, omgång 4):** ett skrivande verktyg som anropas innan bana 0 skrivit turens text väntar på BANA 0:s text (aldrig på motorns växande avskrift; G på #133), högst `BANA0_VANTA_TEXT_MS` (standard 300 ms, 0 = av), och nekas om det var en fråga; kommer ingen text körs anropet som förut. Läsande verktyg och en tur som redan har text väntar aldrig. Före: `fraga_inte_order("", "styr", …)` var `None`, så "Är det tänt i kontoret?" kunde tända innan avskriften (2026-10-17).
 
 ### 0.29.27
 - **US-098 (G:s slutpass, omgång 2, punkt 2):** `bana0_heard` nollställs när en ny tur börjar, så frågevakten inte dömer den här turens verktyg efter förra turens text.
