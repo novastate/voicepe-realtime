@@ -1073,17 +1073,26 @@ async def test_us256_gemini_fastlas_turens_id_innan_sluthandelse_uppgiften_koas(
 
 
 def test_us256_varje_plats_som_koar_sluthandelsen_fastlaser_turens_id_forst():
-    """Codex found the queue sites one at a time. Any non-awaited use of the end-of-turn callback in a provider (create_task,
-    ensure_future, run_in_executor, a call split over lines) must have a real bana0.fasta_tur(...) call just above it."""
+    """Codex found the queue sites one at a time, so this reads the syntax tree. In every function in app/providers, any use of
+    `on_user_turn_end` / `_run_turn_end` that is not an immediate `await x()` (create_task, ensure_future, run_in_executor,
+    a call split over lines, a reference passed on) needs a real call to `bana0.fasta_tur(...)` on an earlier line."""
+    import ast
     import pathlib
-    import re
+    NAMN = {"on_user_turn_end", "_run_turn_end"}
     hittade = 0
     for fil in pathlib.Path("app/providers").glob("*.py"):
-        rader = fil.read_text().splitlines()
-        for i, rad in enumerate(rader):
-            kod = rad.split("#", 1)[0]
-            if re.search(r"\b(_run_turn_end|on_user_turn_end)\(\)", kod) and not re.search(r"await\s+(self\.)?(_run_turn_end|on_user_turn_end)\(\)|def\s", kod):
+        for fn in ast.walk(ast.parse(fil.read_text())):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            awaitade = {id(a.value.func) for a in ast.walk(fn) if isinstance(a, ast.Await) and isinstance(a.value, ast.Call)}
+            anvandningar = [n for n in ast.walk(fn) if isinstance(n, ast.Attribute) and n.attr in NAMN and id(n) not in awaitade
+                            and isinstance(n.ctx, ast.Load)]
+            # `self._run_turn_end` named inside `if self.on_user_turn_end is not None:` is a test, not a queue site
+            testar = {id(c.left) for c in ast.walk(fn) if isinstance(c, ast.Compare)}
+            anvandningar = [n for n in anvandningar if id(n) not in testar]
+            for n in anvandningar:
                 hittade += 1
-                over = [r.split("#", 1)[0] for r in rader[max(0, i - 6):i + 1]]
-                assert any("bana0.fasta_tur(" in r for r in over), f"{fil}:{i + 1} queues the turn end without bana0.fasta_tur"
+                faster = [c.lineno for c in ast.walk(fn) if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
+                          and c.func.attr == "fasta_tur" and isinstance(c.func.value, ast.Name) and c.func.value.id == "bana0"]
+                assert any(l < n.lineno for l in faster), f"{fil}:{n.lineno} uses the turn end without an earlier bana0.fasta_tur(...)"
     assert hittade >= 3, hittade
