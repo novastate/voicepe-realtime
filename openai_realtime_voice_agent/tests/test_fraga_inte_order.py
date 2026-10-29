@@ -314,3 +314,81 @@ async def test_sessionen_far_bana0_lasaren_utom_utan_bana0_stt_och_i_ett_rum_dar
     monkeypatch.setenv("GEMINI_EGEN_TUR", "1")    # the engine runs the turns: bana 0 writes nothing here either
     _, service3 = await _connect(app)
     assert service3.fragevakt_bana0 is None
+
+
+# --- US-256: two phrases close together are each judged on their own text ---------------------------------------
+
+def test_ett_sent_stt_svar_for_en_gammal_tur_blir_inte_nasta_turs_mening():
+    from types import SimpleNamespace
+    c = SimpleNamespace(tur_nr=2, bana0_heard="Tänd i hallen", bana0_per_tur={})
+    bana0.skriv_hort(c, 1, "Är det tänt i kontoret?")      # turn 1's answer lands after turn 2 started
+    assert c.bana0_heard == "Tänd i hallen"                # turn 2's sentence is untouched
+    assert c.bana0_per_tur[1] == "Är det tänt i kontoret?"
+    bana0.skriv_hort(c, 2, "Tänd i köket")                 # the current turn's answer is its sentence
+    assert c.bana0_heard == "Tänd i köket"
+
+
+def test_bana0_texterna_per_tur_gallras_till_de_senaste_fyra():
+    from types import SimpleNamespace
+    c = SimpleNamespace(tur_nr=0, bana0_heard="", bana0_per_tur={})
+    for n in range(1, 8):
+        c.tur_nr = n
+        bana0.skriv_hort(c, n, f"t{n}")
+    assert sorted(c.bana0_per_tur) == [4, 5, 6, 7]
+
+
+@pytest.mark.asyncio
+async def test_sessionen_ger_vakten_texten_for_verktygets_egen_tur():
+    from tests.test_ha_tools_recovery import _connect
+    from tests.test_provider_selection import _bare_app
+
+    app = _bare_app("openai")
+    app.bana0_stt = ("127.0.0.1", 10300)
+    connection, service = await _connect(app)
+    connection.tur_nr, connection.bana0_heard = 2, "Tänd i hallen"
+    connection.bana0_per_tur = {1: "Är det tänt?"}
+    assert service.tur_nr() == 2
+    assert service.fragevakt_bana0(1) == "Är det tänt?" and service.fragevakt_bana0(2) == "Tänd i hallen"
+    assert service.fragevakt_bana0() == "Tänd i hallen"
+
+
+@pytest.mark.asyncio
+async def test_ett_verktyg_fran_en_fraga_doms_pa_fragans_text_aven_nar_en_order_hunnit_starta():
+    import asyncio
+    texts, state = {}, {"tur": 1}
+    service = _service()
+    ran = []
+
+    async def tool(params):
+        ran.append(params.function_name)
+        await params.result_callback("ok")
+
+    service.register_function("intent__HassTurnOn", tool)
+    service.tur_nr = lambda: state["tur"]
+    service.fragevakt = lambda: ""
+    service.fragevakt_bana0 = lambda tur=None: texts.get(state["tur"] if tur is None else tur, "")
+    loop = asyncio.get_event_loop()
+    loop.call_later(0.02, lambda: (state.update(tur=2), texts.update({2: "Tänd i hallen"})))   # the order starts at once
+    loop.call_later(0.1, lambda: texts.update({1: "Är det tänt i kontoret?"}))                 # the question's text lands late
+    got = await _call(service, "intent__HassTurnOn", {"area": "kontoret", "domain": ["light"]})
+    assert ran == [] and "question" in str(got)
+
+
+@pytest.mark.asyncio
+async def test_en_gammal_turs_verktyg_doms_inte_pa_nasta_turs_fraga_nar_den_egna_texten_saknas():
+    texts, state = {}, {"tur": 1}
+    service = _service()
+    ran = []
+
+    async def tool(params):
+        ran.append(params.function_name)
+        await params.result_callback("ok")
+
+    service.register_function("intent__HassTurnOn", tool)
+    service.tur_nr = lambda: state["tur"]
+    service.fragevakt = lambda: texts.get(state["tur"], "")          # the fallback reads the CURRENT turn
+    service.fragevakt_bana0 = lambda tur=None: texts.get(state["tur"] if tur is None else tur, "")
+    import asyncio
+    asyncio.get_event_loop().call_later(0.02, lambda: (state.update(tur=2), texts.update({2: "Är det tänt i kontoret?"})))
+    got = await _call(service, "intent__HassTurnOn", {"area": "kontoret", "domain": ["light"]})   # turn 1 was an order with no text
+    assert ran == ["intent__HassTurnOn"], got

@@ -120,6 +120,8 @@ class SafeRealtimeLLMService(SovlageMixin, ToolRegistrationMixin, OpenAIRealtime
         if self.on_user_turn_end is not None:
             # A task: the receive loop must keep reading while bana 0 runs.
             # Bana 0 arms the silence ack itself, and only on a miss.
+            from app import bana0
+            bana0.fasta_tur(self)   # US-256: the ended turn's id, before the task is queued
             self._turn_end_task = asyncio.get_running_loop().create_task(self.on_user_turn_end())
         else:
             self.arm_silence_ack()

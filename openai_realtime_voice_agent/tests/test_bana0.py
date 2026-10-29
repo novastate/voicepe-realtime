@@ -1031,3 +1031,68 @@ def test_US_131_feltexten_rensas_och_kortas_for_rosten_och_modellen():
     svar = bana0.Svar(lang)
     svar.fel = True
     assert "\n" not in bana0.gjort("tänd", svar).split("Home Assistant svarade")[1]
+
+
+@pytest.mark.asyncio
+async def test_us256_turens_id_fastlas_i_sluthandelsen_aven_om_nasta_tur_hinner_starta():
+    server, port, _ = await _wyoming(_transcript("är det tänt i kontoret"))
+    handler, connection, service, sent = _koppling(("127.0.0.1", port))
+    state, sett = {"tur": 1}, []
+
+    async def sonda():
+        sett.append(bana0.TUR_SLUT.get())
+
+    service.tur_nr = lambda: state["tur"]
+    service.on_user_turn_end = sonda
+    async with server:
+        await service._handle_evt_speech_stopped(None)
+        state["tur"] = 2          # the next turn starts before the queued end-of-turn task has run
+        await service._turn_end_task
+    assert sett == [1]
+
+
+@pytest.mark.asyncio
+async def test_us256_gemini_fastlas_turens_id_innan_sluthandelse_uppgiften_koas():
+    import asyncio
+    from types import SimpleNamespace
+    from app.providers.gemini_live import ResilientGeminiLiveService
+
+    state, sett = {"tur": 1}, []
+
+    async def sonda():
+        sett.append(bana0.TUR_SLUT.get())
+
+    async def kor():
+        await sonda()
+
+    svc = SimpleNamespace(tur_nr=lambda: state["tur"], _turn_end_task=None, _run_turn_end=kor)
+    ResilientGeminiLiveService._decide_turn(svc)
+    state["tur"] = 2              # the next turn starts before the queued task has run
+    await svc._turn_end_task
+    assert sett == [1]
+
+
+def test_us256_varje_plats_som_koar_sluthandelsen_fastlaser_turens_id_forst():
+    """Codex found the queue sites one at a time, so this reads the syntax tree. In every function in app/providers, any use of
+    `on_user_turn_end` / `_run_turn_end` that is not an immediate `await x()` (create_task, ensure_future, run_in_executor,
+    a call split over lines, a reference passed on) needs a real call to `bana0.fasta_tur(...)` on an earlier line."""
+    import ast
+    import pathlib
+    NAMN = {"on_user_turn_end", "_run_turn_end"}
+    hittade = 0
+    for fil in pathlib.Path("app/providers").glob("*.py"):
+        for fn in ast.walk(ast.parse(fil.read_text())):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            awaitade = {id(a.value.func) for a in ast.walk(fn) if isinstance(a, ast.Await) and isinstance(a.value, ast.Call)}
+            anvandningar = [n for n in ast.walk(fn) if isinstance(n, ast.Attribute) and n.attr in NAMN and id(n) not in awaitade
+                            and isinstance(n.ctx, ast.Load)]
+            # `self._run_turn_end` named inside `if self.on_user_turn_end is not None:` is a test, not a queue site
+            testar = {id(c.left) for c in ast.walk(fn) if isinstance(c, ast.Compare)}
+            anvandningar = [n for n in anvandningar if id(n) not in testar]
+            for n in anvandningar:
+                hittade += 1
+                faster = [c.lineno for c in ast.walk(fn) if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
+                          and c.func.attr == "fasta_tur" and isinstance(c.func.value, ast.Name) and c.func.value.id == "bana0"]
+                assert any(l < n.lineno for l in faster), f"{fil}:{n.lineno} uses the turn end without an earlier bana0.fasta_tur(...)"
+    assert hittade >= 3, hittade

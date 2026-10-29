@@ -1913,9 +1913,10 @@ class WebSocketHandler:
                         task.cancel()
                 return await bana0.transkribera(pcm, host, port, t)
 
-            async def _stt_noterad(pcm, t):
+            async def _stt_noterad(pcm, t, tur):
                 text = await _stt(pcm, t)
-                connection.bana0_heard = "" if bana0.brus(text) else (text or "")
+                heard = "" if bana0.brus(text) else (text or "")
+                bana0.skriv_hort(connection, tur, heard)
                 return text
 
             tider = TurnTider(client_id)
@@ -1939,6 +1940,9 @@ class WebSocketHandler:
                 await openai_service.ping_and_answer(bana0.ping_text(hort, svar))
 
             async def _on_user_turn_end():
+                min_tur = bana0.TUR_SLUT.get()   # US-256: the id fixed in the event that ended the turn
+                if min_tur is None:   # an engine that runs this directly, not as a queued task
+                    min_tur = connection.tur_nr
                 serializer.tysta_slut()  # the next reply is wanted again (US-060)
                 pcm = serializer.take_turn_audio()
                 tur_ljud.spara(pcm, getattr(connection, "device_id", None) or "enhet")
@@ -1984,7 +1988,7 @@ class WebSocketHandler:
 
                 bana = await bana0.tur(
                     pcm,
-                    stt=_stt_noterad,
+                    stt=lambda pcm, t: _stt_noterad(pcm, t, min_tur),
                     timeout_stt=timeout_stt,
                     timeout_comms=timeout_comms,
                     skicka_svar_till_modellen=lambda text: bana0_hit(provider, openai_service, text),
@@ -2028,6 +2032,7 @@ class WebSocketHandler:
 
             def _tur_borjar():
                 _spec_rensa()
+                connection.tur_nr += 1
                 connection.bana0_heard = ""  # the guard must not judge this turn's tools by the last turn's text (G on US-098)
                 avbryt = getattr(connection, "avbryt_core", None)
                 if avbryt is not None:
