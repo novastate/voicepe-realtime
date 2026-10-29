@@ -2028,6 +2028,7 @@ class WebSocketHandler:
 
             def _tur_borjar():
                 _spec_rensa()
+                connection.bana0_heard = ""  # the guard must not judge this turn's tools by the last turn's text (G on US-098)
                 avbryt = getattr(connection, "avbryt_core", None)
                 if avbryt is not None:
                     avbryt()  # he starts to speak: a Core answer still being spoken stops
