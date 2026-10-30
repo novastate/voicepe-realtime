@@ -1056,6 +1056,8 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         too, so it answers personally without repeating the tool call and can correct a misheard order."""
         if not getattr(self, "_held", None):
             return
+        if await _vanta_kedjan(self) is None:   # the ping is part of the turn: it waits behind the earlier chain too
+            return
         if not await self._vaken_for_tur():
             await self.drop_turn()  # the audio is lost either way: do not let the miss path send it without the line
             return

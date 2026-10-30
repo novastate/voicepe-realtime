@@ -192,3 +192,17 @@ async def test_resultatet_flyttar_klockan_aven_for_en_tur_som_kommer_efter():
     assert not task.done()                               # held: the model gets time for the next step
     service._answer_after_tool = False
     await asyncio.wait_for(task, 2)
+
+
+@pytest.mark.asyncio
+async def test_pingtexten_vantar_ocksa():
+    service, sent = _bygg()
+    service._answer_after_tool = True
+    service._kedja_t = time.monotonic()
+    _hall(service)
+    task = asyncio.create_task(service.ping_and_answer("bana 0 gjorde: tände kontoret"))
+    await asyncio.sleep(0.3)
+    assert sent == [] and not task.done()
+    service._answer_after_tool = False
+    await asyncio.wait_for(task, 2)
+    assert sent
