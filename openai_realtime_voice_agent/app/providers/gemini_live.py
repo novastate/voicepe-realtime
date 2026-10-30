@@ -231,6 +231,30 @@ def _build_vad_params(options) -> GeminiVADParams:
     )
 
 
+# US-263: an order is a chain of tool steps (read the skill, find the lamp, switch it: ~10 s). A new turn that
+# reaches the model in the middle of it takes the model off the order, which is then never carried out (Kontor
+# 2026-10-30: "Tänd fönsterlampan i kontoret." + "Är det tänt i kontoret?" 2.2 s later). The new turn waits until
+# the model has begun to answer, or the chain has been quiet for KEDJA_LUCKA_S, or KEDJA_TAK_S have passed.
+KEDJA_LUCKA_S = 6.0
+KEDJA_TAK_S = 15.0
+
+
+async def _vanta_kedjan(svc) -> None:
+    kedja_t = getattr(svc, "_kedja_t", None)
+    if not getattr(svc, "_answer_after_tool", False) or kedja_t is None:
+        return
+    start = time.monotonic()
+    while getattr(svc, "_answer_after_tool", False):
+        nu = time.monotonic()
+        igang = bool(getattr(svc, "_unanswered_tools", None))   # a tool is running: the chain is not quiet
+        if (not igang and nu - kedja_t > KEDJA_LUCKA_S) or nu - start > KEDJA_TAK_S:
+            break
+        await asyncio.sleep(0.1)
+    waited = time.monotonic() - start
+    if waited >= 0.2:
+        logger.info(f"⏳ the next turn waited {waited:.1f} s for the earlier tool chain (US-263)")
+
+
 def _held_stats(frames) -> tuple[int, float]:
     n = len(frames or [])
     s = sum(len(f.audio) / (2 * (f.sample_rate or 16000)) for f in (frames or []))
@@ -311,6 +335,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
     # the lost-turn clock, flushed the follow-up request before the answer
     # was spoken and let PhaseEmitter go idle after a spoken preamble.
     _answer_after_tool = False
+    _kedja_t: Optional[float] = None
 
     _transkr_start: str = ""
     _transkr_kollad: bool = False
@@ -370,6 +395,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
     async def _handle_msg_tool_call(self, message) -> None:
         self._stopp_tystnad_slut()   # a tool call after a cut is the engine acting on the NEW turn (G on #95)
         self._answer_after_tool = True
+        self._kedja_t = time.monotonic()
         self._turn_rescue = None  # a tool may have acted already: the turn is no longer safe to replay
         await super()._handle_msg_tool_call(message)
 
@@ -937,6 +963,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
     _held_turn_seq = 0
     _held_turn_id = None
 
+
     def _decide_turn(self) -> None:
         """Run bana 0's decision once per held turn, off the audio path."""
         if self._turn_end_task is None or self._turn_end_task.done():
@@ -978,6 +1005,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
 
     async def answer_turn(self) -> None:
         """Bana 0 missed: give Google the held turn and let the model answer."""
+        await _vanta_kedjan(self)
         held, turn_id = _held_take(self)
         if not held:
             return
@@ -1030,6 +1058,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         Live 2026-10-09: Gemini heard 'Kan du ta den på toalettet kanske?' where the
         local STT, on the same audio, got 'Kan du tända kontoret kanske?'. The reply
         is still audio; only the model's ears change."""
+        await _vanta_kedjan(self)
         held, turn_id = _held_take(self)
         if not held:
             logger.warning("⚠️ bana0: the locally heard text had no held turn to answer; nothing was sent")

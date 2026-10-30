@@ -4,6 +4,9 @@ All notable changes to this add-on. Newest first.
 
 ## Unreleased (fork)
 
+### 0.29.30
+- **US-263 (Kontorprov 2026-10-30):** en tur som kommer medan förra turens verktygskedja pågår (order: läs skill, hitta lampan, styr, ~10 s) skickas inte till modellen förrän modellen börjat svara, kedjan varit tyst i 6 s eller 15 s gått. Före: "Tänd fönsterlampan i kontoret." följd av "Är det tänt i kontoret?" 2,2 s senare tappade ordern, frågan tog över mitt i kedjan. Prov: `tests/test_us263_kedja.py` (fyra av fem röda utan rättningen). Gäller Gemini; OpenAI Live har egen turhantering och är orörd.
+
 ### 0.29.29
 - **US-256 (raawr INKAST #1514, G på #133):** varje tur har ett id (`connection.tur_nr`). Bana 0:s text sparas per tur, och ett sent STT-svar för en gammal tur skrivs aldrig in som nästa turs mening. Ett verktygsanrop får sin tur när det tas emot och döms på just den turens text. Prov: `tests/test_fraga_inte_order.py` (US-256), rött utan rättningen. Saknas den egna textens turs text är reserven tom, aldrig nästa turs mening (A:s och B:s N1). Turens id fastläses i sluthändelsen innan sluthändelse-uppgiften köas (Codex P1; en kontextvariabel kopieras när uppgiften skapas), så en ny turs start kan inte ge den avslutade turen nästa id.
 
