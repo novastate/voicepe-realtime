@@ -259,7 +259,7 @@ async def _vanta_kedjan_inre(svc, raddning: bool) -> Optional[float]:
         kedja_t = svc._kedja_t   # every new tool step of the chain moves it
         held = getattr(svc, "_held", None)
         if held and raddning:   # a link that drops while the turn waits hands it to the next connection (take_rescue)
-            svc._vantande_tur = list(held)   # its own slot: the earlier answer's sound and tool steps clear _turn_rescue
+            svc._vantande_tur = (tur, list(held))   # its own slot: the earlier answer's sound and tool steps clear _turn_rescue
         igang = bool(getattr(svc, "_unanswered_tools", None))   # a tool is running: the chain is not quiet
         if igang:
             svc._kedja_t = kedja_t = nu   # the quiet is counted from the tool's result, not from its call
@@ -356,7 +356,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
     _answer_after_tool = False
     _kedja_t: Optional[float] = None
     _kedja_vantad = False
-    _vantande_tur: Optional[list] = None
+    _vantande_tur: Optional[tuple] = None
 
     _transkr_start: str = ""
     _transkr_kollad: bool = False
@@ -1058,8 +1058,9 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
     def take_rescue(self) -> Optional[list]:
         """The frames of a turn the model never began to answer, once; None if there is none or it is stale."""
         rescue, self._turn_rescue = self._turn_rescue, None
-        if rescue is None and getattr(self, "_vantande_tur", None) and getattr(self, "_held", None):
-            return self._vantande_tur   # a turn still waiting behind the earlier chain
+        vantande = getattr(self, "_vantande_tur", None)
+        if rescue is None and vantande and getattr(self, "_held", None) and vantande[0] == self._held_turn_id:
+            return vantande[1]   # the very turn still waiting behind the earlier chain (not a newer one)
         if rescue is None or time.monotonic() - rescue[1] > self.TURN_RESCUE_MAX_AGE_S:
             return None
         return rescue[0]

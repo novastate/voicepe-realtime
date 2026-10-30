@@ -261,3 +261,18 @@ async def test_en_kastad_vantande_tur_raddas_inte():
     assert service.take_rescue() is None     # a dropped command is never replayed on the next link
     service._answer_after_tool = False
     await asyncio.wait_for(task, 2)
+
+
+@pytest.mark.asyncio
+async def test_en_nyare_tur_far_inte_den_kastades_raddning():
+    service, sent = _bygg()
+    service._answer_after_tool = True
+    service._kedja_t = time.monotonic()
+    _hall(service)
+    task = asyncio.create_task(service.answer_turn())
+    await asyncio.sleep(0.3)
+    await service.drop_turn()
+    _hall(service)                           # C starts before the waiter has noticed
+    assert service.take_rescue() is None     # B's command is not replayed under C's id
+    service._answer_after_tool = False
+    await asyncio.wait_for(task, 2)
