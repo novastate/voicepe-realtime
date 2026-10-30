@@ -206,3 +206,16 @@ async def test_pingtexten_vantar_ocksa():
     service._answer_after_tool = False
     await asyncio.wait_for(task, 2)
     assert sent
+
+
+@pytest.mark.asyncio
+async def test_en_pingtur_som_vantar_ar_aldrig_raddningsbar():
+    service, sent = _bygg()
+    service._answer_after_tool = True
+    service._kedja_t = time.monotonic()
+    _hall(service)
+    task = asyncio.create_task(service.ping_and_answer("bana 0 gjorde något"))
+    await asyncio.sleep(0.3)
+    assert service.take_rescue() is None     # bana 0 acted: a replay without the ping could repeat it
+    service._answer_after_tool = False
+    await asyncio.wait_for(task, 2)

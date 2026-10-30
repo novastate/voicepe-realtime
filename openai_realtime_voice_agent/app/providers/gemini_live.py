@@ -239,7 +239,7 @@ KEDJA_LUCKA_S = 10.0   # Kontor 2026-10-30: 7.1 s between two steps of one order
 KEDJA_TAK_S = 20.0
 
 
-async def _vanta_kedjan(svc) -> Optional[float]:
+async def _vanta_kedjan(svc, raddning: bool = True) -> Optional[float]:
     """Seconds waited (0.0 = no chain open); None when the waiting turn was thrown away or taken meanwhile."""
     if not getattr(svc, "_answer_after_tool", False) or getattr(svc, "_kedja_t", None) is None:
         return 0.0
@@ -251,7 +251,7 @@ async def _vanta_kedjan(svc) -> Optional[float]:
             return None   # drop_turn / another path took it; a newer turn is not ours to send
         kedja_t = svc._kedja_t   # every new tool step of the chain moves it
         held = getattr(svc, "_held", None)
-        if held:   # a link that drops while the turn waits hands it to the next connection (take_rescue)
+        if held and raddning:   # a link that drops while the turn waits hands it to the next connection (take_rescue)
             svc._turn_rescue = (list(held), nu)
         igang = bool(getattr(svc, "_unanswered_tools", None))   # a tool is running: the chain is not quiet
         if igang:
@@ -1056,7 +1056,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         too, so it answers personally without repeating the tool call and can correct a misheard order."""
         if not getattr(self, "_held", None):
             return
-        if await _vanta_kedjan(self) is None:   # the ping is part of the turn: it waits behind the earlier chain too
+        if await _vanta_kedjan(self, raddning=False) is None:   # bana 0 has acted already: a replay without the ping could do it twice. The ping is part of the turn: it waits behind the earlier chain too
             return
         if not await self._vaken_for_tur():
             await self.drop_turn()  # the audio is lost either way: do not let the miss path send it without the line
