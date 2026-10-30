@@ -155,3 +155,20 @@ async def test_sju_sekunders_lucka_mitt_i_en_order_slapper_inte_turen():
     service._answer_after_tool = False
     await asyncio.wait_for(task, 2)
     assert sent
+
+
+@pytest.mark.asyncio
+async def test_tystnaden_raknas_fran_verktygets_resultat(monkeypatch):
+    service, sent = _bygg()
+    monkeypatch.setattr(gl, "KEDJA_LUCKA_S", 0.5)
+    service._answer_after_tool = True
+    service._kedja_t = time.monotonic() - 12            # the call came 12 s ago; the tool is still running
+    service._unanswered_tools = {"call_1"}
+    _hall(service)
+    task = asyncio.create_task(service.answer_turn())
+    await asyncio.sleep(0.3)
+    service._unanswered_tools = set()                   # the result arrives
+    await asyncio.sleep(0.25)
+    assert sent == [] and not task.done()               # the model gets its time for the next step
+    await asyncio.wait_for(task, 2)
+    assert sent

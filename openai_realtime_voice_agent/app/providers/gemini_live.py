@@ -254,6 +254,8 @@ async def _vanta_kedjan(svc) -> Optional[float]:
         if held:   # a link that drops while the turn waits hands it to the next connection (take_rescue)
             svc._turn_rescue = (list(held), nu)
         igang = bool(getattr(svc, "_unanswered_tools", None))   # a tool is running: the chain is not quiet
+        if igang:
+            svc._kedja_t = kedja_t = nu   # the quiet is counted from the tool's result, not from its call
         if (not igang and nu - kedja_t > KEDJA_LUCKA_S) or nu - start > KEDJA_TAK_S:
             break
         await asyncio.sleep(0.1)
