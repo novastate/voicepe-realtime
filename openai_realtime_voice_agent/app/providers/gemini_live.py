@@ -235,16 +235,20 @@ def _build_vad_params(options) -> GeminiVADParams:
 # reaches the model in the middle of it takes the model off the order, which is then never carried out (Kontor
 # 2026-10-30: "Tänd fönsterlampan i kontoret." + "Är det tänt i kontoret?" 2.2 s later). The new turn waits until
 # the model has begun to answer, or the chain has been quiet for KEDJA_LUCKA_S, or KEDJA_TAK_S have passed.
-KEDJA_LUCKA_S = 6.0
-KEDJA_TAK_S = 15.0
+KEDJA_LUCKA_S = 10.0   # Kontor 2026-10-30: 7.1 s between two steps of one order
+KEDJA_TAK_S = 20.0
 
 
-async def _vanta_kedjan(svc) -> None:
+async def _vanta_kedjan(svc) -> Optional[float]:
+    """Seconds waited (0.0 = no chain open); None when the waiting turn was thrown away or taken meanwhile."""
     if not getattr(svc, "_answer_after_tool", False) or getattr(svc, "_kedja_t", None) is None:
-        return
+        return 0.0
     start = time.monotonic()
+    tur = getattr(svc, "_held_turn_id", None)
     while getattr(svc, "_answer_after_tool", False):
         nu = time.monotonic()
+        if getattr(svc, "_held_turn_id", None) != tur or not getattr(svc, "_held", None):
+            return None   # drop_turn / another path took it; a newer turn is not ours to send
         kedja_t = svc._kedja_t   # every new tool step of the chain moves it
         held = getattr(svc, "_held", None)
         if held:   # a link that drops while the turn waits hands it to the next connection (take_rescue)
@@ -253,9 +257,12 @@ async def _vanta_kedjan(svc) -> None:
         if (not igang and nu - kedja_t > KEDJA_LUCKA_S) or nu - start > KEDJA_TAK_S:
             break
         await asyncio.sleep(0.1)
+    if getattr(svc, "_held_turn_id", None) != tur or not getattr(svc, "_held", None):
+        return None
     waited = time.monotonic() - start
     if waited >= 0.2:
         logger.info(f"⏳ the next turn waited {waited:.1f} s for the earlier tool chain (US-263)")
+    return waited
 
 
 def _held_stats(frames) -> tuple[int, float]:
@@ -1008,7 +1015,8 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
 
     async def answer_turn(self) -> None:
         """Bana 0 missed: give Google the held turn and let the model answer."""
-        await _vanta_kedjan(self)
+        if await _vanta_kedjan(self) is None:
+            return
         held, turn_id = _held_take(self)
         if not held:
             return
@@ -1061,7 +1069,9 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         Live 2026-10-09: Gemini heard 'Kan du ta den på toalettet kanske?' where the
         local STT, on the same audio, got 'Kan du tända kontoret kanske?'. The reply
         is still audio; only the model's ears change."""
-        await _vanta_kedjan(self)
+        waited = await _vanta_kedjan(self)
+        if waited is None:
+            return
         held, turn_id = _held_take(self)
         if not held:
             logger.warning("⚠️ bana0: the locally heard text had no held turn to answer; nothing was sent")
@@ -1073,6 +1083,8 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         # Variant B (2026-10-09 10:30): text on its own, no activity signals. Variant A
         # (activityStart, text, activityEnd) made Google close the socket: 1007 'Precondition
         # check failed'.
+        if waited:   # it waited behind a tool chain: a link that drops before the answer replays the turn as audio
+            self._turn_rescue = (list(held), time.monotonic())
         await self._send_activity(text=text)
         self._reply_awaited_at = time.monotonic()
         self.arm_silence_ack()

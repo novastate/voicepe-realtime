@@ -110,3 +110,48 @@ async def test_den_vantande_turen_kan_raddas_om_lanken_bryts():
     assert service.take_rescue()             # the next connection gets the waiting turn
     service._answer_after_tool = False
     await asyncio.wait_for(task, 2)
+
+
+@pytest.mark.asyncio
+async def test_en_kastad_tur_skickas_aldrig_av_den_gamla_vantaren():
+    service, sent = _bygg()
+    service._answer_after_tool = True
+    service._kedja_t = time.monotonic()
+    _hall(service)
+    task = asyncio.create_task(service.answer_turn_text("text B"))
+    await asyncio.sleep(0.3)
+    await service.drop_turn()                # B thrown away while it waits
+    _hall(service)                           # C starts
+    service._answer_after_tool = False
+    await asyncio.wait_for(task, 2)
+    assert sent == [] and service._held      # B sent nothing, and C is still held for its own sender
+
+
+@pytest.mark.asyncio
+async def test_texttur_efter_vantan_kan_raddas():
+    service, sent = _bygg()
+    service._answer_after_tool = True
+    service._kedja_t = time.monotonic()
+    _hall(service)
+    task = asyncio.create_task(service.answer_turn_text("Är det tänt?"))
+    await asyncio.sleep(0.3)
+    service._answer_after_tool = False
+    service._turn_rescue = None              # the earlier answer's first sound cleared it
+    await asyncio.wait_for(task, 2)
+    assert sent and service.take_rescue()
+
+
+@pytest.mark.asyncio
+async def test_sju_sekunders_lucka_mitt_i_en_order_slapper_inte_turen():
+    """Kontor 2026-10-30: hitta_givare 13:35:31.6 -> styr 13:35:38.7 are two steps of one order."""
+    service, sent = _bygg()
+    service._answer_after_tool = True
+    service._kedja_t = time.monotonic() - 7.1        # the last step is 7.1 s old
+    _hall(service)
+    task = asyncio.create_task(service.answer_turn())
+    await asyncio.sleep(0.4)
+    assert sent == [] and not task.done()
+    service._kedja_t = time.monotonic()
+    service._answer_after_tool = False
+    await asyncio.wait_for(task, 2)
+    assert sent
