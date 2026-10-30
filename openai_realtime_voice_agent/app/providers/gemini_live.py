@@ -1058,7 +1058,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
     def take_rescue(self) -> Optional[list]:
         """The frames of a turn the model never began to answer, once; None if there is none or it is stale."""
         rescue, self._turn_rescue = self._turn_rescue, None
-        if rescue is None and getattr(self, "_vantande_tur", None):
+        if rescue is None and getattr(self, "_vantande_tur", None) and getattr(self, "_held", None):
             return self._vantande_tur   # a turn still waiting behind the earlier chain
         if rescue is None or time.monotonic() - rescue[1] > self.TURN_RESCUE_MAX_AGE_S:
             return None
