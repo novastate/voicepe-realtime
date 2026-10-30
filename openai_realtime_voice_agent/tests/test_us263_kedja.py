@@ -233,3 +233,17 @@ async def test_pingen_far_aldrig_en_andra_vantan_med_raddning(monkeypatch):
     await asyncio.sleep(0.6)
     assert task.done() and sent
     assert service.take_rescue() is None               # no second wait ever stored the turn
+
+
+@pytest.mark.asyncio
+async def test_den_vantande_turen_overlever_att_forra_svaret_rensar_raddningen():
+    service, sent = _bygg()
+    service._answer_after_tool = True
+    service._kedja_t = time.monotonic()
+    _hall(service)
+    task = asyncio.create_task(service.answer_turn())
+    await asyncio.sleep(0.3)
+    service._turn_rescue = None              # the earlier answer's first sound / next tool step clears the slot
+    assert service.take_rescue()             # the waiting turn is still handed on
+    service._answer_after_tool = False
+    await asyncio.wait_for(task, 2)

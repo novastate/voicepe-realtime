@@ -240,6 +240,13 @@ KEDJA_TAK_S = 20.0
 
 
 async def _vanta_kedjan(svc, raddning: bool = True) -> Optional[float]:
+    try:
+        return await _vanta_kedjan_inre(svc, raddning)
+    finally:
+        svc._vantande_tur = None
+
+
+async def _vanta_kedjan_inre(svc, raddning: bool) -> Optional[float]:
     """Seconds waited (0.0 = no chain open); None when the waiting turn was thrown away or taken meanwhile."""
     if not getattr(svc, "_answer_after_tool", False) or getattr(svc, "_kedja_t", None) is None:
         return 0.0
@@ -252,7 +259,7 @@ async def _vanta_kedjan(svc, raddning: bool = True) -> Optional[float]:
         kedja_t = svc._kedja_t   # every new tool step of the chain moves it
         held = getattr(svc, "_held", None)
         if held and raddning:   # a link that drops while the turn waits hands it to the next connection (take_rescue)
-            svc._turn_rescue = (list(held), nu)
+            svc._vantande_tur = list(held)   # its own slot: the earlier answer's sound and tool steps clear _turn_rescue
         igang = bool(getattr(svc, "_unanswered_tools", None))   # a tool is running: the chain is not quiet
         if igang:
             svc._kedja_t = kedja_t = nu   # the quiet is counted from the tool's result, not from its call
@@ -349,6 +356,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
     _answer_after_tool = False
     _kedja_t: Optional[float] = None
     _kedja_vantad = False
+    _vantande_tur: Optional[list] = None
 
     _transkr_start: str = ""
     _transkr_kollad: bool = False
@@ -1050,6 +1058,8 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
     def take_rescue(self) -> Optional[list]:
         """The frames of a turn the model never began to answer, once; None if there is none or it is stale."""
         rescue, self._turn_rescue = self._turn_rescue, None
+        if rescue is None and getattr(self, "_vantande_tur", None):
+            return self._vantande_tur   # a turn still waiting behind the earlier chain
         if rescue is None or time.monotonic() - rescue[1] > self.TURN_RESCUE_MAX_AGE_S:
             return None
         return rescue[0]
