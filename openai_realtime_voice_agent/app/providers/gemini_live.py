@@ -1354,6 +1354,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             await self._handle_send_error(error)
         else:
             getattr(self, "_unanswered_tools", set()).discard(tool_call_id)
+            self._kedja_t = time.monotonic()   # US-263: the chain's quiet is counted from the result
 
     def _check_and_reset_failure_counter(self):
         # A quiet socket with an unanswered tool is still a busy conversation.

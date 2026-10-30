@@ -172,3 +172,23 @@ async def test_tystnaden_raknas_fran_verktygets_resultat(monkeypatch):
     assert sent == [] and not task.done()               # the model gets its time for the next step
     await asyncio.wait_for(task, 2)
     assert sent
+
+
+@pytest.mark.asyncio
+async def test_resultatet_flyttar_klockan_aven_for_en_tur_som_kommer_efter():
+    service, sent = _bygg()
+    service._answer_after_tool = True
+    service._kedja_t = time.monotonic() - 12            # call made 12 s ago
+    service._unanswered_tools = {"call_1"}
+
+    async def svar(**kw):
+        pass
+    service._session.send_tool_response = svar
+    await service._tool_result("call_1", "styr", {"ok": True})   # the result is sent now
+    assert time.monotonic() - service._kedja_t < 0.5
+    _hall(service)
+    task = asyncio.create_task(service.answer_turn())
+    await asyncio.sleep(0.3)
+    assert not task.done()                               # held: the model gets time for the next step
+    service._answer_after_tool = False
+    await asyncio.wait_for(task, 2)
