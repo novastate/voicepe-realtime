@@ -219,3 +219,17 @@ async def test_en_pingtur_som_vantar_ar_aldrig_raddningsbar():
     assert service.take_rescue() is None     # bana 0 acted: a replay without the ping could repeat it
     service._answer_after_tool = False
     await asyncio.wait_for(task, 2)
+
+
+@pytest.mark.asyncio
+async def test_pingen_far_aldrig_en_andra_vantan_med_raddning(monkeypatch):
+    service, sent = _bygg()
+    monkeypatch.setattr(gl, "KEDJA_TAK_S", 0.3)
+    service._answer_after_tool = True
+    service._kedja_t = time.monotonic()
+    service._unanswered_tools = {"call_1"}            # the chain never ends: the cap releases the ping
+    _hall(service)
+    task = asyncio.create_task(service.ping_and_answer("bana 0 gjorde något"))
+    await asyncio.sleep(0.6)
+    assert task.done() and sent
+    assert service.take_rescue() is None               # no second wait ever stored the turn

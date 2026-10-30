@@ -348,6 +348,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
     # was spoken and let PhaseEmitter go idle after a spoken preamble.
     _answer_after_tool = False
     _kedja_t: Optional[float] = None
+    _kedja_vantad = False
 
     _transkr_start: str = ""
     _transkr_kollad: bool = False
@@ -1017,7 +1018,9 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
 
     async def answer_turn(self) -> None:
         """Bana 0 missed: give Google the held turn and let the model answer."""
-        if await _vanta_kedjan(self) is None:
+        if getattr(self, "_kedja_vantad", False):   # ping_and_answer has waited already: never a second wait with a rescue
+            self._kedja_vantad = False
+        elif await _vanta_kedjan(self) is None:
             return
         held, turn_id = _held_take(self)
         if not held:
@@ -1062,6 +1065,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
             await self.drop_turn()  # the audio is lost either way: do not let the miss path send it without the line
             return
         await self._send_activity(text=ping)
+        self._kedja_vantad = True
         await self.answer_turn()
         # The hit is already done: a replay of this audio after a dropped link would reach the model without
         # the line (G on #42) and could do it a second time.
