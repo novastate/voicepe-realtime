@@ -81,3 +81,32 @@ async def test_texttur_vantar_ocksa():
     service._answer_after_tool = False
     await asyncio.wait_for(task, 2)
     assert sent
+
+
+@pytest.mark.asyncio
+async def test_ett_nytt_verktygssteg_flyttar_tystnadsklockan(monkeypatch):
+    service, sent = _bygg()
+    monkeypatch.setattr(gl, "KEDJA_LUCKA_S", 0.5)
+    service._answer_after_tool = True
+    service._kedja_t = time.monotonic()
+    _hall(service)
+    task = asyncio.create_task(service.answer_turn())
+    for _ in range(4):                       # a new tool step every 0.3 s: never quiet for 0.5 s
+        await asyncio.sleep(0.3)
+        service._kedja_t = time.monotonic()
+    assert sent == [] and not task.done()
+    await asyncio.wait_for(task, 2)          # quiet from now on: it goes
+    assert sent
+
+
+@pytest.mark.asyncio
+async def test_den_vantande_turen_kan_raddas_om_lanken_bryts():
+    service, sent = _bygg()
+    service._answer_after_tool = True
+    service._kedja_t = time.monotonic()
+    _hall(service)
+    task = asyncio.create_task(service.answer_turn())
+    await asyncio.sleep(0.3)
+    assert service.take_rescue()             # the next connection gets the waiting turn
+    service._answer_after_tool = False
+    await asyncio.wait_for(task, 2)

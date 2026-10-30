@@ -240,12 +240,15 @@ KEDJA_TAK_S = 15.0
 
 
 async def _vanta_kedjan(svc) -> None:
-    kedja_t = getattr(svc, "_kedja_t", None)
-    if not getattr(svc, "_answer_after_tool", False) or kedja_t is None:
+    if not getattr(svc, "_answer_after_tool", False) or getattr(svc, "_kedja_t", None) is None:
         return
     start = time.monotonic()
     while getattr(svc, "_answer_after_tool", False):
         nu = time.monotonic()
+        kedja_t = svc._kedja_t   # every new tool step of the chain moves it
+        held = getattr(svc, "_held", None)
+        if held:   # a link that drops while the turn waits hands it to the next connection (take_rescue)
+            svc._turn_rescue = (list(held), nu)
         igang = bool(getattr(svc, "_unanswered_tools", None))   # a tool is running: the chain is not quiet
         if (not igang and nu - kedja_t > KEDJA_LUCKA_S) or nu - start > KEDJA_TAK_S:
             break
