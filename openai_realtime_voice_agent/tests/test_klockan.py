@@ -584,7 +584,8 @@ async def test_nedmonteringen_sparar_den_obesvarade_turen_for_nasta_anslutning()
     tjanst = SimpleNamespace(sover=True, take_rescue=lambda: [b"a"])
     conn = SimpleNamespace(device_id="koket", openai_service=tjanst, task=None, ha_tools_task=None, recovery=None,
                            phase_emitter=None, maskin=None, pipeline=None, runner=None)
-    hw = SimpleNamespace(_raddade={})
+    hw = SimpleNamespace(_raddade={}, RADDAD_TUR_MAX_ALDER_S=20.0)
+    hw._stada_raddade = lambda: WebSocketHandler._stada_raddade(hw)
     await WebSocketHandler._teardown(hw, conn)
     assert hw._raddade["koket"][0] == [b"a"]
 
