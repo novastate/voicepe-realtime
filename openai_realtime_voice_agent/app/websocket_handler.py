@@ -2618,6 +2618,15 @@ class WebSocketHandler:
 
     RADDAD_TUR_MAX_ALDER_S = 20.0
 
+    def _stada_raddade(self) -> None:
+        """Drop kept turns older than the rescue limit, whichever device they belong to.
+
+        The age check in _lamna_raddad_tur only runs when the same device reconnects; a device that
+        never comes back would otherwise keep its audio in memory for good."""
+        nu = time.monotonic()
+        for did in [d for d, (_f, t0) in self._raddade.items() if nu - t0 > self.RADDAD_TUR_MAX_ALDER_S]:
+            self._raddade.pop(did, None)
+
     async def _lamna_raddad_tur(self, connection: DeviceConnection) -> None:
         """A turn the previous connection never began to answer goes to this one's engine.
 
@@ -2679,6 +2688,7 @@ class WebSocketHandler:
         take = getattr(connection.openai_service, "take_rescue", None)
         frames = take() if take is not None else None
         if frames:
+            self._stada_raddade()
             self._raddade[connection.device_id] = (frames, time.monotonic())
             logger.info(f"♻️ {connection.device_id}: link lost mid-turn, the unanswered turn is kept for the next connection")
         recovery = connection.recovery

@@ -1388,24 +1388,27 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         self._answer_after_tool = False
         if self.svar is not None:
             self.svar.klar()
-        if self._expired_resume(error) and not self._disconnecting:
-            await self._fresh_session()
-            return False  # the replacement reader already owns the new connection
-        lifetime = None
-        if self._connection_start_time:
-            lifetime = time.time() - self._connection_start_time
         # A turn was in flight: he is speaking (activity open) or waiting for
         # the answer to one. Google takes it down with the socket -- the new
         # session never saw it -- so say so instead of leaving him in silence.
+        # Decided before the expired-resume shortcut: a fresh session loses the
+        # turn just the same.
         awaited = self._reply_awaited_at
         lost = self._activity_open or (
             awaited is not None and time.monotonic() - awaited < TURN_LOST_WINDOW_S
         )
         self._reply_awaited_at = None
+        expired = self._expired_resume(error) and not self._disconnecting
         if lost:
             logger.warning(f"💔 Gemini dropped the socket mid-turn ({error}) — telling him")
             if self.on_turn_lost is not None:
                 asyncio.get_running_loop().create_task(self.on_turn_lost())
+        if expired:
+            await self._fresh_session()
+            return False  # the replacement reader already owns the new connection
+        lifetime = None
+        if self._connection_start_time:
+            lifetime = time.time() - self._connection_start_time
         # Runs pipecat's own stable-connection rule, which the receive loop
         # can only reach while the server is talking to us.
         self._check_and_reset_failure_counter()

@@ -325,4 +325,4 @@ const server = createServer((req, res) => {
     res.end(JSON.stringify({ answer }));
   });
 });
-server.listen(PORT, "0.0.0.0", () => console.log(`[bridge] listening on :${PORT}${ASK_PATH}`));
+server.listen(PORT, "0.0.0.0", () => console.log(`[bridge] listening on :${PORT} (ASK_PATH set, ${ASK_PATH.length} chars, not logged)`));
