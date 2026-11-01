@@ -3,6 +3,8 @@ import asyncio
 from pathlib import Path
 import sys
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.device_registry import (
@@ -36,13 +38,13 @@ class FakeWS:
 
 async def main():
     # --- identity ---------------------------------------------------------
-    assert device_id_from_websocket(FakeWS("device_id=kitchen", "10.0.3.9")) == "kitchen"
+    assert device_id_from_websocket(FakeWS("device_id=kitchen", "127.0.0.1")) == "kitchen"
     assert device_id_from_websocket(FakeWS("", "10.0.3.9")) == "10.0.3.9"
     assert device_id_from_websocket(FakeWS("", None)) == "unknown"
     # injection / overlong ids are reduced, not trusted
     assert sanitize_device_id('kit chen"; drop') == "kitchen drop".replace(" ", "")
     assert len(sanitize_device_id("x" * 500)) == 64
-    print("identity      -> query param wins, IP fallback, hostile ids sanitized")
+    print("identity      -> loopback query wins, IP fallback, hostile ids sanitized")
 
     # --- targeting --------------------------------------------------------
     reg = DeviceRegistry()
@@ -121,3 +123,20 @@ async def main():
 
 
 asyncio.run(main())
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "::1", "::ffff:127.0.0.1"])
+def test_loopback_identity(host):
+    assert device_id_from_websocket(FakeWS("device_id=kontoret", host)) == "kontoret"
+
+@pytest.mark.parametrize("host", ["10.0.3.9", "2001:db8::1", "::ffff:10.0.3.9", None, "invalid"])
+@pytest.mark.asyncio
+async def test_remote_cannot_replace_kontoret(host):
+    registry = DeviceRegistry()
+    original = DeviceConnection("kontoret", FakeWS())
+    await registry.add(original)
+    ws = FakeWS("device_id=kontoret", host)
+    identity = device_id_from_websocket(ws)
+    assert identity == device_id_from_websocket(FakeWS("", host))
+    assert await registry.add(DeviceConnection(identity, ws)) is None
+    assert registry.get("kontoret") is original

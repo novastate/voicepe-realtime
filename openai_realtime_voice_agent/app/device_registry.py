@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, Optional
 from urllib.parse import parse_qs
 
+from app.bind_host import is_loopback_host
+
 logger = logging.getLogger(__name__)
 
 # Device ids appear in logs and in tool arguments, so keep them short and
@@ -49,10 +51,8 @@ def rum_ur_enhet(device_id: str) -> str:
 def device_id_from_websocket(websocket: Any) -> str:
     """Derive a best-effort device identifier for a connection.
 
-    Prefers an explicit `?device_id=` from the connection URL, because the
-    fallback — the client IP — is not stable: it changes on DHCP renewal
-    (orphaning that device's cached conversation context) and collapses two
-    devices behind the same NAT into one identity.
+    Only loopback clients (Comms) may supply `?device_id=`. Other clients
+    use their IP so they cannot replace a named room's connection.
 
     Args:
         websocket: The FastAPI/starlette WebSocket.
@@ -60,10 +60,12 @@ def device_id_from_websocket(websocket: Any) -> str:
     Returns:
         A non-empty device id.
     """
-    # Query string first: the firmware can set it in its WebSocket path.
+    client = getattr(websocket, "client", None)
+    host = getattr(client, "host", None) if client else None
+    # Trust room routing only from the local Comms door.
     try:
         query = websocket.url.query if getattr(websocket, "url", None) else ""
-        if query:
+        if query and is_loopback_host(host):
             values = parse_qs(query).get("device_id") or []
             if values:
                 explicit = sanitize_device_id(values[0])
@@ -72,8 +74,6 @@ def device_id_from_websocket(websocket: Any) -> str:
     except Exception as e:  # pragma: no cover - defensive, never fatal
         logger.debug(f"could not read device_id from query string: {e!r}")
 
-    client = getattr(websocket, "client", None)
-    host = getattr(client, "host", None) if client else None
     if host:
         return sanitize_device_id(host) or "unknown"
 

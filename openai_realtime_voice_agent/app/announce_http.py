@@ -7,9 +7,9 @@ device's TTS announcement lane (the same guarded path timers use, so the
 assistant can't hear itself and reply).
 
 Enabled only when BOTH announce_port and announce_token options are set.
-Auth is a bearer token; binding is on the host network (0.0.0.0, or
-ANNOUNCE_HOST=127.0.0.1 behind a reverse proxy), so treat the token as the
-only lock and keep it long. 503 when no device is connected — the
+Auth is a bearer token; binding defaults to 127.0.0.1 behind Comms.
+The Home Assistant add-on explicitly binds 0.0.0.0 for LAN access, so keep
+the token long. 503 when no device is connected — the
 caller (an agent) can fall back to iMessage.
 """
 import asyncio
@@ -34,7 +34,7 @@ _announce_lock = asyncio.Lock()
 
 
 async def start_announce_server(
-    port: int, token: str, announcer, is_connected, host: str = "0.0.0.0"
+    port: int, token: str, announcer, is_connected, host: str = "127.0.0.1"
 ) -> web.AppRunner:
     async def handle(request: web.Request) -> web.Response:
         auth = request.headers.get("Authorization", "")

@@ -36,6 +36,8 @@ instance per device (a local-add-on copy with its own `slug`, `name` and
 `websocket_port`) — see the
 [Getting Started guide](https://github.com/TristanBrotherton/voicepe-realtime/blob/main/docs/getting-started.md#part-6--multiple-devices).
 
+Standalone runs now default `WEBSOCKET_HOST` and `ANNOUNCE_HOST` to `127.0.0.1` behind Comms. Explicit non-loopback binds are honoured and warn once per variable per process that Comms is no longer the only door. The Home Assistant add-on run script explicitly sets both to `0.0.0.0` for LAN access. Only loopback WebSocket clients may supply `?device_id=` (including `::1` and IPv4-mapped loopback); other clients use their IP identity.
+
 ## 2. Get an OpenAI API key
 
 1. Go to <https://platform.openai.com/> → **API keys** → **Create new secret key**.

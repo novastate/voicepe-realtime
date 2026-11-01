@@ -2,6 +2,7 @@
 import asyncio
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -14,7 +15,7 @@ class FakeURL:
 
 class FakeWebSocket:
     url = FakeURL()
-    client = None
+    client = SimpleNamespace(host="127.0.0.1")
 
     async def accept(self):
         return None
