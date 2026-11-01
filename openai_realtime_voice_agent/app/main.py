@@ -110,6 +110,7 @@ from app.websocket_handler import WebSocketHandler
 from app.speaker_context import SpeakerProbe
 from app.timers import TimerRegistry, get_timer_tool_definitions, register_timer_tools
 from app.announce_http import start_announce_server
+from app.bind_host import resolve_bind_host
 from app.openclaw_tool import (
     get_openclaw_tool_definition,
     get_recall_tool_definition,
@@ -371,7 +372,7 @@ class Application:
         # Get configuration from environment
         openai_api_key = os.environ.get("OPENAI_API_KEY")
         websocket_port = int(os.environ.get("WEBSOCKET_PORT", "8080"))
-        websocket_host = os.environ.get("WEBSOCKET_HOST", "0.0.0.0")
+        websocket_host = resolve_bind_host("WEBSOCKET_HOST")
         
         # Get turn detection settings with defaults
         vad_threshold = float(os.environ.get("VAD_THRESHOLD", "0.5"))
@@ -710,7 +711,7 @@ class Application:
         announce_port = int(os.environ.get("ANNOUNCE_PORT", "0") or 0)
         announce_token = os.environ.get("ANNOUNCE_TOKEN", "").strip()
         # 127.0.0.1 when a reverse proxy in front is the only way in (US-014).
-        announce_host = os.environ.get("ANNOUNCE_HOST", "0.0.0.0")
+        announce_host = resolve_bind_host("ANNOUNCE_HOST")
         if announce_port and announce_token:
             await start_announce_server(
                 announce_port, announce_token, self._guarded_say,

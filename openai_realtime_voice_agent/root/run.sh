@@ -128,6 +128,9 @@ export MCP_TOOL_ALLOWLIST
 export OPENCLAW_URL
 export ANNOUNCE_PORT
 export ANNOUNCE_TOKEN
+# The host-network add-on accepts LAN devices and announcements.
+export WEBSOCKET_HOST=0.0.0.0
+export ANNOUNCE_HOST=0.0.0.0
 export WEBSOCKET_PORT
 export SESSION_REUSE_TIMEOUT_SECONDS
 export MAX_CONTEXT_MESSAGES

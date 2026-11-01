@@ -82,6 +82,8 @@ Two places hold configuration:
 |---|---|---|
 | `websocket_port` | `8080` | The port Voice PE devices connect to. Must match each device's `va_url` in its firmware. One add-on instance accepts multiple devices on this port; change it only on a port clash. `8081` is used by dev builds. |
 
+Standalone runs now default `WEBSOCKET_HOST` and `ANNOUNCE_HOST` to `127.0.0.1` behind Comms. Explicit non-loopback binds are honoured and warn once per variable per process that Comms is no longer the only door. The Home Assistant add-on run script explicitly sets both to `0.0.0.0` for LAN access. Only loopback WebSocket clients may supply `?device_id=` (including `::1` and IPv4-mapped loopback); other clients use their IP identity.
+
 The add-on is intended for a trusted home LAN. A device's `device_id` routes its
 session and is not an authentication credential; do not expose `websocket_port`
 outside that network.
