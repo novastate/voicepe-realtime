@@ -130,6 +130,8 @@ async def las_ramar(chunks: AsyncIterator[bytes]) -> AsyncIterator[Tuple[str, Di
 
 
 FEL_REPLIK = "Jag fick inget svar från huset just nu."
+LANGSAM_REPLIK = "Jag kollar fortfarande, det tar en stund."  # Core is slow: said once, never silence (US-403)
+LANGSAM_EFTER_S = float(os.environ.get("CORE_LANGSAM_EFTER_S", "8") or 8)
 TAK_REPLIK = "Det finns mer, men det här fick räcka."
 
 
@@ -284,16 +286,31 @@ def strom_url() -> str:
 
 def register_fraga_core(llm, say: Callable[[str], Awaitable[None]], headers: Callable[[], Dict[str, str]],
                         timeout_s: float = 90.0, ny_svar: Optional[Callable[[], None]] = None,
-                        slut: Optional[Callable[[], Awaitable[Dict[str, Any]]]] = None) -> Callable[[], None]:
+                        slut: Optional[Callable[[], Awaitable[Dict[str, Any]]]] = None,
+                        langsam_efter_s: Optional[float] = None) -> Callable[[], None]:
     """Register `fraga_core`: it returns "checking" and speaks the streamed answer in the background.
     `ny_svar()` is called as an answer starts and `slut()` when its stream is over (it returns what the
     speech cost: `live_s`, for the daily Live cap).
     Returns `avbryt()`: stop the running answers (the owner starts to speak, or the link is gone)."""
     taken = set()
+    langsam_s = LANGSAM_EFTER_S if langsam_efter_s is None else langsam_efter_s
 
     async def kor(question: str) -> None:
         if ny_svar:
             ny_svar()
+        sagt = []
+
+        async def say_markerat(text: str) -> None:
+            sagt.append(text)
+            await say(text)
+
+        async def langsam() -> None:
+            await asyncio.sleep(langsam_s)
+            if not sagt:  # still nothing to read after the limit: say so once
+                logger.info(f"⏳ fraga_core: no sentence after {langsam_s:g} s, says that it is still checking")
+                await say(LANGSAM_REPLIK)
+
+        vakt = asyncio.get_running_loop().create_task(langsam()) if langsam_s > 0 else None
         try:
             async with httpx.AsyncClient(timeout=timeout_s) as client:
                 async with client.stream(
@@ -302,9 +319,9 @@ def register_fraga_core(llm, say: Callable[[str], Awaitable[None]], headers: Cal
                 ) as r:
                     if r.status_code != 200:
                         logger.warning(f"⚠️ fraga_core: the stream answered {r.status_code}")
-                        await say(FEL_REPLIK)
+                        await say_markerat(FEL_REPLIK)
                         return
-                    ut = await tala_strom(r.aiter_bytes(), say)
+                    ut = await tala_strom(r.aiter_bytes(), say_markerat)
             kostnad = await slut() if slut else {}
             logger.info(f"⏱ core-ström första_token={ut['forsta_token_s']} första_mening={ut['forsta_mening_s']} "
                         f"meningar={ut['meningar']} slut={ut['slut']}{' tak' if ut.get('tak') else ''}"
@@ -315,9 +332,12 @@ def register_fraga_core(llm, say: Callable[[str], Awaitable[None]], headers: Cal
         except Exception as e:
             logger.warning(f"⚠️ fraga_core failed: {type(e).__name__}")
             try:
-                await say(FEL_REPLIK)
+                await say_markerat(FEL_REPLIK)
             except Exception:
                 pass
+        finally:
+            if vakt:
+                vakt.cancel()
 
     async def _fraga(params) -> None:
         question = ((params.arguments or {}).get("question") or "").strip()
