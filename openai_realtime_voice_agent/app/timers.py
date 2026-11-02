@@ -8,12 +8,18 @@ ring is triggered by flipping that switch via the HA API (TIMER_RING_ENTITY
 option). If no entity is configured the assistant simply announces expiry is
 unavailable rather than pretending.
 
-Expiry is the bell alone, on the second — no spoken announcement, no grace.
+Expiry is the bell alone, on the second — no spoken announcement.
 
-Timers survive OpenAI session refreshes (they live here, not in the model) but
-NOT add-on restarts — acceptable for kitchen timers; documented in DOCS.
+Timers survive session refreshes and restarts using an atomic JSON store at
+/data/timers.json (override with TIMER_STORE_PATH). Restore uses absolute wall
+deadlines, ringing missed expiries up to 15 minutes late and dropping older ones.
+If storage is unavailable, timers continue in memory.
 """
 import asyncio
+import json
+import math
+from pathlib import Path
+import tempfile
 import logging
 import os
 import time
@@ -28,6 +34,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+RESTORE_GRACE_S = 900
 MAX_TIMERS = 10
 MAX_DURATION_S = 24 * 3600
 RING_AUTO_OFF_S = 120  # stop ringing after 2 min if nobody silences it
@@ -61,17 +68,85 @@ async def _set_ring(on: bool, device_id: str = "", allow_legacy: bool = True) ->
 
 
 class TimerRegistry:
-    def __init__(self):
+    def __init__(self, store_path=None):
+        self.store_path = Path(store_path if store_path is not None else os.environ.get("TIMER_STORE_PATH", "/data/timers.json"))
+        self._store_warned = False
         self._timers: Dict[int, dict] = {}
         self._next_id = 1
         # Wired by main.py. Takes the timer's device ID so an expiry rings in
         # the room where it was created.
         self.allow_legacy_ring = None
 
+    def _save(self):
+        temporary = None
+        try:
+            data = {"next_id": self._next_id, "timers": [
+                {"id": tid, **{k: t[k] for k in ("device_id", "label", "wall")}}
+                for tid, t in self._timers.items()]}
+            with tempfile.NamedTemporaryFile(mode="w", dir=self.store_path.parent,
+                                             prefix=self.store_path.name + ".", delete=False) as f:
+                temporary = f.name
+                json.dump(data, f, allow_nan=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary, self.store_path)
+        except OSError as exc:
+            if not self._store_warned:
+                logger.warning("Timer store unavailable (%s): %s; using memory", self.store_path, exc)
+                self._store_warned = True
+        finally:
+            if temporary is not None:
+                try:
+                    os.unlink(temporary)
+                except OSError:
+                    pass
+
+    def restore(self, now_wall=None):
+        """Restore timers using wall deadlines; requires a running loop."""
+        loop = asyncio.get_running_loop()
+        for t in self._timers.values():
+            t["task"].cancel()
+        self._timers.clear()
+        now = time.time() if now_wall is None else now_wall
+        try:
+            data = json.loads(self.store_path.read_text())
+            if (not isinstance(data, dict) or not isinstance(data.get("timers"), list)
+                    or type(data.get("next_id")) is not int or data["next_id"] < 1):
+                raise ValueError("invalid timer store shape")
+            ids = set()
+            for t in data["timers"]:
+                if (not isinstance(t, dict) or type(t.get("id")) is not int
+                        or t["id"] < 1 or t["id"] in ids
+                        or not isinstance(t.get("device_id"), str)
+                        or not isinstance(t.get("label"), str)
+                        or type(t.get("wall")) not in (int, float)
+                        or not math.isfinite(t["wall"])):
+                    raise ValueError("invalid stored timer")
+                ids.add(t["id"])
+        except FileNotFoundError:
+            data = {"next_id": self._next_id, "timers": []}
+        except (OSError, ValueError, TypeError, OverflowError) as exc:
+            logger.warning("Cannot restore timer store (%s): %s", self.store_path, exc)
+            data = {"next_id": self._next_id, "timers": []}
+        self._next_id = max(self._next_id, data["next_id"],
+                            max((t["id"] + 1 for t in data["timers"]), default=1))
+        for t in data["timers"]:
+            remaining = t["wall"] - now
+            if remaining < -RESTORE_GRACE_S:
+                logger.info("Dropping old expired timer %s ('%s')", t["id"], t["label"])
+                continue
+            tid = t["id"]
+            self._timers[tid] = {**t, "ends": time.monotonic() + max(0, remaining),
+                                 "task": loop.create_task(self._fire(tid))}
+        self._save()
+
     def _prune(self):
         now = time.monotonic()
-        for tid in [t for t, v in self._timers.items() if v["ends"] <= now and v["task"].done()]:
+        expired = [t for t, v in self._timers.items() if v["ends"] <= now and v["task"].done()]
+        for tid in expired:
             self._timers.pop(tid, None)
+        if expired:
+            self._save()
 
     async def _fire(self, tid: int):
         t = self._timers.get(tid)
@@ -81,6 +156,8 @@ class TimerRegistry:
             await asyncio.sleep(max(0.0, t["ends"] - time.monotonic()))
         except asyncio.CancelledError:
             return
+        self._timers.pop(tid, None)
+        self._save()
         logger.info(f"⏰ timer {tid} ('{t['label']}') expired")
         # The bell, on the second, and nothing else. There used to be a spoken
         # announcement first and a 20 s grace before the bell — so a 30 s
@@ -96,7 +173,6 @@ class TimerRegistry:
         if await _set_ring(True, t["device_id"], allow_legacy):
             await asyncio.sleep(RING_AUTO_OFF_S)
             await _set_ring(False, t["device_id"], allow_legacy)
-        self._timers.pop(tid, None)
 
     def set_timer(self, seconds: int, label: str, device_id: str = "") -> dict:
         self._prune()
@@ -112,6 +188,7 @@ class TimerRegistry:
             "wall": time.time() + seconds,
             "task": asyncio.get_running_loop().create_task(self._fire(tid)),
         }
+        self._save()
         logger.info(f"⏰ timer {tid} set: {seconds}s ('{label}')")
         try:
             import asyncio as _a
@@ -137,6 +214,7 @@ class TimerRegistry:
             return {"error": f"no timer {tid}"}
         del self._timers[int(tid)]
         t["task"].cancel()
+        self._save()
         logger.info(f"⏰ timer {tid} cancelled")
         try:
             import asyncio as _a

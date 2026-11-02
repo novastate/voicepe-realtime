@@ -705,6 +705,10 @@ class Application:
             and self.websocket_handler.resolve_device(device_id) is not None
         )
 
+        self.timer_registry.restore()
+        from .ha_sensors import PUBLISHER
+        asyncio.get_running_loop().create_task(PUBLISHER.timers(self.timer_registry))
+
         # Announce endpoint (fork): a LAN route back to the device so the
         # household's agent can speak results of long-running work. Reuses the
         # guarded announcer above; off unless both port and token are set.
