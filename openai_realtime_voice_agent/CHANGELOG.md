@@ -4,6 +4,8 @@ All notable changes to this add-on. Newest first.
 
 ## Unreleased (fork)
 
+- **US-411:** `WS_NYCKEL` (valfri): när den är satt måste enhets-websocketen presentera samma värde i huvudet `X-Raawr-WS-Nyckel`, annars stängs den med 1008 innan den accepteras (jämförs i konstant tid, loggas aldrig). Osatt = som förr. Comms måste skicka huvudet innan nyckeln sätts i drift.
+
 - **US-384:** Timers survive voice-agent restarts via an atomic store at `/data/timers.json` (override with `TIMER_STORE_PATH`). Missed expiries up to 15 minutes late ring once in their original room; older ones are dropped.
 
 - **US-357:** Standalone runs now default `WEBSOCKET_HOST` and `ANNOUNCE_HOST` to `127.0.0.1` behind Comms. Explicit non-loopback binds are honoured and warn once per variable per process that Comms is no longer the only door. The Home Assistant add-on run script explicitly sets both to `0.0.0.0` for LAN access. Only loopback WebSocket clients may supply `?device_id=` (including `::1` and IPv4-mapped loopback); other clients use their IP identity.

@@ -1713,6 +1713,7 @@ class Application:
             The configured FastAPI application.
         """
         from fastapi import FastAPI, Request, WebSocket
+        from .ws_nyckel import avvisa_utan_nyckel
         from fastapi.responses import JSONResponse
 
         web_app = FastAPI(title="Voice PE Realtime backend")
@@ -1727,6 +1728,8 @@ class Application:
         async def device_endpoint(websocket: WebSocket, path: str):
             # The previous transport accepted every path. Keep that compatibility
             # for firmware configured with a non-root WebSocket URL.
+            if await avvisa_utan_nyckel(websocket):   # US-411: WS_NYCKEL set = only Comms gets in
+                return
             await self.websocket_handler.serve_connection(
                 websocket,
                 on_client_disconnected=_on_client_disconnected,
