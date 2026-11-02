@@ -171,7 +171,9 @@ Setup: set **`timer_ring_entity`** to your device's exposed
 `switch.<device>_timer_ringing` entity. For a shared multi-device add-on, use
 **`timer_ring_entities`** with `device_id=entity_id` entries separated by commas.
 Without either setting, the assistant will say timers are unavailable. Timers survive
-the hourly session refresh but not add-on restarts.
+the hourly session refresh and add-on restarts, using `/data/timers.json`
+(override with `TIMER_STORE_PATH`). Missed expiries up to 15 minutes late ring
+on restart; older ones are dropped.
 
 ## 8. Speaker awareness & voice enrollment
 
@@ -253,8 +255,6 @@ The add-on log shows each turn: `🗣️ user:` (when transcription language is 
 - **A brief reconnect about once an hour.** OpenAI limits a realtime session to
   60 minutes. The add-on refreshes proactively during a quiet moment, so you'll
   rarely notice it, but a reconnect can occasionally cause a ~1–2 second pause.
-- **Timers don't survive add-on restarts** (they do survive the hourly session
-  refresh).
 - **Rarely, the assistant may stop itself** on a word in its own reply that sounds
   like "stop" — just ask again.
 
