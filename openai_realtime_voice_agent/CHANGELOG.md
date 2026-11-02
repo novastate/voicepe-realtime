@@ -8,6 +8,9 @@ All notable changes to this add-on. Newest first.
 
 - **US-357:** Standalone runs now default `WEBSOCKET_HOST` and `ANNOUNCE_HOST` to `127.0.0.1` behind Comms. Explicit non-loopback binds are honoured and warn once per variable per process that Comms is no longer the only door. The Home Assistant add-on run script explicitly sets both to `0.0.0.0` for LAN access. Only loopback WebSocket clients may supply `?device_id=` (including `::1` and IPv4-mapped loopback); other clients use their IP identity.
 
+### 0.29.31
+- **US-403:** när Core är långsam (ingen hel mening efter 8 s, `CORE_LANGSAM_EFTER_S`, 0 = av) säger högtalaren en gång "Jag kollar fortfarande, det tar en stund." i stället för att vara tyst. Ett svar som hinner före gränsen, ett avbrutet svar och ett fel får inget sådant besked. Prov: `tests/test_us403_core_langsam.py` (3 röda före, gröna efter).
+
 ### 0.29.30
 - **US-263 (Kontorprov 2026-10-30):** en tur som kommer medan förra turens verktygskedja pågår (order: läs skill, hitta lampan, styr, ~10 s) skickas inte till modellen förrän modellen börjat svara, kedjan varit tyst i 10 s (7,1 s mellan två steg sågs) eller 20 s gått. Före: "Tänd fönsterlampan i kontoret." följd av "Är det tänt i kontoret?" 2,2 s senare tappade ordern, frågan tog över mitt i kedjan. Prov: `tests/test_us263_kedja.py` (tre av fem röda utan rättningen vid första versionen). Gäller Gemini; OpenAI Live har egen turhantering och är orörd.
 
