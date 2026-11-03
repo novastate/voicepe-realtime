@@ -50,6 +50,20 @@ drop-in for the stock HA voice pipeline.
 Setup steps are on the **Documentation** tab (`DOCS.md`); the full guides live at
 **<https://github.com/TristanBrotherton/voicepe-realtime>**.
 
+## Running the tests
+
+The suite needs the dependencies pinned in `pyproject.toml` (pipecat-ai 0.0.97, sherpa-onnx).
+Use a venv; `tests/conftest.py` aborts with a clear message if they are missing or the wrong version.
+
+```
+python3 -m venv .venv
+.venv/bin/pip install "pipecat-ai[mcp,openai,websocket,google]==0.0.97" sherpa-onnx \
+    python-dotenv fastapi "uvicorn[standard]" websockets pytest pytest-asyncio
+timeout 900 .venv/bin/python -m pytest tests -q
+```
+
+Verified 2026-11-03: 1336 passed, 1 skipped, 0 failed (~3.5 min).
+
 ## Credits
 
 - Backend forked from **[fjfricke/ha-openai-realtime](https://github.com/fjfricke/ha-openai-realtime)** (Felix Fricke).
