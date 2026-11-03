@@ -4,6 +4,8 @@ All notable changes to this add-on. Newest first.
 
 ## Unreleased (fork)
 
+- **US-438:** announce-dörren (`POST /announce`) jämför sin bearer-token i konstant tid (`hmac.compare_digest` på bytes, så ett huvud med icke-ASCII ger 401 i stället för att krascha) och varnar vid nej utan att skriva något nyckelvärde. Rätt token: som förr. Prov: `tests/test_us438_announce_nyckel.py`.
+
 - **US-411:** `WS_NYCKEL` (valfri): när den är satt måste enhets-websocketen presentera samma värde i huvudet `X-Raawr-WS-Nyckel`, annars stängs den med 1008 innan den accepteras (jämförs i konstant tid, loggas aldrig). Osatt = som förr. Comms måste skicka huvudet innan nyckeln sätts i drift.
 
 - **US-384:** Timers survive voice-agent restarts via an atomic store at `/data/timers.json` (override with `TIMER_STORE_PATH`). Missed expiries up to 15 minutes late ring once in their original room; older ones are dropped.
