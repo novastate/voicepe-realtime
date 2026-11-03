@@ -14,6 +14,7 @@ caller (an agent) can fall back to iMessage.
 """
 import asyncio
 import difflib
+import hmac
 import logging
 import time
 
@@ -36,9 +37,15 @@ _announce_lock = asyncio.Lock()
 async def start_announce_server(
     port: int, token: str, announcer, is_connected, host: str = "127.0.0.1"
 ) -> web.AppRunner:
+    expected = f"Bearer {token}".encode("utf-8")
+
     async def handle(request: web.Request) -> web.Response:
+        # US-438: constant-time, on bytes (a non-ASCII header is a 401, not a
+        # crash), and neither the given nor the expected value is ever logged.
         auth = request.headers.get("Authorization", "")
-        if auth != f"Bearer {token}":
+        given = auth.encode("utf-8", "surrogateescape")
+        if not hmac.compare_digest(given, expected):
+            logger.warning(f"🛡️ announce refused: missing or wrong token (from {request.remote or '?'})")
             return web.json_response({"error": "unauthorized"}, status=401)
         try:
             body = await request.json()
