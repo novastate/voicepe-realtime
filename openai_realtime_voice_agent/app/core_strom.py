@@ -132,6 +132,7 @@ async def las_ramar(chunks: AsyncIterator[bytes]) -> AsyncIterator[Tuple[str, Di
 FEL_REPLIK = "Jag fick inget svar från huset just nu."
 LANGSAM_REPLIK = "Jag kollar fortfarande, det tar en stund."  # Core is slow: said once, never silence (US-403)
 LANGSAM_EFTER_S = float(os.environ.get("CORE_LANGSAM_EFTER_S", "8") or 8)
+TOMT_REPLIK = "Jag fick inget svar från huset just nu. Försök fråga igen."  # Core ended with no words (US-475)
 TAK_REPLIK = "Det finns mer, men det här fick räcka."
 
 
@@ -168,8 +169,10 @@ async def tala_strom(chunks: AsyncIterator[bytes], say: Callable[[str], Awaitabl
             # nothing else was; otherwise just what is left in the buffer.
             for m in delare.flush():
                 await tala(m)
-            if ut["meningar"] == 0 and resp.get("text"):
+            if ut["meningar"] == 0 and str(resp.get("text") or "").strip():
                 await tala(str(resp["text"]))
+            if ut["meningar"] == 0:
+                await tala(TOMT_REPLIK)  # US-475: never leave the speaker silent
             ut["slut"] = "deferred" if resp.get("type") == "deferred" else "done"
             return ut
         elif event == "deferred":
@@ -180,6 +183,8 @@ async def tala_strom(chunks: AsyncIterator[bytes], say: Callable[[str], Awaitabl
             return ut
     for m in delare.flush():  # the stream ended without `done`: speak what there is
         await tala(m)
+    if ut["meningar"] == 0:
+        await tala(TOMT_REPLIK)
     ut["slut"] = ut["slut"] or "avbruten"
     return ut
 
