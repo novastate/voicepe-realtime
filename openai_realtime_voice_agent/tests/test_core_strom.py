@@ -574,3 +574,62 @@ async def test_us475_deferred_event_och_eof_sager_inget():
     talat, ut = await _tala([ram("start", {}), ram("deferred", {})])
     assert talat == []
     assert ut["slut"] == "deferred"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("grans", range(1, len(ram("token", {"text": "Åsa är på ön i Växjö."}))))
+async def test_us474_alla_bytegranser(grans):
+    text = "Åsa är på ön i Växjö."
+    data = ram("token", {"text": text})
+
+    async def chunks():
+        yield data[:grans]
+        yield data[grans:]
+
+    assert [e async for e in las_ramar(chunks())] == [("token", {"text": text})]
+
+
+@pytest.mark.asyncio
+async def test_us474_fore_done():
+    forsta = "Åsa är på ön i Växjö och hälsar på."
+    andra = "Östen väntar på bryggan."
+    talat = []
+    mottagen = asyncio.Event()
+    done_skickad = False
+
+    async def chunks():
+        nonlocal done_skickad
+        data = ram("token", {"text": forsta + " " + andra[:12]})
+        for byte in data:
+            yield bytes([byte])
+        await mottagen.wait()
+        for byte in ram("token", {"text": andra[12:]}):
+            yield bytes([byte])
+        done_skickad = True
+        yield ram("done", {"response": {"type": "speech", "text": forsta + " " + andra}})
+
+    async def say(text):
+        if not talat:
+            assert not done_skickad
+            assert text == forsta
+            mottagen.set()
+        talat.append(text)
+
+    ut = await asyncio.wait_for(tala_strom(chunks(), say), 2)
+    assert talat == [forsta, andra]
+    assert ut["slut"] == "done" and ut["meningar"] == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bitstorlek", [1, 2, 3, 7, 19, 1000])
+async def test_us474_skrap(bitstorlek):
+    text = "Åsa är på ön i Växjö."
+    data = (b"event: token\ndata: inte json\n\n"
+            + ram("token", {"text": text}) + ram("done", {"a": 1}))
+
+    async def chunks():
+        for start in range(0, len(data), bitstorlek):
+            yield data[start:start + bitstorlek]
+
+    assert [e async for e in las_ramar(chunks())] == [
+        ("token", {"text": text}), ("done", {"a": 1})]

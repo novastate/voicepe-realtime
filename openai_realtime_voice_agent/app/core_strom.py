@@ -111,14 +111,16 @@ class Meningsdelare:
 
 async def las_ramar(chunks: AsyncIterator[bytes]) -> AsyncIterator[Tuple[str, Dict[str, Any]]]:
     """SSE bytes in, (event, data) out. A frame that is not JSON is skipped."""
-    buf = ""
+    # Decode complete frames so network boundaries cannot split UTF-8 characters.
+    buf = b""
     async for chunk in chunks:
-        buf += chunk.decode("utf-8", errors="replace")
+        buf += chunk
         while True:
-            m = re.search(r"\r?\n\r?\n", buf)
+            m = re.search(rb"\r?\n\r?\n", buf)
             if not m:
                 break
             block, buf = buf[:m.start()], buf[m.end():]
+            block = block.decode("utf-8", errors="replace")
             ev = re.search(r"^event: ?(.*)$", block, re.M)
             da = re.search(r"^data: ?(.*)$", block, re.M)
             if not ev or not da:
