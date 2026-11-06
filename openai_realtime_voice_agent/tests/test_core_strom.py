@@ -559,3 +559,18 @@ async def test_us475_avbruten(monkeypatch):
     await asyncio.gather(*taken, return_exceptions=True)
     await asyncio.sleep(0.05)
     assert all(t.done() for t in taken) and talat == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("svar", [{"type": "deferred"}, {"type": "deferred", "text": ""}])
+async def test_us475_deferred_done_utan_text_sager_inget(svar):
+    talat, ut = await _tala([ram("start", {}), ram("done", {"response": svar})])
+    assert talat == []
+    assert ut["slut"] == "deferred"
+
+
+@pytest.mark.asyncio
+async def test_us475_deferred_event_och_eof_sager_inget():
+    talat, ut = await _tala([ram("start", {}), ram("deferred", {})])
+    assert talat == []
+    assert ut["slut"] == "deferred"

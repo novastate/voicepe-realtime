@@ -171,8 +171,8 @@ async def tala_strom(chunks: AsyncIterator[bytes], say: Callable[[str], Awaitabl
                 await tala(m)
             if ut["meningar"] == 0 and str(resp.get("text") or "").strip():
                 await tala(str(resp["text"]))
-            if ut["meningar"] == 0:
-                await tala(TOMT_REPLIK)  # US-475: never leave the speaker silent
+            if ut["meningar"] == 0 and resp.get("type") != "deferred":
+                await tala(TOMT_REPLIK)  # US-475: never leave the speaker silent (Core comes back when deferred)
             ut["slut"] = "deferred" if resp.get("type") == "deferred" else "done"
             return ut
         elif event == "deferred":
@@ -183,7 +183,7 @@ async def tala_strom(chunks: AsyncIterator[bytes], say: Callable[[str], Awaitabl
             return ut
     for m in delare.flush():  # the stream ended without `done`: speak what there is
         await tala(m)
-    if ut["meningar"] == 0:
+    if ut["meningar"] == 0 and ut["slut"] != "deferred":
         await tala(TOMT_REPLIK)
     ut["slut"] = ut["slut"] or "avbruten"
     return ut
