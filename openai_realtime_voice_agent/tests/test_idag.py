@@ -99,6 +99,7 @@ async def test_day_names_are_worked_out_when_rendered_not_when_fetched():
     idag = _idag()
     await idag.refresh(NOW)
     after_midnight = datetime(2026, 10, 3, 0, 5, tzinfo=TZ)
+    await idag.refresh(after_midnight)  # US-488: facts older than 3 h are left out, so fetch again
     block = idag.block(after_midnight)
     assert "Idag: lördag 2026-10-03, klockan 00:05" in block
     assert "Väder (SMHI): idag regn" in block
@@ -184,3 +185,58 @@ def test_google_search_can_be_turned_off_on_3x(monkeypatch):
     monkeypatch.setenv("GEMINI_GOOGLE_SEARCH", "false")
     tools = _tools(build_service(GEMINI, options(model="models/gemini-3.8-live"), WITH_WEB))
     assert all("google_search" not in t for t in tools)
+
+
+# --- US-488: no weather or calendar the speaker has not been able to refresh for hours ---
+from datetime import timedelta  # noqa: E402
+
+LATER = NOW + timedelta(hours=3, minutes=1)
+SOON = NOW + timedelta(hours=2, minutes=59)
+
+
+def _broken(idag):
+    idag._call = AsyncMock(side_effect=RuntimeError("down"))
+
+
+@pytest.mark.asyncio
+async def test_us488_gammalt_vader():
+    idag = _idag()
+    await idag.refresh(NOW)
+    _broken(idag)
+    await idag.refresh(LATER)
+    block = idag.block(LATER)
+    assert "Väder" not in block and "Idag: fredag" in block and "utan verktyg" in block
+
+
+@pytest.mark.asyncio
+async def test_us488_gammal_kalender():
+    idag = _idag()
+    await idag.refresh(NOW)
+    idag._call = AsyncMock(side_effect=lambda name, a=None: WEATHER if name == "script__vaderprognos"
+                           else (_ for _ in ()).throw(RuntimeError("cal down")))
+    await idag.refresh(LATER)  # weather fresh at LATER, calendar last ok at NOW
+    block = idag.block(LATER)
+    assert "Kalendern" not in block and "Väder (SMHI)" in block
+
+
+@pytest.mark.asyncio
+async def test_us488_farsk_oforandrad():
+    idag = _idag()
+    await idag.refresh(NOW)
+    good = idag.block(NOW)
+    _broken(idag)
+    await idag.refresh(SOON)  # latest attempt failed, data 2 h 59 min old
+    assert idag.block(NOW) == good
+    assert "Väder (SMHI)" in idag.block(SOON) and "Kalendern härnäst" in idag.block(SOON)
+
+
+@pytest.mark.asyncio
+async def test_us488_kommer_tillbaka():
+    idag = _idag()
+    await idag.refresh(NOW)
+    _broken(idag)
+    await idag.refresh(LATER)
+    assert "Väder" not in idag.block(LATER)
+    idag._call = _idag()._call
+    await idag.refresh(LATER)
+    assert "Väder (SMHI)" in idag.block(LATER)

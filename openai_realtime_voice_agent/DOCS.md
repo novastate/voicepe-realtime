@@ -250,6 +250,12 @@ The add-on log shows each turn: `🗣️ user:` (when transcription language is 
 `🔌 …reconnecting` / `✅ reconnected` on a connection recovery. View it on the add-on
 **Log** tab.
 
+Once an hour each speaker also gets one summary line with numbers only:
+`📊 tim kontoret turer=3 utan_ljud=1 median_ms=1200 max_ms=2400 anslutningar=2`
+(`median_ms`/`max_ms` = end of speech to first sound; `-` if no turn got sound). The word `tyst`
+at the end means 24 hourly lines in a row with zero turns (counted from process start). A speaker
+gets a line from its first connection, also in hours with 0 turns.
+
 ## Known limitations
 
 - **A brief reconnect about once an hour.** OpenAI limits a realtime session to

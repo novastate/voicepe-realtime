@@ -9,11 +9,12 @@ not exist until now.
 
 Weather and calendar come from the same HA scripts the model calls
 (script__vaderprognos, script__kalender_sok), through comms' MCP door. A
-failed fetch keeps the last good part; the time is rendered fresh every time
+failed fetch keeps the last good part for at most 3 h (US-488), then drops it; the time is rendered fresh every time
 the block is.
 """
 import json
 import logging
+import os
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
@@ -35,6 +36,16 @@ CONDITIONS = {
 }
 WEATHER_DAYS = 3  # idag, i morgon, i övermorgon: a Friday covers the weekend
 EVENTS = 3
+# US-488: a part not refreshed for this long is left out of the block, so the model uses its tools
+# instead of answering fast from stale facts. 3 h = 18 missed fetches at the 600 s cadence.
+MAX_AGE_S = 10800.0
+
+
+def max_age_s() -> float:
+    try:
+        return float(os.environ.get("IDAG_MAX_AGE_SECONDS", MAX_AGE_S))
+    except ValueError:
+        return MAX_AGE_S
 
 
 async def call_ha_tool(name: str, arguments: Optional[dict] = None, timeout: float = 8.0) -> Any:
@@ -113,16 +124,24 @@ class Idag:
         self.weather: Optional[List[Tuple[date, str]]] = None
         self.events: Optional[List[Tuple[datetime, bool, str]]] = None
         self.fetched_at: Optional[datetime] = None
+        # When each part last SUCCEEDED (fetched_at is set on failure too, so it is no freshness measure).
+        self.weather_ok_at: Optional[datetime] = None
+        self.events_ok_at: Optional[datetime] = None
+
+    def _fresh(self, ok_at: Optional[datetime], now: datetime) -> bool:
+        return ok_at is not None and (now - ok_at).total_seconds() <= max_age_s()
 
     async def refresh(self, now: Optional[datetime] = None) -> None:
         """Fetch both parts; a part that fails keeps its last good value."""
         now = now or datetime.now(TZ)
         try:
             self.weather = parse_weather(await self._call("script__vaderprognos"))
+            self.weather_ok_at = now
         except Exception as e:
             logger.warning(f"⚠️ Idag: weather not refreshed, keeping the last ({e!r})")
         try:
             self.events = parse_events(await self._call("script__kalender_sok"))
+            self.events_ok_at = now
         except Exception as e:
             logger.warning(f"⚠️ Idag: calendar not refreshed, keeping the last ({e!r})")
         self.fetched_at = now
@@ -137,13 +156,14 @@ class Idag:
         today = now.date()
         # Day names are worked out now, not at fetch time: "i morgon" fetched
         # at 23:55 is "idag" at 00:05.
-        weather = [f"{_day_name(d, today)} {t}" for d, t in self.weather or [] if d >= today]
+        weather = [f"{_day_name(d, today)} {t}" for d, t in self.weather or []
+                   if d >= today and self._fresh(self.weather_ok_at, now)]
         if weather:
             lines.append("Väder (SMHI): " + "; ".join(weather[:WEATHER_DAYS]) + ".")
         events = [
             f"{_day_name(w.date(), today)}{f' {w:%H:%M}' if timed else ''} {title}"
             for w, timed, title in self.events or []
-            if (w >= now if timed else w.date() >= today)
+            if (w >= now if timed else w.date() >= today) and self._fresh(self.events_ok_at, now)
         ]
         if events:
             lines.append("Kalendern härnäst: " + "; ".join(events[:EVENTS]) + ".")

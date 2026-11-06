@@ -803,6 +803,8 @@ class Application:
 
         # After the keys and voices above: the warm-up reads them.
         asyncio.ensure_future(self._warm_early_acks())
+        from app.tim_sammanfattning import timloop  # US-489: one journal line per speaker and hour
+        asyncio.ensure_future(timloop())
         if ha_api.configured():
             asyncio.ensure_future(self._idag_loop())
 
