@@ -443,3 +443,134 @@ def test_en_hjarna_tillagget_finns_i_instruktionen_i_bade_vag_b_och_c_och_forsvi
         assert EN_HJARNA_TILLAGG in app._instructions("kontoret"), f"ROST_SKILLS={lage!r}"
         monkeypatch.setenv("EN_HJARNA", "0")
         assert EN_HJARNA_TILLAGG not in app._instructions("kontoret"), f"ROST_SKILLS={lage!r} utan flagga"
+
+
+TOMT_BESKED = "Jag fick inget svar från huset just nu. Försök fråga igen."
+
+
+async def _tala(ramar):
+    talat = []
+
+    async def say(t):
+        talat.append(t)
+
+    async def chunks():
+        for r in ramar:
+            yield r
+
+    ut = await tala_strom(chunks(), say)
+    return talat, ut
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("svar", [{}, {"type": "speech"}, {"text": ""}, {"text": "  \n "}, {"text": None}])
+@pytest.mark.parametrize("tokens", [[], [" "], ["\n", "  "]])
+async def test_us475_tomt_done(svar, tokens):
+    ramar = [ram("start", {})] + [ram("token", {"text": t}) for t in tokens] + [ram("done", {"response": svar})]
+    talat, ut = await _tala(ramar)
+    assert talat == [core_strom.TOMT_REPLIK] == [TOMT_BESKED]
+    assert ut["slut"] == "done"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ramar", [
+    [ram("start", {})],
+    [ram("start", {}), ram("token", {"text": "   "}), ram("token", {"text": "\n"})],
+])
+async def test_us475_tomt_eof(ramar):
+    talat, ut = await asyncio.wait_for(_tala(ramar), 2)
+    assert talat == [TOMT_BESKED]
+    assert ut["slut"] == "avbruten"
+
+
+@pytest.mark.asyncio
+async def test_us475_riktigt_svar():
+    talat, _ = await _tala([ram("token", {"text": "Det blir regn i morgon förmiddag. "}),
+                            ram("done", {"response": {"type": "speech", "text": "Det blir regn i morgon förmiddag."}})])
+    assert talat == ["Det blir regn i morgon förmiddag."]
+    talat, _ = await _tala([ram("done", {"response": {"type": "speech", "text": "Elpriset är lågt just nu."}})])
+    assert talat == ["Elpriset är lågt just nu."]
+    talat, ut = await _tala([ram("deferred", {"agent": "sixten"}),
+                             ram("done", {"response": {"type": "deferred", "text": "Sixten jobbar på det."}})])
+    assert talat == ["Sixten jobbar på det."] and ut["slut"] == "deferred"
+    talat, _ = await _tala([ram("token", {"text": "Svaret kom aldrig hela vägen"})])
+    assert talat == ["Svaret kom aldrig hela vägen"]
+
+
+@pytest.mark.asyncio
+async def test_us475_avbruten(monkeypatch):
+    from app.core_strom import register_fraga_core
+
+    talat, fastnat, slapp = [], asyncio.Event(), asyncio.Event()
+
+    class Svar:
+        status_code = 200
+
+        async def aiter_bytes(self):
+            yield ram("start", {})
+            fastnat.set()
+            await slapp.wait()
+            yield ram("done", {"response": {"type": "speech", "text": ""}})
+
+    class Ström:
+        async def __aenter__(self):
+            return Svar()
+
+        async def __aexit__(self, *a):
+            return False
+
+    class Klient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        def stream(self, *a, **k):
+            return Ström()
+
+    monkeypatch.setattr(core_strom.httpx, "AsyncClient", Klient)
+    monkeypatch.setenv("CORE_STROM_URL", "http://x/fraga")
+
+    class Llm:
+        def register_function(self, namn, fn):
+            self.fn = fn
+
+    class Params:
+        arguments = {"question": "vad vet du om mig?"}
+
+        async def result_callback(self, r):
+            pass
+
+    async def say(t):
+        talat.append(t)
+
+    llm = Llm()
+    avbryt = register_fraga_core(llm, say, lambda: {}, langsam_efter_s=0)
+    await llm.fn(Params())
+    await asyncio.wait_for(fastnat.wait(), 5)
+    taken = [t for t in asyncio.all_tasks() if "kor" in repr(t)]
+    assert taken
+    avbryt()
+    slapp.set()
+    await asyncio.gather(*taken, return_exceptions=True)
+    await asyncio.sleep(0.05)
+    assert all(t.done() for t in taken) and talat == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("svar", [{"type": "deferred"}, {"type": "deferred", "text": ""}])
+async def test_us475_deferred_done_utan_text_sager_inget(svar):
+    talat, ut = await _tala([ram("start", {}), ram("done", {"response": svar})])
+    assert talat == []
+    assert ut["slut"] == "deferred"
+
+
+@pytest.mark.asyncio
+async def test_us475_deferred_event_och_eof_sager_inget():
+    talat, ut = await _tala([ram("start", {}), ram("deferred", {})])
+    assert talat == []
+    assert ut["slut"] == "deferred"
