@@ -115,6 +115,7 @@ from app.raw_audio_serializer import RawAudioSerializer
 from app.session_manager import SessionManager
 from app.audio_recording_service import AudioRecordingService
 from app.phase_emitter import PhaseEmitter
+from app.tim_sammanfattning import SAMMANFATTNING
 from app.turn_tider import TurnTider
 from app.output_lead_buffer import OutputLeadBuffer
 from app.transcript_logger import TranscriptLogger
@@ -1381,6 +1382,7 @@ class WebSocketHandler:
         connection.maskin = maskin
         send_phase = maskin.phase
         logger.info(f"🔗 Building pipeline for client: {client_id}")
+        SAMMANFATTNING.anslutning(client_id)  # US-489: counted in the hourly line
         
         if openai_service is None:
             raise RuntimeError("OpenAI service must be created before building pipeline")

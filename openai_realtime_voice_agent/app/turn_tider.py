@@ -13,6 +13,8 @@ written at the next turn with `utan_ljud`.
 import logging
 import time
 
+from app.tim_sammanfattning import SAMMANFATTNING
+
 logger = logging.getLogger(__name__)
 
 STEG = ("turslut", "stt", "comms", "verktyg", "modell", "enhet")
@@ -41,5 +43,7 @@ class TurnTider:
     def _skriv(self, utan_ljud: bool = False) -> None:
         t0 = self.t["talets_slut"]
         delar = [f"{s}={round((self.t[s] - t0) * 1000)}" for s in STEG if s in self.t]
+        SAMMANFATTNING.tur(self.device_id, round((self.t["enhet"] - t0) * 1000) if "enhet" in self.t else None,
+                           utan_ljud)  # US-489
         logger.info(f"⏱ tider {self.device_id} " + " ".join(delar) + (" utan_ljud" if utan_ljud else ""))
         self.t = None
