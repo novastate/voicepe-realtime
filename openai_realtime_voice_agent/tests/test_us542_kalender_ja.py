@@ -316,3 +316,18 @@ async def test_ny_avbrott_nollstaller_inte_misstanken_om_sent_stopp(monkeypatch)
     await _svar(lg, "Förslag K3: Ska jag ta bort Tandläkare?")
     await _f(lg, "BotStoppedSpeakingFrame")  # A's late stop
     assert skickat == []
+
+
+@pytest.mark.asyncio
+async def test_avbrott_nollstaller_inte_misstanken_ens_nar_nytt_tal_borjar_innan_det_sena_stoppet(monkeypatch):
+    """Codex P2: A is interrupted, B is queued and B's audio has begun when A's late stop arrives. The stop must not be credited to B."""
+    lg, skickat = _lg(monkeypatch)
+    from pipecat.frames.frames import LLMFullResponseEndFrame, TTSTextFrame
+    from pipecat.processors.frame_processor import FrameDirection
+    await _f(lg, "BotStartedSpeakingFrame")                    # A is playing
+    await _f(lg, "StartInterruptionFrame", "DOWNSTREAM")        # A is interrupted
+    await lg.process_frame(TTSTextFrame(text="Förslag K4: Ska jag ta bort Tandläkare?", aggregated_by="sentence"), FrameDirection.DOWNSTREAM)
+    await lg.process_frame(LLMFullResponseEndFrame(), FrameDirection.DOWNSTREAM)  # B finished (no Start frame seen)
+    await _f(lg, "BotStartedSpeakingFrame")                    # B's audio begins
+    await _f(lg, "BotStoppedSpeakingFrame")                    # A's late stop
+    assert skickat == []
