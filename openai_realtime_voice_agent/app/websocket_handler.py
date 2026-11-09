@@ -118,6 +118,7 @@ from app.phase_emitter import PhaseEmitter
 from app.tim_sammanfattning import SAMMANFATTNING
 from app.turn_tider import TurnTider
 from app.output_lead_buffer import OutputLeadBuffer
+from app import hord
 from app.transcript_logger import TranscriptLogger
 
 logger = logging.getLogger(__name__)
@@ -1508,14 +1509,14 @@ class WebSocketHandler:
         if context_aggregator:
             pipeline_components.extend([
                 context_aggregator.user(),
-                TranscriptLogger(capture="user"),
+                TranscriptLogger(capture="user", on_user=hord.rapportera),
                 openai_service,
                 TranscriptLogger(capture="assistant"),
                 context_aggregator.assistant(),
             ])
         else:
             pipeline_components.extend([
-                TranscriptLogger(capture="user"),
+                TranscriptLogger(capture="user", on_user=hord.rapportera),
                 openai_service,
                 TranscriptLogger(capture="assistant"),
             ])

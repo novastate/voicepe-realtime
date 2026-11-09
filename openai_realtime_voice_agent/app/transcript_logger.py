@@ -54,9 +54,10 @@ class TranscriptLogger(FrameProcessor):
             the LLM), "user" (TranscriptionFrame, place BEFORE the LLM), or "both".
     """
 
-    def __init__(self, capture: str = "both", **kwargs):
+    def __init__(self, capture: str = "both", on_user=None, **kwargs):
         super().__init__(**kwargs)
         self._capture = capture
+        self._on_user = on_user  # raawr US-542: what the speech-to-text heard goes to Comms/Core, never what the model wrote
         self._assistant_buf: list[str] = []
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
@@ -80,5 +81,10 @@ class TranscriptLogger(FrameProcessor):
                 text = (frame.text or "").strip()
                 if text:
                     logger.info(f"🗣️ user: {text}")
+                    if self._on_user is not None:
+                        try:
+                            self._on_user(text)
+                        except Exception as e:  # reporting must never stop the audio
+                            logger.warning(f"⚠️ hord: {type(e).__name__}")
 
         await self.push_frame(frame, direction)
