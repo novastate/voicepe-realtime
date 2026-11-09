@@ -39,6 +39,7 @@ from pipecat.frames.frames import (
     TTSTextFrame,
     LLMTextFrame,
     LLMFullResponseEndFrame,
+    StartInterruptionFrame,
     TranscriptionFrame,
 )
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
@@ -68,7 +69,9 @@ class TranscriptLogger(FrameProcessor):
             # Accumulate the reply text chunks (audio modality -> TTSTextFrame;
             # text modality -> LLMTextFrame), then log once per response on the
             # End bracket so it's one readable line instead of one per chunk.
-            if isinstance(frame, (TTSTextFrame, LLMTextFrame)):
+            if isinstance(frame, StartInterruptionFrame):
+                self._assistant_buf = []  # raawr US-542: the owner cut it off, so the question was not (fully) delivered
+            elif isinstance(frame, (TTSTextFrame, LLMTextFrame)):
                 if frame.text:
                     self._assistant_buf.append(frame.text)
             elif isinstance(frame, LLMFullResponseEndFrame):

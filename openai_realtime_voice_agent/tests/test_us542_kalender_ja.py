@@ -106,3 +106,16 @@ def test_websocket_handler_kopplar_bada_riktningarna():
     from app import websocket_handler
     k = inspect.getsource(websocket_handler)
     assert k.count("on_user=hord.rapportera") == 2 and k.count("on_assistant=hord.levererat") == 2
+
+
+@pytest.mark.asyncio
+async def test_avbruten_uppläsning_rapporteras_inte_som_levererad(monkeypatch):
+    from pipecat.frames.frames import LLMFullResponseEndFrame, StartInterruptionFrame, TTSTextFrame
+    from pipecat.processors.frame_processor import FrameDirection
+    skickat = []
+    monkeypatch.setattr(hord, "rapportera", lambda t, rutt="hort": skickat.append((rutt, t)))
+    lg = _logger(capture="assistant", on_assistant=hord.levererat)
+    await lg.process_frame(TTSTextFrame(text="Ska jag ta bort Tand", aggregated_by="sentence"), FrameDirection.DOWNSTREAM)
+    await lg.process_frame(StartInterruptionFrame(), FrameDirection.DOWNSTREAM)  # ägaren avbryter mitt i meningen
+    await lg.process_frame(LLMFullResponseEndFrame(), FrameDirection.DOWNSTREAM)
+    assert skickat == []
