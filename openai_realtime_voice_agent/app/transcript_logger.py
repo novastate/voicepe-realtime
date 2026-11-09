@@ -39,6 +39,7 @@ from pipecat.frames.frames import (
     TTSTextFrame,
     LLMTextFrame,
     LLMFullResponseEndFrame,
+    LLMFullResponseStartFrame,
     BotStoppedSpeakingFrame,
     StartInterruptionFrame,
     TranscriptionFrame,
@@ -62,7 +63,8 @@ class TranscriptLogger(FrameProcessor):
         self._on_user = on_user
         self._on_assistant = on_assistant  # raawr US-542: what the speech-to-text heard goes to Comms/Core, never what the model wrote
         self._assistant_buf: list[str] = []
-        self._vantar_uppspelning = ""  # raawr US-542: finished reply text, delivered only when the audio has played to its end
+        self._osaker = False  # a reply started while another waited: the next BotStopped cannot be attributed
+        self._kö: list[str] = []  # raawr US-542: finished replies (text, "" for audio without words) waiting for their audio to end
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -74,7 +76,14 @@ class TranscriptLogger(FrameProcessor):
             if isinstance(frame, StartInterruptionFrame):
                 # raawr US-542 (Codex P2): the owner cut the speech off, also AFTER the text was finished. Nothing waiting is delivered.
                 self._assistant_buf = []
-                self._vantar_uppspelning = ""
+                self._kö = []
+                self._osaker = False
+            elif isinstance(frame, LLMFullResponseStartFrame):
+                # A new reply starts while an earlier one still waits for its audio to end: a later BotStoppedSpeaking could end either,
+                # so neither is proven heard (fail-closed), and the next BotStopped is consumed without reporting anything.
+                if self._kö:
+                    self._osaker = True
+                self._kö = []
             elif isinstance(frame, (TTSTextFrame, LLMTextFrame)):
                 if frame.text:
                     self._assistant_buf.append(frame.text)
@@ -83,14 +92,17 @@ class TranscriptLogger(FrameProcessor):
                 self._assistant_buf = []
                 if text:
                     logger.info(f"🤖 assistant: {text}")
-                    # Delivered means HEARD: the text counts only once the output audio stops (BotStoppedSpeakingFrame) without an
-                    # interruption in between. A reply whose audio had already ended before this frame is never reported (fail-closed).
-                    self._vantar_uppspelning = text
-            elif isinstance(frame, BotStoppedSpeakingFrame) and self._vantar_uppspelning:
-                text, self._vantar_uppspelning = self._vantar_uppspelning, ""
-                if self._on_assistant is not None:
+                self._kö.append(text)  # also "" : a reply with audio but no words is still a delivered segment
+            elif isinstance(frame, BotStoppedSpeakingFrame) and self._osaker:
+                self._osaker = False
+                self._kö = []
+            elif isinstance(frame, BotStoppedSpeakingFrame) and self._kö:
+                # Delivered means HEARD: exactly ONE finished reply, whose audio has now ended with no interruption and no new
+                # reply started in between. Several replies waiting = ambiguous (which one ended?), so none is reported.
+                kö, self._kö = self._kö, []
+                if len(kö) == 1 and self._on_assistant is not None:
                     try:
-                        self._on_assistant(text)
+                        self._on_assistant(kö[0] or "(ljud utan text)")
                     except Exception as e:  # reporting must never stop the audio
                         logger.warning(f"⚠️ levererat: {type(e).__name__}")
 

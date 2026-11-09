@@ -122,7 +122,7 @@ async def test_avbruten_uppläsning_rapporteras_inte_som_levererad(monkeypatch):
     await lg.process_frame(StartInterruptionFrame(), FrameDirection.DOWNSTREAM)  # ägaren avbryter mitt i meningen
     await lg.process_frame(LLMFullResponseEndFrame(), FrameDirection.DOWNSTREAM)
     await lg.process_frame(BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
-    assert skickat == []
+    assert not any("Tand" in t for _, t in skickat)  # the cut-off question is never reported
 
 
 @pytest.mark.asyncio
@@ -154,3 +154,58 @@ async def test_svar_vars_ljud_redan_tagit_slut_for_texten_blev_klar_rapporteras_
     await lg.process_frame(TTSTextFrame(text="Ska jag ta bort Tandläkare?", aggregated_by="sentence"), FrameDirection.DOWNSTREAM)
     await lg.process_frame(LLMFullResponseEndFrame(), FrameDirection.DOWNSTREAM)
     assert skickat == []
+
+
+def _ram(namn):
+    import pipecat.frames.frames as f
+    return getattr(f, namn)
+
+
+async def _svar(lg, text):
+    """One finished reply as the pipeline delivers it: Start, text, End."""
+    from pipecat.processors.frame_processor import FrameDirection
+    await lg.process_frame(_ram("LLMFullResponseStartFrame")(), FrameDirection.DOWNSTREAM)
+    if text:
+        await lg.process_frame(_ram("TTSTextFrame")(text=text, aggregated_by="sentence"), FrameDirection.DOWNSTREAM)
+    await lg.process_frame(_ram("LLMFullResponseEndFrame")(), FrameDirection.DOWNSTREAM)
+
+
+@pytest.mark.asyncio
+async def test_tva_svar_i_ko_en_uppspelning_ger_ingen_leverans(monkeypatch):
+    """Codex P2: 'Vill du ha kaffe?' + End, kalenderfråga + End, BotStopped. Which one ended? Neither is reported."""
+    from pipecat.processors.frame_processor import FrameDirection
+    skickat = []
+    monkeypatch.setattr(hord, "rapportera", lambda t, rutt="hort": skickat.append((rutt, t)))
+    lg = _logger(capture="assistant", on_assistant=hord.levererat)
+    await _svar(lg, "Vill du ha kaffe?")
+    # the next reply starts while the first still waits: ambiguous, the queue is dropped
+    await _svar(lg, "Ska jag ta bort Tandläkare?")
+    await lg.process_frame(_ram("BotStoppedSpeakingFrame")(), FrameDirection.UPSTREAM)
+    assert skickat == []  # neither the coffee question nor the calendar question is proven heard
+
+
+@pytest.mark.asyncio
+async def test_kalenderfraga_sedan_ny_replik_och_sent_botstopped_ger_ingen_falsk_leverans(monkeypatch):
+    """Codex P2: calendar question + End, a new reply 'Vill du ha kaffe?' starts, a late BotStopped arrives: the calendar
+    question must NOT be reported as delivered while the new reply is going on."""
+    from pipecat.processors.frame_processor import FrameDirection
+    skickat = []
+    monkeypatch.setattr(hord, "rapportera", lambda t, rutt="hort": skickat.append((rutt, t)))
+    lg = _logger(capture="assistant", on_assistant=hord.levererat)
+    await _svar(lg, "Ska jag ta bort Tandläkare?")
+    await lg.process_frame(_ram("LLMFullResponseStartFrame")(), FrameDirection.DOWNSTREAM)  # the new reply begins
+    await lg.process_frame(_ram("TTSTextFrame")(text="Vill du ha kaffe?", aggregated_by="sentence"), FrameDirection.DOWNSTREAM)
+    await lg.process_frame(_ram("BotStoppedSpeakingFrame")(), FrameDirection.UPSTREAM)  # late/duplicate stop
+    assert skickat == []
+
+
+@pytest.mark.asyncio
+async def test_ett_svar_utan_ord_men_med_ljud_rapporteras_som_segment(monkeypatch):
+    """Codex P2: audio without text is still a delivered segment; Core must be told so it can invalidate a waiting question."""
+    from pipecat.processors.frame_processor import FrameDirection
+    skickat = []
+    monkeypatch.setattr(hord, "rapportera", lambda t, rutt="hort": skickat.append((rutt, t)))
+    lg = _logger(capture="assistant", on_assistant=hord.levererat)
+    await _svar(lg, "")
+    await lg.process_frame(_ram("BotStoppedSpeakingFrame")(), FrameDirection.UPSTREAM)
+    assert skickat == [("levererat", "(ljud utan text)")]
