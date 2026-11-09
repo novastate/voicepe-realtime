@@ -113,7 +113,7 @@ def test_websocket_handler_kopplar_bada_riktningarna():
 
 @pytest.mark.asyncio
 async def test_avbruten_uppläsning_rapporteras_inte_som_levererad(monkeypatch):
-    from pipecat.frames.frames import LLMFullResponseEndFrame, StartInterruptionFrame, TTSTextFrame
+    from pipecat.frames.frames import BotStoppedSpeakingFrame, LLMFullResponseEndFrame, StartInterruptionFrame, TTSTextFrame
     from pipecat.processors.frame_processor import FrameDirection
     skickat = []
     monkeypatch.setattr(hord, "rapportera", lambda t, rutt="hort": skickat.append((rutt, t)))
@@ -121,6 +121,7 @@ async def test_avbruten_uppläsning_rapporteras_inte_som_levererad(monkeypatch):
     await lg.process_frame(TTSTextFrame(text="Ska jag ta bort Tand", aggregated_by="sentence"), FrameDirection.DOWNSTREAM)
     await lg.process_frame(StartInterruptionFrame(), FrameDirection.DOWNSTREAM)  # ägaren avbryter mitt i meningen
     await lg.process_frame(LLMFullResponseEndFrame(), FrameDirection.DOWNSTREAM)
+    await lg.process_frame(BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
     assert skickat == []
 
 
