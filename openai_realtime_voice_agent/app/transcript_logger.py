@@ -39,6 +39,7 @@ from pipecat.frames.frames import (
     TTSTextFrame,
     LLMTextFrame,
     LLMFullResponseEndFrame,
+    BotStoppedSpeakingFrame,
     StartInterruptionFrame,
     TranscriptionFrame,
 )
@@ -61,6 +62,7 @@ class TranscriptLogger(FrameProcessor):
         self._on_user = on_user
         self._on_assistant = on_assistant  # raawr US-542: what the speech-to-text heard goes to Comms/Core, never what the model wrote
         self._assistant_buf: list[str] = []
+        self._vantar_uppspelning = ""  # raawr US-542: finished reply text, delivered only when the audio has played to its end
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -70,7 +72,9 @@ class TranscriptLogger(FrameProcessor):
             # text modality -> LLMTextFrame), then log once per response on the
             # End bracket so it's one readable line instead of one per chunk.
             if isinstance(frame, StartInterruptionFrame):
-                self._assistant_buf = []  # raawr US-542: the owner cut it off, so the question was not (fully) delivered
+                # raawr US-542 (Codex P2): the owner cut the speech off, also AFTER the text was finished. Nothing waiting is delivered.
+                self._assistant_buf = []
+                self._vantar_uppspelning = ""
             elif isinstance(frame, (TTSTextFrame, LLMTextFrame)):
                 if frame.text:
                     self._assistant_buf.append(frame.text)
@@ -79,11 +83,16 @@ class TranscriptLogger(FrameProcessor):
                 self._assistant_buf = []
                 if text:
                     logger.info(f"🤖 assistant: {text}")
-                    if self._on_assistant is not None:
-                        try:
-                            self._on_assistant(text)
-                        except Exception as e:  # reporting must never stop the audio
-                            logger.warning(f"⚠️ levererat: {type(e).__name__}")
+                    # Delivered means HEARD: the text counts only once the output audio stops (BotStoppedSpeakingFrame) without an
+                    # interruption in between. A reply whose audio had already ended before this frame is never reported (fail-closed).
+                    self._vantar_uppspelning = text
+            elif isinstance(frame, BotStoppedSpeakingFrame) and self._vantar_uppspelning:
+                text, self._vantar_uppspelning = self._vantar_uppspelning, ""
+                if self._on_assistant is not None:
+                    try:
+                        self._on_assistant(text)
+                    except Exception as e:  # reporting must never stop the audio
+                        logger.warning(f"⚠️ levererat: {type(e).__name__}")
 
         if self._capture in ("user", "both"):
             if isinstance(frame, TranscriptionFrame):

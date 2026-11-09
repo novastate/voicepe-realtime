@@ -89,7 +89,7 @@ async def test_transkriptloggern_anropar_hord_for_stt_text_och_for_inget_annat(m
 
 @pytest.mark.asyncio
 async def test_transkriptloggern_rapporterar_assistentens_uttalade_svar_som_levererat(monkeypatch):
-    from pipecat.frames.frames import LLMFullResponseEndFrame, TTSTextFrame
+    from pipecat.frames.frames import BotStartedSpeakingFrame, BotStoppedSpeakingFrame, LLMFullResponseEndFrame, TTSTextFrame
     from pipecat.processors.frame_processor import FrameDirection
     skickat = []
     monkeypatch.setattr(hord, "rapportera", lambda t, rutt="hort": skickat.append((rutt, t)))
@@ -97,6 +97,9 @@ async def test_transkriptloggern_rapporterar_assistentens_uttalade_svar_som_leve
     for bit in ("Ska jag ta bort ", "Tandläkare?"):
         await lg.process_frame(TTSTextFrame(text=bit, aggregated_by="sentence"), FrameDirection.DOWNSTREAM)
     await lg.process_frame(LLMFullResponseEndFrame(), FrameDirection.DOWNSTREAM)
+    assert skickat == []  # the text is finished but nothing has been heard yet
+    await lg.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+    await lg.process_frame(BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
     assert skickat == [("levererat", "Ska jag ta bort Tandläkare?")]
 
 
@@ -117,5 +120,36 @@ async def test_avbruten_uppläsning_rapporteras_inte_som_levererad(monkeypatch):
     lg = _logger(capture="assistant", on_assistant=hord.levererat)
     await lg.process_frame(TTSTextFrame(text="Ska jag ta bort Tand", aggregated_by="sentence"), FrameDirection.DOWNSTREAM)
     await lg.process_frame(StartInterruptionFrame(), FrameDirection.DOWNSTREAM)  # ägaren avbryter mitt i meningen
+    await lg.process_frame(LLMFullResponseEndFrame(), FrameDirection.DOWNSTREAM)
+    assert skickat == []
+
+
+@pytest.mark.asyncio
+async def test_avbrott_efter_att_texten_blev_klar_men_under_uppspelning_ger_ingen_leverans(monkeypatch):
+    """Codex P2: End -> playback going on -> StartInterruption -> the owner says 'ja'. The question was never heard to its end."""
+    from pipecat.frames.frames import (BotStartedSpeakingFrame, BotStoppedSpeakingFrame, LLMFullResponseEndFrame,
+                                       StartInterruptionFrame, TTSTextFrame, TranscriptionFrame)
+    from pipecat.processors.frame_processor import FrameDirection
+    skickat = []
+    monkeypatch.setattr(hord, "rapportera", lambda t, rutt="hort": skickat.append((rutt, t)))
+    lg = _logger(capture="both", on_user=hord.rapportera, on_assistant=hord.levererat)
+    await lg.process_frame(TTSTextFrame(text="Ska jag ta bort Tandläkare?", aggregated_by="sentence"), FrameDirection.DOWNSTREAM)
+    await lg.process_frame(LLMFullResponseEndFrame(), FrameDirection.DOWNSTREAM)  # text done, audio still playing
+    await lg.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+    await lg.process_frame(StartInterruptionFrame(), FrameDirection.DOWNSTREAM)    # the owner barges in
+    await lg.process_frame(TranscriptionFrame(text="ja", user_id="u", timestamp="t"), FrameDirection.UPSTREAM)
+    await lg.process_frame(BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+    assert skickat == [("hort", "ja")]  # the yes is heard, the question is never reported as delivered
+
+
+@pytest.mark.asyncio
+async def test_svar_vars_ljud_redan_tagit_slut_for_texten_blev_klar_rapporteras_inte(monkeypatch):
+    """Fail-closed: no BotStoppedSpeaking after the finished text means nothing proves it was heard."""
+    from pipecat.frames.frames import LLMFullResponseEndFrame, TTSTextFrame
+    from pipecat.processors.frame_processor import FrameDirection
+    skickat = []
+    monkeypatch.setattr(hord, "rapportera", lambda t, rutt="hort": skickat.append((rutt, t)))
+    lg = _logger(capture="assistant", on_assistant=hord.levererat)
+    await lg.process_frame(TTSTextFrame(text="Ska jag ta bort Tandläkare?", aggregated_by="sentence"), FrameDirection.DOWNSTREAM)
     await lg.process_frame(LLMFullResponseEndFrame(), FrameDirection.DOWNSTREAM)
     assert skickat == []
