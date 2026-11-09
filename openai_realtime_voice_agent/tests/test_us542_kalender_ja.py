@@ -230,6 +230,7 @@ async def test_tva_slutade_svar_utan_start_emellan_ger_ingen_leverans(monkeypatc
     for text in ("Vill du ha kaffe?", "Ska jag ta bort Tandläkare?"):
         await lg.process_frame(TTSTextFrame(text=text, aggregated_by="sentence"), FrameDirection.DOWNSTREAM)
         await lg.process_frame(LLMFullResponseEndFrame(), FrameDirection.DOWNSTREAM)
+    await lg.process_frame(_ram("BotStartedSpeakingFrame")(), FrameDirection.UPSTREAM)
     await lg.process_frame(_ram("BotStoppedSpeakingFrame")(), FrameDirection.UPSTREAM)
     assert skickat == []
 
