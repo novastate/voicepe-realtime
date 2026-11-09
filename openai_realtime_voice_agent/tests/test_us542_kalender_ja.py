@@ -69,6 +69,8 @@ class _Ctx:
 def _logger(**kw):
     """A TranscriptLogger whose downstream push is a no-op, so process_frame can be called on its own."""
     lg = TranscriptLogger(**kw)
+    import itertools
+    lg._nu = itertools.count(0, 10.0).__next__  # every reading is 10 s after the last: all stops are plausible unless a test sets its own clock
 
     async def _push(frame, direction=None):
         pass
@@ -336,3 +338,20 @@ async def test_avbrott_nollstaller_inte_misstanken_ens_nar_nytt_tal_borjar_innan
     await _f(lg, "BotStartedSpeakingFrame")                    # B's audio begins
     await _f(lg, "BotStoppedSpeakingFrame")                    # A's late stop
     assert skickat == []
+
+
+@pytest.mark.asyncio
+async def test_dubbelt_stopp_fran_a_efter_bs_start_levererar_inte_b(monkeypatch):
+    """Codex runda 9, exact order: A + End + BotStarted + BotStopped; question B + End + BotStarted; THEN a duplicate BotStopped from A
+    arrives while B is playing. B must not be reported by it; B's own stop, spoken-length later, delivers it."""
+    lg, skickat = _lg(monkeypatch)
+    klocka = iter([0.0, 10.0, 20.0, 20.05, 30.0])  # A starts, A stops, B starts, A's duplicate stop, B's own stop
+    lg._nu = lambda: next(klocka)
+    await _svar(lg, "Hej.")
+    await _f(lg, "BotStartedSpeakingFrame"); await _f(lg, "BotStoppedSpeakingFrame")          # A, normal
+    await _svar(lg, "Förslag K2: Ska jag ta bort Tandläkare?")
+    await _f(lg, "BotStartedSpeakingFrame")                                                   # B is playing
+    await _f(lg, "BotStoppedSpeakingFrame")                                                   # A's duplicate, 50 ms later
+    assert ("levererat", "Förslag K2: Ska jag ta bort Tandläkare?") not in skickat
+    await _f(lg, "BotStoppedSpeakingFrame")                                                   # B's own stop
+    assert skickat[-1] == ("levererat", "Förslag K2: Ska jag ta bort Tandläkare?")

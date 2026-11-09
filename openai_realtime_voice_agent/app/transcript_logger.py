@@ -33,6 +33,7 @@ it never transforms or drops a frame. (Listed for removal under CLAUDE.md
 roadmap #5 once the system is stable.)
 """
 import logging
+import time
 
 from pipecat.frames.frames import (
     Frame,
@@ -68,6 +69,8 @@ class TranscriptLogger(FrameProcessor):
         self._segment = False  # between BotStartedSpeaking and BotStoppedSpeaking: a BotStopped outside a segment is a stray or duplicate
         self._hord_efter_start = False  # a speech segment began after the current reply started
         self._levererat = False  # a delivery was reported and no new reply has started since
+        self._nu = time.monotonic  # the clock (a test replaces it)
+        self._segment_t0 = 0.0  # when the open speech segment began
         self._kö: list[str] = []  # raawr US-542: finished replies (text, "" for audio without words) waiting for their audio to end
 
     def _rapportera(self, text: str) -> None:
@@ -114,6 +117,8 @@ class TranscriptLogger(FrameProcessor):
                     logger.info(f"🤖 assistant: {text}")
                 self._kö.append(text)  # also "" : a reply with audio but no words is still a delivered segment
             elif isinstance(frame, BotStartedSpeakingFrame):
+                if not self._segment:
+                    self._segment_t0 = self._nu()
                 self._segment = True
                 self._hord_efter_start = True
             elif isinstance(frame, BotStoppedSpeakingFrame):
@@ -122,6 +127,12 @@ class TranscriptLogger(FrameProcessor):
                 # reply must wait whose reply started before this segment.
                 if not self._segment:
                     return await self.push_frame(frame, direction)
+                if not self._osaker and len(self._kö) == 1 and self._hord_efter_start:
+                    # Codex runda 9: a duplicate stop of an EARLIER reply can arrive while this reply is already playing. Pipecat gives
+                    # no reply id, so plausibility decides: a stop sooner after the segment began than the reply's text could have
+                    # been spoken (0.03 s per character, at least 0.6 s) is a stray. It is ignored and the segment stays open.
+                    if self._nu() - self._segment_t0 < max(0.6, 0.03 * len(self._kö[0])):
+                        return await self.push_frame(frame, direction)
                 self._segment = False
                 if self._osaker:
                     # The stop an interrupted or earlier reply still owed: it ends THAT audio. The reply waiting now is untouched.
