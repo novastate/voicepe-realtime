@@ -39,11 +39,13 @@ async def test_hord_rapporterar_stt_text_i_ordning_med_rummets_nyckel(monkeypatc
     monkeypatch.setenv("CORE_HORT_URL", "http://comms.test/kanal/rost/kontoret/hort")
     monkeypatch.setenv("COMMS_NYCKEL", "rumsnyckel")
     skickat = []
+    numrering = []
 
     class _K:
         async def post(self, url, json, headers, timeout=None):
             await asyncio.sleep(0.02 if json["text"] == "flytta tandläkaren" else 0)
             skickat.append((url, json["text"], headers.get("X-Raawr-Nyckel")))
+            numrering.append(json.get("lopnr"))
 
             class _R:
                 status_code = 200
@@ -55,6 +57,7 @@ async def test_hord_rapporterar_stt_text_i_ordning_med_rummets_nyckel(monkeypatc
     await asyncio.gather(*list(hord._uppgifter))
     assert [t for _, t, _ in skickat] == ["flytta tandläkaren", "ja"]
     assert {n for _, _, n in skickat} == {"rumsnyckel"}
+    assert numrering[1] == numrering[0] + 1  # review F1: running number, so Core sees a hole if a report is lost
 
 
 class _Ctx:
@@ -224,3 +227,28 @@ async def test_tva_slutade_svar_utan_start_emellan_ger_ingen_leverans(monkeypatc
         await lg.process_frame(LLMFullResponseEndFrame(), FrameDirection.DOWNSTREAM)
     await lg.process_frame(_ram("BotStoppedSpeakingFrame")(), FrameDirection.UPSTREAM)
     assert skickat == []
+
+
+@pytest.mark.asyncio
+async def test_en_rapport_som_inte_kom_fram_syns_som_hal_i_numreringen(monkeypatch):
+    """Review F1: the first report fails on the network, the second goes through: Core must see number n+1 after n-1."""
+    monkeypatch.setenv("CORE_HORT_URL", "http://comms.test/kanal/rost/kontoret/hort")
+    monkeypatch.setenv("COMMS_NYCKEL", "rumsnyckel")
+    nummer = []
+
+    class _K:
+        async def post(self, url, json, headers, timeout=None):
+            if json["text"] == "nej vänta":
+                raise ConnectionError("net down")
+            nummer.append(json["lopnr"])
+
+            class _R:
+                status_code = 200
+            return _R()
+
+    monkeypatch.setattr(hord.httpx, "AsyncClient", lambda **kw: _Ctx(_K()))
+    hord.rapportera("flytta tandläkaren")
+    hord.rapportera("nej vänta")  # lost
+    hord.rapportera("ja")
+    await asyncio.gather(*list(hord._uppgifter))
+    assert len(nummer) == 2 and nummer[1] == nummer[0] + 2

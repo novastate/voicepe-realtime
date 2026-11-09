@@ -7,6 +7,7 @@ calendar tools carry no field for the owner's words. The report is fire and forg
 import asyncio
 import logging
 import os
+import time
 from typing import Optional, Set
 
 import httpx
@@ -15,6 +16,9 @@ from app import ha_api
 
 logger = logging.getLogger(__name__)
 _uppgifter: Set[asyncio.Task] = set()
+# raawr US-542 (review F1): every report carries a running number (one counter for hearing and delivery). A report that never arrives
+# shows up in Core as a hole in the numbering, and Core then drops any waiting proposal. A restart starts far away from the old numbers.
+_lopnr = int(time.time()) * 1000
 
 
 def hort_url(rutt: str = "hort") -> str:
@@ -28,16 +32,20 @@ def hort_url(rutt: str = "hort") -> str:
     return (bas[:-4] if bas.endswith("/api") else bas) + "/" + rutt if bas else ""
 
 
-async def skicka(text: str, klient: Optional[httpx.AsyncClient] = None, rutt: str = "hort") -> bool:
+def _kropp(text: str, lopnr: Optional[int]) -> dict:
+    return {"text": text[:2000], **({"lopnr": lopnr} if lopnr is not None else {})}
+
+
+async def skicka(text: str, klient: Optional[httpx.AsyncClient] = None, rutt: str = "hort", lopnr: Optional[int] = None) -> bool:
     url = hort_url(rutt)
     if not url or not text.strip():
         return False
     try:
         if klient is not None:
-            r = await klient.post(url, json={"text": text[:2000]}, headers=ha_api.headers(), timeout=5.0)
+            r = await klient.post(url, json=_kropp(text, lopnr), headers=ha_api.headers(), timeout=5.0)
         else:
             async with httpx.AsyncClient(timeout=5.0) as c:
-                r = await c.post(url, json={"text": text[:2000]}, headers=ha_api.headers())
+                r = await c.post(url, json=_kropp(text, lopnr), headers=ha_api.headers())
         return r.status_code == 200
     except Exception as e:
         logger.warning(f"⚠️ hord: could not report ({type(e).__name__})")
@@ -50,6 +58,9 @@ def rapportera(text: str, rutt: str = "hort") -> None:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return
+    global _lopnr
+    _lopnr += 1
+    nr = _lopnr  # numbered at call time, so the order is the order the frames came in
     forra = list(_uppgifter)
 
     async def kor() -> None:
@@ -58,7 +69,7 @@ def rapportera(text: str, rutt: str = "hort") -> None:
                 await t
             except BaseException:
                 pass
-        await skicka(text, rutt=rutt)
+        await skicka(text, rutt=rutt, lopnr=nr)
 
     t = loop.create_task(kor())
     _uppgifter.add(t)
