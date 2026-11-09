@@ -1511,14 +1511,14 @@ class WebSocketHandler:
                 context_aggregator.user(),
                 TranscriptLogger(capture="user", on_user=hord.rapportera),
                 openai_service,
-                TranscriptLogger(capture="assistant"),
+                TranscriptLogger(capture="assistant", on_assistant=hord.levererat),
                 context_aggregator.assistant(),
             ])
         else:
             pipeline_components.extend([
                 TranscriptLogger(capture="user", on_user=hord.rapportera),
                 openai_service,
-                TranscriptLogger(capture="assistant"),
+                TranscriptLogger(capture="assistant", on_assistant=hord.levererat),
             ])
 
         pipeline_components.append(output_activity_tracker)

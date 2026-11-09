@@ -17,18 +17,19 @@ logger = logging.getLogger(__name__)
 _uppgifter: Set[asyncio.Task] = set()
 
 
-def hort_url() -> str:
-    """`<comms address of the room>/hort` (the `/api` suffix of HA_API_URL is dropped, as for `/fraga`).
-    CORE_HORT_URL overrides it (a test); empty = off."""
-    egen = (os.environ.get("CORE_HORT_URL") or "").strip()
+def hort_url(rutt: str = "hort") -> str:
+    """`<comms address of the room>/<rutt>` (the `/api` suffix of HA_API_URL is dropped, as for `/fraga`).
+    `hort` = what the owner said (STT), `levererat` = what the assistant said back (its spoken text), so Core knows its own
+    question reached the owner before a yes counts. CORE_HORT_URL / CORE_LEVERERAT_URL override (a test); empty = off."""
+    egen = (os.environ.get("CORE_HORT_URL" if rutt == "hort" else "CORE_LEVERERAT_URL") or "").strip()
     if egen:
         return egen
     bas = ha_api.base()
-    return (bas[:-4] if bas.endswith("/api") else bas) + "/hort" if bas else ""
+    return (bas[:-4] if bas.endswith("/api") else bas) + "/" + rutt if bas else ""
 
 
-async def skicka(text: str, klient: Optional[httpx.AsyncClient] = None) -> bool:
-    url = hort_url()
+async def skicka(text: str, klient: Optional[httpx.AsyncClient] = None, rutt: str = "hort") -> bool:
+    url = hort_url(rutt)
     if not url or not text.strip():
         return False
     try:
@@ -43,8 +44,8 @@ async def skicka(text: str, klient: Optional[httpx.AsyncClient] = None) -> bool:
         return False
 
 
-def rapportera(text: str) -> None:
-    """Called for each TranscriptionFrame. Order is kept per call by awaiting inside one chain of tasks."""
+def rapportera(text: str, rutt: str = "hort") -> None:
+    """Called for each TranscriptionFrame (`hort`) and each finished assistant reply (`levererat`). One chain keeps the order."""
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -57,8 +58,13 @@ def rapportera(text: str) -> None:
                 await t
             except BaseException:
                 pass
-        await skicka(text)
+        await skicka(text, rutt=rutt)
 
     t = loop.create_task(kor())
     _uppgifter.add(t)
     t.add_done_callback(_uppgifter.discard)
+
+
+def levererat(text: str) -> None:
+    """What the assistant said to the owner (raawr US-542, Copilot P2)."""
+    rapportera(text, "levererat")

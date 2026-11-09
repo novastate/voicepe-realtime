@@ -63,8 +63,46 @@ class _Ctx:
     async def __aexit__(self, *a): return False
 
 
-def test_transkriptloggern_rapporterar_bara_stt_ramar():
-    from pipecat.frames.frames import TranscriptionFrame, TextFrame
+def _logger(**kw):
+    """A TranscriptLogger whose downstream push is a no-op, so process_frame can be called on its own."""
+    lg = TranscriptLogger(**kw)
+
+    async def _push(frame, direction=None):
+        pass
+
+    lg.push_frame = _push
+    return lg
+
+
+@pytest.mark.asyncio
+async def test_transkriptloggern_anropar_hord_for_stt_text_och_for_inget_annat(monkeypatch):
+    from pipecat.frames.frames import TextFrame, TranscriptionFrame
+    from pipecat.processors.frame_processor import FrameDirection
+    skickat = []
+    monkeypatch.setattr(hord, "rapportera", lambda t, rutt="hort": skickat.append((rutt, t)))
+    lg = _logger(capture="user", on_user=hord.rapportera)
+    await lg.process_frame(TranscriptionFrame(text="ja gör det", user_id="u", timestamp="t"), FrameDirection.UPSTREAM)
+    await lg.process_frame(TextFrame(text="modellens egen text"), FrameDirection.DOWNSTREAM)
+    await lg.process_frame(TranscriptionFrame(text="   ", user_id="u", timestamp="t"), FrameDirection.UPSTREAM)
+    assert skickat == [("hort", "ja gör det")]
+
+
+@pytest.mark.asyncio
+async def test_transkriptloggern_rapporterar_assistentens_uttalade_svar_som_levererat(monkeypatch):
+    from pipecat.frames.frames import LLMFullResponseEndFrame, TTSTextFrame
+    from pipecat.processors.frame_processor import FrameDirection
+    skickat = []
+    monkeypatch.setattr(hord, "rapportera", lambda t, rutt="hort": skickat.append((rutt, t)))
+    lg = _logger(capture="assistant", on_assistant=hord.levererat)
+    for bit in ("Ska jag ta bort ", "Tandläkare?"):
+        await lg.process_frame(TTSTextFrame(text=bit, aggregated_by="sentence"), FrameDirection.DOWNSTREAM)
+    await lg.process_frame(LLMFullResponseEndFrame(), FrameDirection.DOWNSTREAM)
+    assert skickat == [("levererat", "Ska jag ta bort Tandläkare?")]
+
+
+def test_websocket_handler_kopplar_bada_riktningarna():
+    """The wiring itself: both taps carry their callback (the mutant below removes one)."""
     import inspect
-    k = inspect.getsource(TranscriptLogger.process_frame)
-    assert "TranscriptionFrame" in k and "_on_user" in k and "TextFrame(" not in k
+    from app import websocket_handler
+    k = inspect.getsource(websocket_handler)
+    assert k.count("on_user=hord.rapportera") == 2 and k.count("on_assistant=hord.levererat") == 2
