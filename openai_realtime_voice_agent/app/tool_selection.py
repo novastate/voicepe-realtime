@@ -68,3 +68,14 @@ def shown(name: str, allow=()) -> bool:
     if allow and name not in allow and base not in allow:
         return False
     return base not in deny()
+
+
+# raawr US-542 (Henrik 2026-11-09): HA's calendar scripts change or delete a post with no yes-gate. The model never gets them,
+# whatever TOOL_DENY or the allow-list says. Calendar changes go through comms' own `kalender_andra`, where the owner's yes
+# must be heard by the code (the door's tool is bare `kalender_andra` and comes in `dorr_namn`).
+_KALENDER_SKRIPT = ("kalender_andra", "kalender_ta_bort")
+
+
+def kalender_skript(name: str, dorr_namn=frozenset()) -> bool:
+    """True for an HA calendar script that writes: never offered, never registered."""
+    return name not in dorr_namn and name.rsplit("__", 1)[-1].lower() in _KALENDER_SKRIPT

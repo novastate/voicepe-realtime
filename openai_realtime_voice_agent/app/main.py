@@ -1278,6 +1278,8 @@ class Application:
         dorr_namn = getattr(mcp_tools_schema, "dorr_namn", frozenset())
         for function_schema in mcp_tools_schema.standard_tools:
             name = function_schema.name
+            if tool_selection.kalender_skript(name, dorr_namn):  # raawr US-542: no calendar write past comms
+                continue
             # Allow/deny for what the model is offered: app/tool_selection.py.
             if not tool_selection.shown(name, self.mcp_tool_allowlist):
                 continue
@@ -1325,7 +1327,9 @@ class Application:
         synliga = []
         dolda = 0
         for function_schema in mcp_tools_schema.standard_tools:
-            if tool_selection.shown(function_schema.name, self.mcp_tool_allowlist):
+            if tool_selection.kalender_skript(function_schema.name, getattr(mcp_tools_schema, "dorr_namn", frozenset())):
+                dolda += 1  # raawr US-542
+            elif tool_selection.shown(function_schema.name, self.mcp_tool_allowlist):
                 synliga.append(function_schema)
             else:
                 dolda += 1

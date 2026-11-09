@@ -33,12 +33,17 @@ it never transforms or drops a frame. (Listed for removal under CLAUDE.md
 roadmap #5 once the system is stable.)
 """
 import logging
+import time
 
 from pipecat.frames.frames import (
     Frame,
     TTSTextFrame,
     LLMTextFrame,
     LLMFullResponseEndFrame,
+    LLMFullResponseStartFrame,
+    BotStartedSpeakingFrame,
+    BotStoppedSpeakingFrame,
+    StartInterruptionFrame,
     TranscriptionFrame,
 )
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
@@ -54,10 +59,27 @@ class TranscriptLogger(FrameProcessor):
             the LLM), "user" (TranscriptionFrame, place BEFORE the LLM), or "both".
     """
 
-    def __init__(self, capture: str = "both", **kwargs):
+    def __init__(self, capture: str = "both", on_user=None, on_assistant=None, **kwargs):
         super().__init__(**kwargs)
         self._capture = capture
+        self._on_user = on_user
+        self._on_assistant = on_assistant  # raawr US-542: what the speech-to-text heard goes to Comms/Core, never what the model wrote
         self._assistant_buf: list[str] = []
+        self._osaker = False  # earlier audio may still report its end: the next BotStopped cannot be attributed to a waiting reply
+        self._segment = False  # between BotStartedSpeaking and BotStoppedSpeaking: a BotStopped outside a segment is a stray or duplicate
+        self._hord_efter_start = False  # a speech segment began after the current reply started
+        self._levererat = False  # a delivery was reported and no new reply has started since
+        self._nu = time.monotonic  # the clock (a test replaces it)
+        self._segment_t0 = 0.0  # when the open speech segment began
+        self._kö: list[str] = []  # raawr US-542: finished replies (text, "" for audio without words) waiting for their audio to end
+
+    def _rapportera(self, text: str) -> None:
+        if self._on_assistant is None:
+            return
+        try:
+            self._on_assistant(text)
+        except Exception as e:  # reporting must never stop the audio
+            logger.warning(f"⚠️ levererat: {type(e).__name__}")
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -66,7 +88,26 @@ class TranscriptLogger(FrameProcessor):
             # Accumulate the reply text chunks (audio modality -> TTSTextFrame;
             # text modality -> LLMTextFrame), then log once per response on the
             # End bracket so it's one readable line instead of one per chunk.
-            if isinstance(frame, (TTSTextFrame, LLMTextFrame)):
+            if isinstance(frame, StartInterruptionFrame):
+                # raawr US-542 (Codex P2): the owner cut the speech off, also AFTER the text was finished. Nothing waiting is delivered.
+                # If audio was playing, its end may still be reported: that BotStopped must not be credited to a later reply, and
+                # an interruption never clears that suspicion by itself.
+                self._assistant_buf = []
+                self._kö = []
+                self._osaker = self._osaker or self._segment
+                self._hord_efter_start = False
+            elif isinstance(frame, LLMFullResponseStartFrame):
+                # A new reply begins. Any delivery already reported is revoked at once (Core drops its waiting proposal): the
+                # question is no longer the last thing the owner was told. Earlier audio may still end later, so a waiting
+                # reply or an open speech segment makes the next BotStopped unattributable (fail-closed).
+                if self._levererat:
+                    self._levererat = False
+                    self._rapportera("(nytt svar påbörjas)")
+                if self._kö or self._segment:
+                    self._osaker = True
+                self._kö = []
+                self._hord_efter_start = False
+            elif isinstance(frame, (TTSTextFrame, LLMTextFrame)):
                 if frame.text:
                     self._assistant_buf.append(frame.text)
             elif isinstance(frame, LLMFullResponseEndFrame):
@@ -74,11 +115,45 @@ class TranscriptLogger(FrameProcessor):
                 self._assistant_buf = []
                 if text:
                     logger.info(f"🤖 assistant: {text}")
+                self._kö.append(text)  # also "" : a reply with audio but no words is still a delivered segment
+            elif isinstance(frame, BotStartedSpeakingFrame):
+                if not self._segment:
+                    self._segment_t0 = self._nu()
+                self._segment = True
+                self._hord_efter_start = True
+            elif isinstance(frame, BotStoppedSpeakingFrame):
+                # Delivered means HEARD. Only a stop that closes an open speech segment counts (a stray or duplicate stop does
+                # not), it must not be a stop the interruption or an earlier reply still owes (_osaker), and exactly ONE finished
+                # reply must wait whose reply started before this segment.
+                if not self._segment:
+                    return await self.push_frame(frame, direction)
+                if not self._osaker and len(self._kö) == 1 and self._hord_efter_start:
+                    # Codex runda 9: a duplicate stop of an EARLIER reply can arrive while this reply is already playing. Pipecat gives
+                    # no reply id, so plausibility decides: a stop sooner after the segment began than the reply's text could have
+                    # been spoken (0.03 s per character, at least 0.6 s) is a stray. It is ignored and the segment stays open.
+                    if self._nu() - self._segment_t0 < max(0.6, 0.03 * len(self._kö[0])):
+                        return await self.push_frame(frame, direction)
+                self._segment = False
+                if self._osaker:
+                    # The stop an interrupted or earlier reply still owed: it ends THAT audio. The reply waiting now is untouched.
+                    self._osaker = False
+                    self._hord_efter_start = False
+                    return await self.push_frame(frame, direction)
+                kö, self._kö = self._kö, []
+                if len(kö) == 1 and self._hord_efter_start:
+                    self._levererat = True
+                    self._rapportera(kö[0] or "(ljud utan text)")
+                self._hord_efter_start = False
 
         if self._capture in ("user", "both"):
             if isinstance(frame, TranscriptionFrame):
                 text = (frame.text or "").strip()
                 if text:
                     logger.info(f"🗣️ user: {text}")
+                    if self._on_user is not None:
+                        try:
+                            self._on_user(text)
+                        except Exception as e:  # reporting must never stop the audio
+                            logger.warning(f"⚠️ hord: {type(e).__name__}")
 
         await self.push_frame(frame, direction)
