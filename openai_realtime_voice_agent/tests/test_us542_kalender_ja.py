@@ -210,6 +210,7 @@ async def test_ett_svar_utan_ord_men_med_ljud_rapporteras_som_segment(monkeypatc
     monkeypatch.setattr(hord, "rapportera", lambda t, rutt="hort": skickat.append((rutt, t)))
     lg = _logger(capture="assistant", on_assistant=hord.levererat)
     await _svar(lg, "")
+    await lg.process_frame(_ram("BotStartedSpeakingFrame")(), FrameDirection.UPSTREAM)
     await lg.process_frame(_ram("BotStoppedSpeakingFrame")(), FrameDirection.UPSTREAM)
     assert skickat == [("levererat", "(ljud utan text)")]
 
@@ -252,3 +253,66 @@ async def test_en_rapport_som_inte_kom_fram_syns_som_hal_i_numreringen(monkeypat
     hord.rapportera("ja")
     await asyncio.gather(*list(hord._uppgifter))
     assert len(nummer) == 2 and nummer[1] == nummer[0] + 2
+
+
+async def _f(lg, namn, riktning="UPSTREAM", **kw):
+    from pipecat.processors.frame_processor import FrameDirection
+    await lg.process_frame(_ram(namn)(**kw), getattr(FrameDirection, riktning))
+
+
+def _lg(monkeypatch):
+    skickat = []
+    monkeypatch.setattr(hord, "rapportera", lambda t, rutt="hort": skickat.append((rutt, t)))
+    return _logger(capture="assistant", on_assistant=hord.levererat), skickat
+
+
+@pytest.mark.asyncio
+async def test_ny_replik_efter_levererad_kalenderfraga_aterkallar_leveransen(monkeypatch):
+    """Codex P2: calendar question + End + BotStopped is reported; the assistant then says 'Vill du ha kaffe?'. A revoking report goes to Core
+    the moment the new reply starts, so the owner's 'ja' to the coffee question cannot release the calendar change."""
+    lg, skickat = _lg(monkeypatch)
+    await _svar(lg, "Förslag K1: Ska jag ta bort Tandläkare?")
+    await _f(lg, "BotStartedSpeakingFrame"); await _f(lg, "BotStoppedSpeakingFrame")
+    assert skickat == [("levererat", "Förslag K1: Ska jag ta bort Tandläkare?")]
+    await _f(lg, "LLMFullResponseStartFrame", "DOWNSTREAM")  # the coffee reply begins
+    assert skickat[-1] == ("levererat", "(nytt svar påbörjas)")
+
+
+@pytest.mark.asyncio
+async def test_sent_botstopped_fran_avbrutet_svar_krediteras_inte_nasta_svar(monkeypatch):
+    """Codex P2: reply A is interrupted, calendar question B + End is queued, A's late BotStopped arrives while B waits.
+    B must not be reported as delivered by A's stop; B's own stop afterwards delivers it."""
+    lg, skickat = _lg(monkeypatch)
+    await _f(lg, "LLMFullResponseStartFrame", "DOWNSTREAM")
+    await _f(lg, "BotStartedSpeakingFrame")                      # A is playing
+    await _f(lg, "StartInterruptionFrame", "DOWNSTREAM")          # A is interrupted
+    await _svar(lg, "Förslag K1: Ska jag ta bort Tandläkare?")    # B queued
+    await _f(lg, "BotStoppedSpeakingFrame")                      # A's late stop
+    assert skickat == []
+    await _f(lg, "BotStartedSpeakingFrame"); await _f(lg, "BotStoppedSpeakingFrame")  # B's own
+    assert skickat == [("levererat", "Förslag K1: Ska jag ta bort Tandläkare?")]
+
+
+@pytest.mark.asyncio
+async def test_dubbelt_botstopped_fran_forra_svaret_krediteras_inte_nasta(monkeypatch):
+    """Codex P2: A + its stop, B + End queued, a DUPLICATE stop for A arrives: it closes no open segment, so B is not delivered by it."""
+    lg, skickat = _lg(monkeypatch)
+    await _svar(lg, "Hej.")
+    await _f(lg, "BotStartedSpeakingFrame"); await _f(lg, "BotStoppedSpeakingFrame")
+    await _svar(lg, "Förslag K2: Ska jag ändra Tandläkare?")
+    await _f(lg, "BotStoppedSpeakingFrame")  # duplicate stop of A
+    assert ("levererat", "Förslag K2: Ska jag ändra Tandläkare?") not in skickat
+    await _f(lg, "BotStartedSpeakingFrame"); await _f(lg, "BotStoppedSpeakingFrame")
+    assert skickat[-1] == ("levererat", "Förslag K2: Ska jag ändra Tandläkare?")
+
+
+@pytest.mark.asyncio
+async def test_ny_avbrott_nollstaller_inte_misstanken_om_sent_stopp(monkeypatch):
+    """Codex P2: a second interruption must not clear the suspicion that A's stop is still owed."""
+    lg, skickat = _lg(monkeypatch)
+    await _f(lg, "BotStartedSpeakingFrame")
+    await _f(lg, "StartInterruptionFrame", "DOWNSTREAM")
+    await _f(lg, "StartInterruptionFrame", "DOWNSTREAM")
+    await _svar(lg, "Förslag K3: Ska jag ta bort Tandläkare?")
+    await _f(lg, "BotStoppedSpeakingFrame")  # A's late stop
+    assert skickat == []
