@@ -125,6 +125,8 @@ async def test_avbruten_uppläsning_rapporteras_inte_som_levererad(monkeypatch):
     await lg.process_frame(StartInterruptionFrame(), FrameDirection.DOWNSTREAM)  # ägaren avbryter mitt i meningen
     await lg.process_frame(LLMFullResponseEndFrame(), FrameDirection.DOWNSTREAM)
     await lg.process_frame(BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+    await lg.process_frame(_ram("BotStartedSpeakingFrame")(), FrameDirection.UPSTREAM)  # later, unrelated speech
+    await lg.process_frame(BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
     assert not any("Tand" in t for _, t in skickat)  # the cut-off question is never reported
 
 
@@ -142,6 +144,8 @@ async def test_avbrott_efter_att_texten_blev_klar_men_under_uppspelning_ger_inge
     await lg.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
     await lg.process_frame(StartInterruptionFrame(), FrameDirection.DOWNSTREAM)    # the owner barges in
     await lg.process_frame(TranscriptionFrame(text="ja", user_id="u", timestamp="t"), FrameDirection.UPSTREAM)
+    await lg.process_frame(BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+    await lg.process_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)  # later, unrelated speech
     await lg.process_frame(BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
     assert skickat == [("hort", "ja")]  # the yes is heard, the question is never reported as delivered
 
