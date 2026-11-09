@@ -209,3 +209,18 @@ async def test_ett_svar_utan_ord_men_med_ljud_rapporteras_som_segment(monkeypatc
     await _svar(lg, "")
     await lg.process_frame(_ram("BotStoppedSpeakingFrame")(), FrameDirection.UPSTREAM)
     assert skickat == [("levererat", "(ljud utan text)")]
+
+
+@pytest.mark.asyncio
+async def test_tva_slutade_svar_utan_start_emellan_ger_ingen_leverans(monkeypatch):
+    """Two finished replies queued with no Start frame between them: one BotStopped cannot be attributed to the last one."""
+    from pipecat.frames.frames import LLMFullResponseEndFrame, TTSTextFrame
+    from pipecat.processors.frame_processor import FrameDirection
+    skickat = []
+    monkeypatch.setattr(hord, "rapportera", lambda t, rutt="hort": skickat.append((rutt, t)))
+    lg = _logger(capture="assistant", on_assistant=hord.levererat)
+    for text in ("Vill du ha kaffe?", "Ska jag ta bort Tandläkare?"):
+        await lg.process_frame(TTSTextFrame(text=text, aggregated_by="sentence"), FrameDirection.DOWNSTREAM)
+        await lg.process_frame(LLMFullResponseEndFrame(), FrameDirection.DOWNSTREAM)
+    await lg.process_frame(_ram("BotStoppedSpeakingFrame")(), FrameDirection.UPSTREAM)
+    assert skickat == []
