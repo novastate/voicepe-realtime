@@ -1,0 +1,4 @@
+{"id": "sp1", "wav": "/root/q/sport/sp1.wav", "text": "När spelar Brynäs?", "vantat": ["fraga_core"], "max_ord": 35}
+{"id": "sp2", "wav": "/root/q/sport/sp2.wav", "text": "Vilka NHL-matcher går i kväll?", "vantat": ["fraga_core"], "max_ord": 60}
+{"id": "sp3", "wav": "/root/q/sport/sp3.wav", "text": "Hur ser SHL-tabellen ut?", "vantat": ["fraga_core"], "max_ord": 60}
+{"id": "sp4", "wav": "/root/q/sport/sp4.wav", "text": "Vad blev det i Allsvenskan idag?", "vantat": ["fraga_core"], "max_ord": 60}

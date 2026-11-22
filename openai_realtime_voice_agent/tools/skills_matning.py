@@ -3,7 +3,10 @@
 Runs the satellite stand-in once per question and rep against one agent instance and reads that instance's
 journal: time to first sound (tools/forstaljud.py's split), the tools the model called (for `anvand_verktyg`,
 the comms tool it named), what Björn said, and whether that was right by the question's key
-(`fragor.jsonl`: {"id", "wav", "vantat": [tool names, "-" = no tool is right too], "ord": [words, one must be said]}).
+(`fragor.jsonl`: {"id", "wav", "vantat": [tool names, "-" = no tool is right too], "ord": [words, one must be said],
+"max_ord": longest answer in words}). US-907: per turn the words and sentences Björn said (`💬 Björn sa:` lines only), and
+a turn is wrong when the answer is over `max_ord`, a list of times, has a sign that is not speech (@ * # |), is cut at
+400 characters, or was not measured (sound but no `💬 Björn sa:` line).
 
     python tools/skills_matning.py fragor.jsonl --vag b --url ws://127.0.0.1:18080/ --unit prov-skills-b \
         --reps 2 --ut b.jsonl
@@ -28,6 +31,12 @@ from forstaljud import PY, dela  # noqa: E402
 ANROP = re.compile(r"Calling function \[([^:\]]+)[^\]]*\] with arguments (\{.*\})")
 TID = re.compile(r"⏱ tool (\S+) (\d+) (\S+)")
 SA = re.compile(r"(?:🤖 assistant|💬 Björn sa): (.*)")
+# US-907: length and form are measured from this line only. `🤖 assistant:` repeats the same answer without a cap, and an
+# interrupted answer (`💬 Björn sa (avbruten, ...):`) does not match.
+BJORN_SA = re.compile(r"💬 Björn sa: (.*)")
+KLOCKSLAG = re.compile(r"(?<![\d.:])(?:[01]?\d|2[0-3])[:.][0-5]\d(?![\d])")
+OTALAT = "@*#|"
+TAK = 400  # app/providers/gemini_live.py cuts the journal line at 400 characters
 
 
 def anropade(rader: list[str]) -> list[str]:
@@ -75,6 +84,36 @@ def ratt(fraga: dict, verktyg: list[str], sagt: str) -> bool:
     return verktyg_ok and (not ord or any(o in sagt.lower() for o in ord))
 
 
+def mat_tur(rader: list[str]) -> dict:
+    """Length and form of what Björn said in one turn, from the `💬 Björn sa:` lines only (US-907)."""
+    texter = [m.group(1).strip() for r in rader if (m := BJORN_SA.search(r))]
+    text = " ".join(texter)
+    meningar = [d for d in re.split(r"(?<=[.?!])(?:\s+|$)", text) if d.strip()]
+    return {"matt": bool(text.strip()), "ord": len(text.split()), "meningar": len(meningar),
+            "upprakning": len(KLOCKSLAG.findall(text)) > 3, "otalat": [c for c in OTALAT if c in text],
+            "avhugget": any(len(t) >= TAK for t in texter)}
+
+
+def bedom(fraga: dict, verktyg: list[str], rader: list[str], svarsljud: bool = True) -> tuple[bool, list[str]]:
+    """(right, reasons). Tool and key-word judgement is `ratt`, unchanged; length and form are added as reasons."""
+    sagt = " ".join(m.group(1).strip() for r in rader if (m := SA.search(r)))
+    m = mat_tur(rader)
+    skal = []
+    if not ratt(fraga, verktyg, sagt):
+        skal.append("fel verktyg eller nyckelord")
+    if svarsljud and not m["matt"]:
+        skal.append("ej mätt")
+    if m["avhugget"]:
+        skal.append("avhugget")
+    if m["avhugget"] or (fraga.get("max_ord") is not None and m["ord"] > fraga["max_ord"]):
+        skal.append(f"för långt ({m['ord']} ord" + (f", gräns {fraga['max_ord']}" if fraga.get("max_ord") is not None else "") + ")")
+    if m["upprakning"]:
+        skal.append("uppräkning")
+    if m["otalat"]:
+        skal.append("otalat tecken (" + " ".join(m["otalat"]) + ")")
+    return not skal, skal
+
+
 def kor(fraga: dict, a) -> dict:
     t0 = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
     attrapp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "satellit_attrapp.py")
@@ -94,7 +133,9 @@ def kor(fraga: dict, a) -> dict:
            "sagt": sagt[:400]}
     if "forsta_svarsljud" not in h:
         return {**rad, "fel": "inget svarsljud", "ratt": False}
-    return {**rad, **dela(h, rader), "ratt": ratt(fraga, verktyg, sagt)}
+    mat = mat_tur(rader)
+    ok, skal = bedom(fraga, verktyg, rader, True)
+    return {**rad, **dela(h, rader), "ord": mat["ord"], "meningar": mat["meningar"], "skal": skal, "ratt": ok}
 
 
 def p95(v: list[float]) -> float:
