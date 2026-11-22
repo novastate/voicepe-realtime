@@ -89,7 +89,7 @@ def mat_tur(rader: list[str]) -> dict:
     texter = [m.group(1).strip() for r in rader if (m := BJORN_SA.search(r))]
     text = " ".join(texter)
     meningar = [d for d in re.split(r"(?<=[.?!])(?:\s+|$)", text) if d.strip()]
-    return {"matt": bool(texter), "ord": len(text.split()), "meningar": len(meningar),
+    return {"matt": bool(text.strip()), "ord": len(text.split()), "meningar": len(meningar),
             "upprakning": len(KLOCKSLAG.findall(text)) > 3, "otalat": [c for c in OTALAT if c in text],
             "avhugget": any(len(t) >= TAK for t in texter)}
 

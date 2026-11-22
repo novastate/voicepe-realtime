@@ -83,6 +83,9 @@ def test_ac4a_avhugget_svar_ar_for_langt_utan_max_ord():
 def test_ac4b_svarsljud_utan_bjorn_sa_ar_ej_matt():
     ratt, skal = _tur([_asst("Brynäs spelar i kväll.")], {"id": "x", "vantat": ["fraga_core"], "max_ord": 60})
     assert not ratt and "ej mätt" in skal
+    # an empty `💬 Björn sa:` line is not a measurement either (zero words must never pass as an answer)
+    ratt, skal = _tur([_sa("")], {"id": "x", "vantat": ["fraga_core"], "max_ord": 60})
+    assert not ratt and "ej mätt" in skal
     # an interrupted answer is not measured either
     ratt, skal = _tur([f"{PRE}💬 Björn sa (avbruten, 3 s): Brynäs"], {"id": "x", "vantat": ["fraga_core"]})
     assert not ratt and "ej mätt" in skal
@@ -95,9 +98,9 @@ def test_ac5_gamla_fragor_doms_som_forut():
         for verktyg in (list(f["vantat"][:1]), [], ["HassTurnOn"], ["las_skill:x"]):
             for sagt in ("", "Det är 12 grader ute.", "Ja, det är tänt.", "Nej."):
                 verktyg = [v for v in verktyg if v != "-"]
-                rader = [_sa(sagt), _asst(sagt)] if sagt else [_sa("")]
                 if not sagt:
                     continue
+                rader = [_sa(sagt), _asst(sagt)]
                 ratt, skal = sm.bedom(f, verktyg, rader, True)
                 assert ratt == _ratt_fore(f, verktyg, sagt), (f["id"], verktyg, sagt)
 
