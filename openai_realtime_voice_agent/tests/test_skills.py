@@ -300,3 +300,46 @@ def test_US_098_kitet_nar_aldrig_en_lampa_utanfor_kontoret(monkeypatch):
     assert ljus_lage.main() == 0
     assert sorted(anrop) == [("intent__HassTurnOff", "Fönster"), ("intent__HassTurnOn", "Tak")]  # the office only
     assert ljus_lage.ar_kontor("light.kontor_fonster") and not any(ljus_lage.ar_kontor(e) for e in ("light.vardagsrum", "light.kok", "light.hall", "switch.kontor_x"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lage", ["b", "c"])
+async def test_klockan_nu_finns_i_skilllaget_och_ar_lokal(monkeypatch, lage):
+    """Step 3 AC: the clock tool is in the list in mode c (and b), registered, and needs no network."""
+    _, service = await _connect(_app(monkeypatch, lage))
+    assert "klockan_nu" in set(_tool_names(service))
+    assert skills.behall("klockan_nu")
+
+
+def test_klockan_nu_svarar_i_svensk_tid():
+    from datetime import datetime, timezone
+
+    from app import klockan
+
+    # 2026-11-26 23:30 UTC is 00:30 on Friday the 27th in Stockholm (CET, UTC+1)
+    ut = klockan.klockan_nu(datetime(2026, 11, 26, 23, 30, tzinfo=timezone.utc))
+    assert ut["tid"] == "00:30" and ut["veckodag"] == "fredag" and ut["datum"] == "27 november 2026"
+    assert ut["tidszon"] == "Europe/Stockholm"
+    assert ut["iso"].endswith("+01:00")
+    sommar = klockan.klockan_nu(datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc))
+    assert sommar["tid"] == "12:00" and sommar["iso"].endswith("+02:00")
+
+
+def test_klockan_nu_gor_inget_natverksanrop(monkeypatch):
+    import socket
+
+    from app import klockan
+
+    def forbjudet(*a, **k):
+        raise AssertionError("the clock must not open a socket")
+
+    monkeypatch.setattr(socket, "socket", forbjudet)
+    assert klockan.klockan_nu()["tid"]
+
+
+def test_prompten_pekar_pa_klockan_nu_och_en_hjarna_skickar_inte_tiden_till_core():
+    from app import core_strom, idag
+
+    assert "klockan_nu" in core_strom.EN_HJARNA_TILLAGG
+    assert "fakta, tider" not in core_strom.EN_HJARNA_TILLAGG
+    assert "aldrig via fraga_core" in core_strom.EN_HJARNA_TILLAGG

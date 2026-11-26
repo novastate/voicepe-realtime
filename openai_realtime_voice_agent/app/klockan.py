@@ -127,3 +127,36 @@ def alla_delar(nu: Optional[datetime] = None) -> list[str]:
             sett.add(text)
             ordning.append(text)
     return ordning
+
+
+# --- klockan_nu: the clock as a tool (voice, no network road) -------------------------------------------
+_VECKODAGAR = ("måndag", "tisdag", "onsdag", "torsdag", "fredag", "lördag", "söndag")
+_MANADER = ("januari", "februari", "mars", "april", "maj", "juni", "juli", "augusti", "september", "oktober",
+            "november", "december")
+
+
+def klockan_nu(nu: Optional[datetime] = None) -> dict:
+    """Now in Europe/Stockholm, read from the agent's own clock. No call leaves the process."""
+    nu = nu.astimezone(TZ) if nu is not None else datetime.now(TZ)
+    return {
+        "tid": f"{nu:%H:%M}",
+        "veckodag": _VECKODAGAR[nu.weekday()],
+        "datum": f"{nu.day} {_MANADER[nu.month - 1]} {nu.year}",
+        "iso": nu.isoformat(timespec="seconds"),
+        "tidszon": "Europe/Stockholm",
+    }
+
+
+def get_klockan_tool_definition() -> dict:
+    return {"type": "function", "name": "klockan_nu",
+            "description": ("The time and date right now (Swedish time). Call it FIRST for any question about "
+                            "what time or date it is, which weekday it is, or how long until something today. "
+                            "Local and instant: never ask fraga_core for the time."),
+            "parameters": {"type": "object", "properties": {}}}
+
+
+def register_klockan_tool(llm) -> None:
+    async def _nu(params) -> None:
+        await params.result_callback(klockan_nu())
+
+    llm.register_function("klockan_nu", _nu)

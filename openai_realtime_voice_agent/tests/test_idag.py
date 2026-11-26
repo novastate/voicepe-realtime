@@ -240,3 +240,10 @@ async def test_us488_kommer_tillbaka():
     idag._call = _idag()._call
     await idag.refresh(LATER)
     assert "Väder (SMHI)" in idag.block(LATER)
+
+
+def test_klockfragan_pekar_pa_klockan_nu_inte_getdatetime():
+    from app import idag
+
+    src = open(idag.__file__, encoding="utf-8").read()
+    assert "kör klockan_nu först" in src and "kör GetDateTime" not in src

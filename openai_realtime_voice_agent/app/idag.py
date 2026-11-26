@@ -171,7 +171,7 @@ class Idag:
             "Vädret och kalendern ovan svarar du på direkt, utan verktyg. "
             "Annat väder, andra dagar eller detaljer: använd verktygen. "
             "Klockan ovan gäller bara när samtalet öppnades: frågar någon vad klockan eller datumet är nu, "
-            "kör GetDateTime först. Tider för matcher, resultat, öppettider, priser och nyheter gissar du aldrig: "
+            "kör klockan_nu först. Tider för matcher, resultat, öppettider, priser och nyheter gissar du aldrig: "
             "sök först med webbsökningen, och säg om du inte hittar det."
         )
         return "\n\n" + "\n".join(lines)

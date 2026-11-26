@@ -27,7 +27,7 @@ META = frozenset({"las_skill", "anvand_verktyg"})
 HETA = frozenset({"hus_lage", "styr"})
 # The speaker's own skills: they act on this speaker or this conversation, so they stay here (D-27 point 5).
 EGNA = frozenset({"request_follow_up", "mark_false_wake", "voice_enrollment", "set_timer", "cancel_timer",
-                  "list_timers",
+                  "list_timers", "klockan_nu",  # the clock is read locally: no road out, never via fraga_core
                   "fraga_core"})  # US-229: the only road to a fact question under EN_HJARNA; it is in the list only then
 # What comms' door listed live 2026-10-16 (journal, Kontor). With ROST_SKILLS off the session keeps exactly these
 # from the door: the door is growing with Grok's tools (raawr US-083..094), and each one the speaker is handed on

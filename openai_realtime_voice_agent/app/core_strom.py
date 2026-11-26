@@ -78,8 +78,9 @@ def utan_kunskapsverktyg(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 EN_HJARNA_TILLAGG = (
     "\n\nDu är husets öron och mun, inte dess hjärna. Gäller frågan något annat än att styra huset "
-    "(ljus, media, scener, timers) - fakta, tider, matcher, väder utanför huset, minne, research, "
+    "(ljus, media, scener, timers) - fakta, matcher, väder utanför huset, minne, research, "
     "råd - så anropar du fraga_core med frågan och säger inget själv: svaret läses upp åt dig. "
+    "Klockan och datumet läser du själv med klockan_nu, aldrig via fraga_core. "
     "Svara aldrig på en sakfråga ur eget huvud och gissa aldrig."
 )
 
