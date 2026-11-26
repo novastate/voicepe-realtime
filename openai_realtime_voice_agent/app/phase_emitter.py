@@ -399,6 +399,9 @@ class PhaseEmitter(FrameProcessor):
         """The device's wake word: a turn boundary, and nobody has spoken yet."""
         self.note_wake()
         self._talat_sedan_vakning = False
+        # The device left idle when it woke (its ring turns): what we last sent no longer holds, so a later
+        # idle must not be deduped away (kitchen 2026-11-26: wake without speech, ring spun 71 s).
+        self._current = None
 
     def set_kill_window_handlers(self, on_dangling=None, on_real_speech=None) -> None:
         """Wire the dangling-VAD guard to the websocket_handler kill-window."""

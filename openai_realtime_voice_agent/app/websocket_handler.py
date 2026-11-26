@@ -957,7 +957,12 @@ class ConnectionRecovery(FrameProcessor):
                     await self._maskin.sov(self._service, "maximum session length")
                 elif self._vakning_utan_tal(time.monotonic()):
                     # Stuck in listening or replying must not keep the engine
-                    # awake: nobody has spoken since this wake.
+                    # awake: nobody has spoken since this wake. The device waits for idle
+                    # to put its ring out; sova() sends no phase.
+                    try:
+                        await self._go_idle("wake without speech")
+                    except Exception as e:
+                        logger.warning(f"⚠️ idle after a wake without speech failed: {e!r}")
                     await self._maskin.sov(self._service, f"wake without speech for {self.VAKNA_TIMEOUT_S:.0f}s")
                 elif self._tyst_nog(time.monotonic()):
                     await self._maskin.sov(self._service, f"quiet for {sov_efter_s():.0f}s")

@@ -81,6 +81,12 @@ def _recovery(service, phase="idle"):
 
     p = Phase()
     p.phase = phase
+    p.idle_skickade = []
+
+    async def force_idle(reason=""):
+        p.idle_skickade.append(reason)
+
+    p.force_idle = force_idle
     r = ConnectionRecovery(service, phase_emitter=p, provider=XAI)
     return r
 
@@ -419,6 +425,33 @@ async def test_vakning_utan_tal_somnar_aven_om_fasen_fastnat():
     r._last_input_audio = now  # mic open, nobody spoke
     await _kor_sovloopen(r)
     assert s.sover is True and s.calls == ["ner"]
+    assert r._phase_emitter.idle_skickade == ["wake without speech"]  # the device is told, too
+
+
+@pytest.mark.asyncio
+async def test_idle_skickas_efter_vakning_utan_tal_aven_nar_fasen_redan_var_idle():
+    """Step 2 AC (kitchen 2026-11-26): the last reply left `_current` at idle, the wake sent nothing, and the
+    dedupe swallowed the idle that would put the ring out. With the real emitter the wake clears it."""
+    from app.phase_emitter import PhaseEmitter
+
+    skickade = []
+
+    async def send(v):
+        skickade.append(v)
+
+    pe = PhaseEmitter(send)
+    await pe._emit("idle")
+    assert skickade == ["idle"]
+    s = Fake()
+    s.sover = False
+    r = ConnectionRecovery(s, phase_emitter=pe, provider=XAI)
+    pe.note_device_wake()  # the wake word: the device leaves idle
+    pe._speech_since_wake = False
+    now = time.monotonic()
+    r._last_wake = now - (r.VAKNA_TIMEOUT_S + 1)
+    r._last_input_audio = now
+    await _kor_sovloopen(r)
+    assert s.sover is True and skickade == ["idle", "idle"]
 
 
 @pytest.mark.asyncio
