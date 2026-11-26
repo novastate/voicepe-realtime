@@ -362,9 +362,33 @@ def test_steg4_ingen_skrivande_eller_las_verktyg_smyger_in_med_hus_oversikt(monk
         assert not skills.behall(namn)
 
 
-def test_steg4_prompten_skickar_huslaget_till_hus_oversikt_inte_fraga_core():
+def test_steg4_prompten_hanvisar_till_hus_oversikt_bara_i_lage_c(monkeypatch):
     from app import core_strom
 
-    t = core_strom.EN_HJARNA_TILLAGG
-    assert "hus_oversikt" in t and "hus_lage" in t
-    assert "aldrig via fraga_core" in t.split("hus_oversikt", 1)[1]
+    monkeypatch.setenv("EN_HJARNA", "1")
+    monkeypatch.setenv("CORE_STROM_URL", "http://core.invalid/x")
+    assert core_strom.en_hjarna_aktiv()
+    assert "hus_oversikt" not in core_strom.EN_HJARNA_TILLAGG  # the base text is unchanged for every mode
+    for lage, har in (("c", True), ("b", False), ("", False)):
+        app = _app(monkeypatch, lage)
+        text = app._instructions("office")
+        assert core_strom.EN_HJARNA_TILLAGG in text
+        assert ("hus_oversikt" in text) is har, lage
+        if har:
+            assert "aldrig via fraga_core" in text.split("hus_oversikt", 1)[1]
+
+
+def test_steg4_kontrakt_comms_tabell_ger_rost_agare_hus_oversikt_men_inte_andra():
+    """Reads Comms' real tool table (raawr verktyg-tabell.json); skipped only when the raawr checkout is missing."""
+    import json
+    import os
+
+    sokvag = os.environ.get("RAAWR_VERKTYG_TABELL", "/root/repos/raawr/Backend/Comms/src/__tests__/verktyg-tabell.json")
+    if not os.path.exists(sokvag):
+        pytest.skip("raawr verktyg-tabell.json saknas")
+    rost = json.load(open(sokvag))["kanaler"]["rost"]
+    assert "hus_oversikt" in rost["agare"] and "hus_lage" in rost["agare"]
+    for roll in ("vuxen", "barn", "agent", "okand"):
+        assert "hus_oversikt" not in rost.get(roll, []), roll
+    if "gast" in rost:
+        assert "hus_oversikt" not in rost["gast"]

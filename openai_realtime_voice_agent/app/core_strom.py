@@ -81,9 +81,13 @@ EN_HJARNA_TILLAGG = (
     "(ljus, media, scener, timers) - fakta, matcher, väder utanför huset, minne, research, "
     "råd - så anropar du fraga_core med frågan och säger inget själv: svaret läses upp åt dig. "
     "Klockan och datumet läser du själv med klockan_nu, aldrig via fraga_core. "
-    "Husets läge (hur är läget hemma, är något på, temperaturer, lampor) läser du själv med hus_oversikt "
-    "eller hus_lage och sammanfattar i två meningar, aldrig via fraga_core. "
     "Svara aldrig på en sakfråga ur eget huvud och gissa aldrig."
+)
+
+# Added only when the session actually carries hus_oversikt/hus_lage (ROST_SKILLS=c); otherwise the old road stays.
+HUS_TILLAGG = (
+    "\n\nHusets läge (hur är läget hemma, är något på, temperaturer, lampor) läser du själv med hus_oversikt "
+    "eller hus_lage och sammanfattar i två meningar, aldrig via fraga_core."
 )
 
 
