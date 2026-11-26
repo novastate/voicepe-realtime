@@ -24,7 +24,7 @@ def _app(monkeypatch, lage, katalog=KATALOG):
     monkeypatch.setattr(skills.Katalog, "_hamta", hamta)
     app = _bare_app("openai")
     app.mcp_client = _Klient(_schema("HassTurnOn", "GetLiveContext"))
-    app.dorr_client = _Klient(_schema("las_skill", "anvand_verktyg", "hus_lage", "styr", "lage_drift"))
+    app.dorr_client = _Klient(_schema("las_skill", "anvand_verktyg", "hus_lage", "hus_oversikt", "styr", "lage_drift"))
     return app
 
 
@@ -343,3 +343,28 @@ def test_prompten_pekar_pa_klockan_nu_och_en_hjarna_skickar_inte_tiden_till_core
     assert "klockan_nu" in core_strom.EN_HJARNA_TILLAGG
     assert "fakta, tider" not in core_strom.EN_HJARNA_TILLAGG
     assert "aldrig via fraga_core" in core_strom.EN_HJARNA_TILLAGG
+
+
+@pytest.mark.asyncio
+async def test_steg4_hus_oversikt_behalls_i_lage_c_men_inte_i_b(monkeypatch):
+    """Step 4 AC: the house overview tool stays on the session in mode c (not in b), read-only and from the door."""
+    _, service = await _connect(_app(monkeypatch, "c"))
+    assert "hus_oversikt" in set(_tool_names(service))
+    assert skills.behall("hus_oversikt") and skills.behall("rost__hus_oversikt")
+    _, service_b = await _connect(_app(monkeypatch, "b"))
+    assert "hus_oversikt" not in set(_tool_names(service_b))
+
+
+def test_steg4_ingen_skrivande_eller_las_verktyg_smyger_in_med_hus_oversikt(monkeypatch):
+    monkeypatch.setenv("ROST_SKILLS", "c")
+    assert skills.HETA == frozenset({"hus_lage", "hus_oversikt", "styr"})
+    for namn in ("lage_drift", "hus_historik", "hus_handelser", "kamera_stillbild", "protect_handelser"):
+        assert not skills.behall(namn)
+
+
+def test_steg4_prompten_skickar_huslaget_till_hus_oversikt_inte_fraga_core():
+    from app import core_strom
+
+    t = core_strom.EN_HJARNA_TILLAGG
+    assert "hus_oversikt" in t and "hus_lage" in t
+    assert "aldrig via fraga_core" in t.split("hus_oversikt", 1)[1]

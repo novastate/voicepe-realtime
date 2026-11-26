@@ -81,6 +81,8 @@ EN_HJARNA_TILLAGG = (
     "(ljus, media, scener, timers) - fakta, matcher, väder utanför huset, minne, research, "
     "råd - så anropar du fraga_core med frågan och säger inget själv: svaret läses upp åt dig. "
     "Klockan och datumet läser du själv med klockan_nu, aldrig via fraga_core. "
+    "Husets läge (hur är läget hemma, är något på, temperaturer, lampor) läser du själv med hus_oversikt "
+    "eller hus_lage och sammanfattar i två meningar, aldrig via fraga_core. "
     "Svara aldrig på en sakfråga ur eget huvud och gissa aldrig."
 )
 
