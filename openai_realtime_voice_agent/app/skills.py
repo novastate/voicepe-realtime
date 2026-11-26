@@ -5,7 +5,7 @@ ROST_SKILLS on the session carries a fixed few: comms' `las_skill` and `anvand_v
 the speaker's own skills, which act on the speaker itself and not on the house. Everything about the house goes
 through `anvand_verktyg`, and its locks (lock, alarm, garage, the rules per channel) sit in comms, never here.
 
-ROST_SKILLS: empty/`av` = today's tools; `b` = only the two meta tools; `c` = the two plus `hus_lage` and
+ROST_SKILLS: empty/`av` = today's tools; `b` = only the two meta tools; `c` = the two plus `hus_lage`, `hus_oversikt` and
 `styr` directly (the measurement of US-098 picks b or c). The catalogue (`<room's comms>/skills`, one line per
 skill) is fetched when a session is built and goes last in the instruction; when it cannot be had, the last good
 one is used, else one sentence that the house cannot be reached right now.
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 TIMEOUT_S = 1.0  # a hung catalogue costs one session build this much
 META = frozenset({"las_skill", "anvand_verktyg"})
-HETA = frozenset({"hus_lage", "styr"})
+HETA = frozenset({"hus_lage", "hus_oversikt", "styr"})  # hus_oversikt (raawr US-490): read-only, owner-only at the door
 # The speaker's own skills: they act on this speaker or this conversation, so they stay here (D-27 point 5).
 EGNA = frozenset({"request_follow_up", "mark_false_wake", "voice_enrollment", "set_timer", "cancel_timer",
                   "list_timers", "klockan_nu",  # the clock is read locally: no road out, never via fraga_core

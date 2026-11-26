@@ -84,6 +84,12 @@ EN_HJARNA_TILLAGG = (
     "Svara aldrig på en sakfråga ur eget huvud och gissa aldrig."
 )
 
+# Added only when the session actually carries hus_oversikt/hus_lage (ROST_SKILLS=c); otherwise the old road stays.
+HUS_TILLAGG = (
+    "\n\nHusets läge (hur är läget hemma, är något på, temperaturer, lampor) läser du själv med hus_oversikt "
+    "eller hus_lage och sammanfattar i två meningar, aldrig via fraga_core."
+)
+
 
 class Meningsdelare:
     """Tokens in, whole sentences out. `mata()` gives the sentences that are complete now,
