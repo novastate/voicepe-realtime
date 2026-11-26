@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 # thinking and affective dialog.
 DEFAULT_MODEL = "models/gemini-3.1-flash-live-preview"
 DEFAULT_VOICE = "Charon"
+EGEN_MATNING_S = 0.4  # an interrupt this soon after our own mata_text is the feeding, not somebody speaking
 
 # Falls back here if the configured language string isn't a Language member.
 # Swedish because that's the house this add-on runs in.
@@ -774,6 +775,12 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         """serverContent.interrupted: the engine heard speech over its reply and stopped. pipecat 0.0.97 does nothing
         with that message, so the reply's queued audio (the engine sends about four times faster than it is played)
         would play on. Drop it here, and tell the device: "listening" makes it flush its own buffer."""
+        self.turer_avbrutna += 1
+        if (time.monotonic() - self._mata_t < EGEN_MATNING_S
+                and not getattr(self._fas_vad, "_speaking", False)):
+            # Our own feeding of the next sentence made the engine start a new turn: nobody spoke.
+            logger.info("🔊 avbruten, egen matning: the queue is kept")
+            return
         logger.info("🔊 interrupted by the engine: it heard speech over his reply")
         self._logg_avbruten_text("motorn")
         self._genererar = False
@@ -947,11 +954,14 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
     # event a fed text waits on for its first sound (core_strom.LiveMatare).
     ljud_s = 0.0
     turer_klara = 0
+    turer_avbrutna = 0  # turns the engine interrupted (counted as finished in turer_klara, but cut)
+    _mata_t = 0.0       # when mata_text last fed text: an interrupt right after is our own doing
     _forsta_ljud: Optional[asyncio.Event] = None
 
     async def mata_text(self, text: str) -> None:
         """Feed `text` to the connected session as a message to answer (a Core sentence to read aloud)."""
         self._forsta_ljud = asyncio.Event()
+        self._mata_t = time.monotonic()
         await self._send_activity(text=text)
 
     async def vanta_forsta_ljud(self, timeout: float) -> bool:

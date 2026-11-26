@@ -274,20 +274,105 @@ def _matare(motor, klocka):
 
 
 @pytest.mark.asyncio
-async def test_forskottet_ar_konstant_for_varje_mening_inte_vaxande():
-    """B on #38: each sentence goes in 1.5 s before the previous one's REAL end (cumulative), however many."""
+async def test_mening_tva_skickas_inte_for_turn_complete_och_resten_gar_som_ett_block():
+    """Step 1 AC: sentence 2 waits for the turn_complete of the fed turn; what collected goes as ONE block."""
     k = Klocka()
     m = Motor(k)
     lm = _matare(m, k)
-    meningar = [f"Det här är mening nummer {i} och den är lång nog." for i in range(6)]
-    for x in meningar:
+    await lm.mata("Första meningen är lång nog att läsas upp helt.")
+    assert len(m.texter) == 1  # the first goes at once
+    for x in ["Andra meningen kommer medan den första läses.", "Tredje meningen kommer också innan tur ett är slut."]:
+        k.t += 1.0
         await lm.mata(x)
-    langd = [len(x) / core_strom.CHARS_PER_S for x in meningar]
-    slut = m.tider[0] + 0.7 + langd[0]  # the real end of sentence 0 (first sound + its length)
-    for i in range(1, 6):
-        assert abs((slut - m.tider[i]) - 1.5) < 0.05, i  # 1.5 s ahead of the end, every time
-        slut += langd[i]
-    assert m.vantat == 1  # sound is awaited for the first sentence only
+    assert len(m.texter) == 1  # nothing went in: the first turn has not ended
+    m.tur_klar()
+    k.t += 0.2
+    await lm.mata("Fjärde meningen kommer efter turn_complete.")
+    assert len(m.texter) == 2  # one block with all three
+    assert all(t in m.texter[1] for t in ("Andra", "Tredje", "Fjärde"))
+
+
+@pytest.mark.asyncio
+async def test_utebliven_turn_complete_taket_tar_over():
+    """Step 1 AC: with no turn_complete the estimated end plus the margin lets the text through."""
+    k = Klocka()
+    m = Motor(k)
+    lm = _matare(m, k)
+    await lm.mata("Första meningen är lång nog att läsas upp helt.")
+    await lm.mata("Andra meningen väntar.")
+    assert len(m.texter) == 1
+    k.t = lm.berakat_slut + core_strom.EFTERSLUT_S + 0.1
+    await lm.mata("Tredje meningen.")
+    assert len(m.texter) == 2 and "Andra" in m.texter[1] and "Tredje" in m.texter[1]
+
+
+@pytest.mark.asyncio
+async def test_slut_vantar_pa_turn_complete_innan_blocket_skickas():
+    k = Klocka()
+    m = Motor(k)
+    lm = _matare(m, k)
+    await lm.mata("Första meningen är lång nog att läsas upp helt.")
+    await lm.mata("Andra meningen väntar på första turen.")
+    sov0 = k.sov
+
+    async def sov(s):
+        await sov0(s)
+        if len(m.texter) == 1 and k.t > 103:  # the first turn ends 3 s on
+            m.tur_klar()
+        elif len(m.texter) == 2 and m.turer_klara == 1:
+            m.tur_klar()
+    lm.sov = sov
+    ut = await lm.slut()
+    assert len(m.texter) == 2 and ut["matade"] == 2 and ut["mojligen_klippt"] is False
+
+
+@pytest.mark.asyncio
+async def test_avbruten_tur_gor_mojligen_klippt_sann():
+    k = Klocka()
+    m = Motor(k)
+    m.turer_avbrutna = 0
+    lm = _matare(m, k)
+    await lm.mata("En mening som är lång nog att läsas upp av Live.")
+    m.tur_klar()
+    m.turer_avbrutna += 1  # the engine cut it, yet it counts as finished
+    ut = await lm.slut()
+    assert ut["turer_klara"] == 1 and ut["avbrutna"] == 1 and ut["mojligen_klippt"] is True
+
+
+@pytest.mark.asyncio
+async def test_avbrott_direkt_efter_egen_matning_tommer_inte_kon_men_riktigt_avbrott_gor():
+    """Step 1 AC: an interrupt <400 ms after mata_text with no local speech keeps the queue; barge-in still drops it."""
+    import time
+    from app.providers.gemini_live import ResilientGeminiLiveService as S
+
+    class Vad:
+        _speaking = False
+
+    class Tjanst:
+        turer_avbrutna, _mata_t, _fas_vad = 0, 0.0, Vad()
+        _motor_avbrott = S._motor_avbrott
+        slappt = 0
+
+        def _logg_avbruten_text(self, v): pass
+        def _stopp_tystnad_slut(self): pass
+        on_motor_avbrott = None
+        _genererar = True
+
+        async def _handle_interruption(self): self.slappt += 1
+
+        async def push_frame(self, f, *a, **k): pass
+
+    t = Tjanst()
+    t._mata_t = time.monotonic()
+    await t._motor_avbrott()
+    assert t.slappt == 0 and t.turer_avbrutna == 1  # own feeding: queue kept, but counted
+    t._mata_t = time.monotonic() - 2.0
+    await t._motor_avbrott()
+    assert t.slappt == 1  # long after the feeding: a real interrupt
+    t._mata_t = time.monotonic()
+    t._fas_vad._speaking = True  # the local detector heard speech: barge-in, always honoured
+    await t._motor_avbrott()
+    assert t.slappt == 2
 
 
 @pytest.mark.asyncio

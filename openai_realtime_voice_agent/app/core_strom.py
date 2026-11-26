@@ -201,7 +201,7 @@ RAMA = ("Läs upp följande rad ord för ord för ägaren, i din vanliga röst. 
 
 
 class LiveMatare:
-    """Feeds one answer's sentences into a Live session with försprång. `motor` is the session:
+    """Feeds one answer's sentences into a Live session, the next one when the previous turn has ended. `motor` is the session:
     `mata_text(text)`, `vanta_forsta_ljud(timeout) -> bool`, `ljud_s` (seconds of speech received so far)
     and `turer_klara` (how many turns have ended)."""
 
@@ -211,12 +211,13 @@ class LiveMatare:
         self.ny_svar()
 
     def ny_svar(self) -> None:
-        self.berakat_slut: Optional[float] = None  # when the sentence being read should end
+        self.berakat_slut: Optional[float] = None  # estimated end of the text fed last: only the time-out cap
         self.skickade = 0
         self.rest: List[str] = []
-        self.block = False  # clipped or silent: from now on the rest goes in one piece
+        self.block = False  # silent: from now on the rest goes in one piece
         self.ljud0 = self.motor.ljud_s
         self.turer0 = self.motor.turer_klara
+        self.avbrutna0 = getattr(self.motor, "turer_avbrutna", 0)
 
     async def _skicka(self, text: str) -> bool:
         forsta = self.skickade == 0
@@ -224,42 +225,49 @@ class LiveMatare:
         # the door locked, not this frame)
         await self.motor.mata_text(RAMA.format(text=text.replace('"' * 3, "'" * 3)))
         self.skickade += 1
-        # Only the first sentence waits for sound: later ones queue behind the one still being read,
-        # so the previous sentence's sound says nothing about this one.
+        # Only the first text waits for sound: later ones go in after a finished turn.
         if forsta and not await self.motor.vanta_forsta_ljud(FORSTA_LJUD_TIMEOUT_S):
             return False
-        # Cumulative end: a queued sentence starts when the one before it ends, not when it was sent.
+        # Cumulative end, used only as the cap when no turn_complete comes.
         self.berakat_slut = max(self.klocka(), self.berakat_slut or 0.0) + len(text) / CHARS_PER_S
         return True
 
-    async def _vanta_till_forskottet(self) -> None:
-        if self.berakat_slut is not None:
-            vanta = self.berakat_slut - self.forskott_s - self.klocka()
-            if vanta > 0:
-                await self.sov(vanta)
+    def _tur_klar(self) -> bool:
+        return self.motor.turer_klara - self.turer0 >= self.skickade
 
-    async def mata(self, mening: str) -> None:
-        if self.block:
-            self.rest.append(mening)
-            return
-        await self._vanta_till_forskottet()
-        if not await self._skicka(mening):
+    def _tak(self) -> bool:
+        """No turn_complete by the estimated end plus the margin: go on as before (Gemini 1007, lost link)."""
+        return self.berakat_slut is not None and self.klocka() >= self.berakat_slut + EFTERSLUT_S
+
+    async def _skicka_rest(self) -> None:
+        text, self.rest = " ".join(self.rest), []
+        if not await self._skicka(text):
             self.block = True
             logger.warning("⚠️ core-ström: no sound after a sentence; the rest goes as one block")
+
+    async def mata(self, mening: str) -> None:
+        """The first sentence goes in at once. Later ones are collected and go in as ONE block when the
+        turn fed before it has ended (turn_complete), so there is one seam per answer, not one per sentence."""
+        self.rest.append(mening)
+        if self.block:
+            return
+        if self.skickade == 0 or self._tur_klar() or self._tak():
+            await self._skicka_rest()
 
     async def slut(self) -> Dict[str, Any]:
         """Send what was held back as one block, wait for the speech to end, and report what it cost."""
         if self.rest:
-            await self._vanta_till_forskottet()
-            await self._skicka(" ".join(self.rest))
-            self.rest = []
+            while not self.block and not self._tur_klar() and not self._tak():
+                await self.sov(0.1)
+            await self._skicka_rest()
         # every fed text should end in one finished turn: wait for the last one's estimated end, plus a margin
         frist = (self.berakat_slut or self.klocka()) + EFTERSLUT_S
         while self.motor.turer_klara - self.turer0 < self.skickade and self.klocka() < frist:
             await self.sov(0.1)
         klart = self.motor.turer_klara - self.turer0
+        avbrutna = getattr(self.motor, "turer_avbrutna", 0) - self.avbrutna0
         return {"live_s": round(self.motor.ljud_s - self.ljud0, 1), "matade": self.skickade, "turer_klara": klart,
-                "mojligen_klippt": klart < self.skickade, "block": self.block}
+                "avbrutna": avbrutna, "mojligen_klippt": klart < self.skickade or avbrutna > 0, "block": self.block}
 
 
 def get_fraga_core_definition() -> dict:
