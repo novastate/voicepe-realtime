@@ -108,6 +108,7 @@ from app.audio_recording_service import AudioRecordingService
 from app.session_manager import SessionManager
 from app.websocket_handler import WebSocketHandler
 from app.speaker_context import SpeakerProbe
+from app.klockan import get_klockan_tool_definition, register_klockan_tool
 from app.timers import TimerRegistry, get_timer_tool_definitions, register_timer_tools
 from app.announce_http import start_announce_server
 from app.bind_host import resolve_bind_host
@@ -1041,6 +1042,7 @@ class Application:
             all_tools.append(get_enrollment_tool_definition())
             all_tools.append(get_false_alarm_tool_definition())
             all_tools.extend(get_timer_tool_definitions())
+            all_tools.append(get_klockan_tool_definition())
             all_tools.extend(get_memory_tool_definitions())
             # Direct OpenClaw escalation (fork): with OPENCLAW_URL set the tool
             # is native (no HA-MCP 60s cap); the same-named MCP tool is skipped
@@ -1183,6 +1185,7 @@ class Application:
                 "request_follow_up", create_follow_up_tool_handler(_note_follow_up)
             )
             register_timer_tools(service, self.timer_registry, connection.device_id)
+            register_klockan_tool(service)
             register_memory_tools(service, _current_speaker_name)
             if core_stream_tala_paa() and strom_url() and hasattr(service, "mata_text"):
                 matare = LiveMatare(service)
