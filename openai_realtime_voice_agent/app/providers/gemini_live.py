@@ -124,6 +124,11 @@ TURN_LOST_LINE = "Tappade tråden mot Google mitt i. Säg det igen."
 # reply with a slow tool (web search) can take 20 s; past this the drop is the
 # idle hang-up this class already forgives quietly.
 TURN_LOST_WINDOW_S = 45.0
+# Parallel tool calls from one toolCall are answered in ONE send_tool_response (Gemini speaks once per response;
+# two responses gave the same sentence twice, kontoret 2026-11-27 15:20). A slow tool may hold the others at most this
+# long from the first finished answer; then what exists is sent and the late ones are dropped with a log line.
+PARALLELL_TAK_S = 6.0
+PARALLELL_RETRY_S = 0.5  # pause before the one retry of a failed grouped send
 
 
 def to_gemini_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1201,6 +1206,10 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         # A new connection cannot wait for answers the old one owed (a cancelled or crashed tool never answers).
         # _handle_connection_error has already read the set by the time pipecat reconnects.
         self._unanswered_tools = set()
+        for grupp in {id(g): g for g in getattr(self, "_parallella", {}).values()}.values():
+            if grupp["tak"] is not None:
+                grupp["tak"].cancel()
+        self._parallella = {}
         await super()._connect(session_resumption_handle)
 
     async def _ateranslut(self, forut: bool) -> None:  # SovlageMixin
@@ -1368,20 +1377,77 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         if not hasattr(self, "_unanswered_tools"):
             self._unanswered_tools = set()
         self._unanswered_tools.update(c.tool_call_id for c in function_calls)
+        if len(function_calls) > 1:
+            grupp = {"vantar": {c.tool_call_id for c in function_calls}, "svar": [], "tak": None}
+            if not hasattr(self, "_parallella"):
+                self._parallella = {}
+            for c in function_calls:
+                self._parallella[c.tool_call_id] = grupp
         return await super().run_function_calls(function_calls)
+
+    async def _skicka_svar(self, svar: list) -> bool:
+        """Send finished tool answers: one FunctionResponse as before, several in one call. True when sent."""
+        if not self._session or self._disconnecting or not svar:
+            return False
+        # Pipecat swallows send failures; only an actual successful send answers the call.
+        try:
+            await self._session.send_tool_response(function_responses=svar[0] if len(svar) == 1 else list(svar))
+        except Exception as error:
+            await self._handle_send_error(error)
+            return False
+        for r in svar:
+            getattr(self, "_unanswered_tools", set()).discard(r.id)
+        self._kedja_t = time.monotonic()   # US-263: the chain's quiet is counted from the result
+        return True
+
+    async def _tom_grupp(self, grupp: dict) -> None:
+        """Send the held answers. They stay in the group until a send succeeds: one retry, then drop and release."""
+        tak, grupp["tak"] = grupp["tak"], None
+        if tak is not None and tak is not asyncio.current_task():
+            tak.cancel()
+        svar = list(grupp["svar"])
+        if not svar:
+            return
+        if not await self._skicka_svar(svar):
+            await asyncio.sleep(PARALLELL_RETRY_S)
+            if not await self._skicka_svar(svar):
+                logger.error(f"❌ parallella verktygssvar kunde inte skickas ({len(svar)} st), släpper dem")
+                for r in svar:  # do not keep the connection busy forever on answers that cannot go
+                    getattr(self, "_unanswered_tools", set()).discard(r.id)
+        grupp["svar"] = []
+
+    async def _grupp_tak(self, grupp: dict) -> None:
+        await asyncio.sleep(PARALLELL_TAK_S)
+        grupp["tak"] = None
+        saknas = set(grupp["vantar"])
+        logger.warning(f"⏱️ parallella verktyg: skickar {len(grupp['svar'])} svar, {len(saknas)} saknas efter {PARALLELL_TAK_S:.0f} s")
+        # What Gemini does with a response for a call from an EARLIER toolCall, sent after it has already answered and
+        # maybe started a new turn, is not defined by pipecat 0.97 (_tool_result just forwards it) and is not measured
+        # live. Better nothing than a strange extra answer: the late ones are dropped (see _tool_result), not sent.
+        grupp["sluppna"] = saknas
+        grupp["vantar"] = set()
+        await self._tom_grupp(grupp)
+        for i in saknas:  # they never block the connection after the cap
+            getattr(self, "_unanswered_tools", set()).discard(i)
 
     async def _tool_result(self, tool_call_id, tool_name, tool_result_message):
         if not self._session or self._disconnecting:
             return
-        # Pipecat swallows send failures; only an actual successful send answers the call.
-        try:
-            await self._session.send_tool_response(function_responses=FunctionResponse(
-                name=tool_name, id=tool_call_id, response=tool_result_message))
-        except Exception as error:
-            await self._handle_send_error(error)
-        else:
+        svar = FunctionResponse(name=tool_name, id=tool_call_id, response=tool_result_message)
+        grupp = getattr(self, "_parallella", {}).pop(tool_call_id, None)
+        if grupp is None:
+            await self._skicka_svar([svar])
+            return
+        if tool_call_id in grupp.get("sluppna", ()):
+            logger.warning(f"⏱️ sent verktygssvar ({tool_name}) efter taket: släpps, skickas inte")
             getattr(self, "_unanswered_tools", set()).discard(tool_call_id)
-            self._kedja_t = time.monotonic()   # US-263: the chain's quiet is counted from the result
+            return
+        grupp["vantar"].discard(tool_call_id)
+        grupp["svar"].append(svar)
+        if not grupp["vantar"]:
+            await self._tom_grupp(grupp)
+        elif grupp["tak"] is None:
+            grupp["tak"] = asyncio.get_running_loop().create_task(self._grupp_tak(grupp))
 
     def _check_and_reset_failure_counter(self):
         # A quiet socket with an unanswered tool is still a busy conversation.
