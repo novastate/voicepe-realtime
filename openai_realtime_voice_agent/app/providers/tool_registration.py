@@ -241,8 +241,18 @@ def ha_misslyckades(result):
 NAMN_OK = re.compile(r"[A-Za-z0-9_]{1,64}")
 
 
+FEL_PREFIX = "Fel ["  # Comms felsvar: "Fel [Comms, okant_verktyg]: ..." (kontoret 2026-11-27: telemetrin sa "ok")
+
+
 def _is_error(result) -> bool:
-    return isinstance(result, dict) and "error" in result
+    if isinstance(result, str):
+        return result.lstrip().startswith(FEL_PREFIX)
+    if not isinstance(result, dict):
+        return False
+    if "error" in result:
+        return True
+    return any(isinstance(result.get(k), str) and result[k].lstrip().startswith(FEL_PREFIX)
+               for k in ("result", "value", "text", "content"))
 
 
 class ToolRegistrationMixin:
