@@ -842,6 +842,9 @@ class ConnectionRecovery(FrameProcessor):
             self._router.note_success(self._provider)
 
     SOV_CHECK_S = 5.0
+    # "Wake without speech" is checked this often, apart from the 5 s sleep rules, so the ring goes
+    # out at most VAKNA_TIMEOUT_S + VAKNA_KOLL_S after the wake (kitchen 2026-11-27: 8.6 s with one 5 s poll).
+    VAKNA_KOLL_S = 1.0
 
     VAKNA_TIMEOUT_S = 5.0
     # Set by serve_connection when this connection replaces one whose engine
@@ -937,21 +940,28 @@ class ConnectionRecovery(FrameProcessor):
 
     async def _sov_loop(self):
         """Put the engine to sleep once the conversation has been quiet long enough."""
+        sist_full = time.monotonic()
         while True:
             try:
-                await asyncio.sleep(self.SOV_CHECK_S)
+                await asyncio.sleep(min(self.SOV_CHECK_S, self.VAKNA_KOLL_S))
                 if self._closed:
                     return
                 if getattr(self._service, "sover", True):
                     continue
-                lopande = getattr(self._service, "bokfor_lopande", None)
-                if lopande is not None:
-                    lopande()
+                # Budget, max length and the quiet rule keep their SOV_CHECK_S rhythm;
+                # only the wake-without-speech check runs every tick.
+                nu = time.monotonic()
+                full = nu - sist_full >= self.SOV_CHECK_S
+                if full:
+                    sist_full = nu
+                    lopande = getattr(self._service, "bokfor_lopande", None)
+                    if lopande is not None:
+                        lopande()
                 from app.providers.sovlage import sov_efter_s
-                if self._service.over_budget():
+                if full and self._service.over_budget():
                     logger.warning("💸 cloud budget for today used — disconnecting now")
                     await self._maskin.sov(self._service, "daily cloud budget used")
-                elif self._service.over_maxtid():
+                elif full and self._service.over_maxtid():
                     # Even mid-sentence: the next wake word connects again.
                     logger.warning("⏱️ cloud session reached its maximum length — disconnecting")
                     await self._maskin.sov(self._service, "maximum session length")
@@ -964,7 +974,7 @@ class ConnectionRecovery(FrameProcessor):
                     except Exception as e:
                         logger.warning(f"⚠️ idle after a wake without speech failed: {e!r}")
                     await self._maskin.sov(self._service, f"wake without speech for {self.VAKNA_TIMEOUT_S:.0f}s")
-                elif self._tyst_nog(time.monotonic()):
+                elif full and self._tyst_nog(time.monotonic()):
                     await self._maskin.sov(self._service, f"quiet for {sov_efter_s():.0f}s")
             except asyncio.CancelledError:
                 raise

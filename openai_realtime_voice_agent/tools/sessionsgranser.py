@@ -19,7 +19,7 @@ import sys
 
 # case prefix -> (reason in the "💤 disconnected" line, seconds allowed after the reference point)
 REGLER = {
-    "A": ("wake without speech", 10.0),   # wake + 5 s limit + 5 s
+    "A": ("wake without speech", 7.0),    # wake + 5 s limit + 1 s poll (VAKNA_KOLL_S) + 1 s margin
     "B": ("quiet for", 35.0),             # last audio + 30 s + 5 s
     "D": (None, 35.0),                    # link drop + 30 s + 5 s, any reason
     "C": ("maximum session length", 605.0),  # connect + 600 s + 5 s

@@ -779,3 +779,82 @@ async def test_loggtaggen_far_minutkoll_att_para_upp_och_nerkoppling(tmp_path, c
     assert len(a._tagg()) == len(b._tagg()) == 11 and a._tagg().startswith("prov ")
     # A fake id() with many hex digits (64-bit addresses) keeps the book name.
     assert re.fullmatch(r"(moln|prov) [0-9a-f]{6}", b._tagg())
+
+
+class _FalskKlocka:
+    """Fake clock: asyncio.sleep advances it at once, so a 10 s worst case runs in milliseconds."""
+
+    def __init__(self):
+        self.t = 1000.0
+
+    def monotonic(self):
+        return self.t
+
+
+def _falsk_klocka(monkeypatch):
+    import types
+    from app import websocket_handler as wh
+
+    klocka = _FalskKlocka()
+    riktig_sleep = asyncio.sleep
+
+    async def sleep(d, *a, **k):
+        klocka.t += d
+        await riktig_sleep(0)
+
+    monkeypatch.setattr(wh, "time", types.SimpleNamespace(monotonic=klocka.monotonic))
+    monkeypatch.setattr(wh.asyncio, "sleep", sleep)
+    return klocka
+
+
+@pytest.mark.asyncio
+async def test_idle_skickas_inom_gransen_plus_1_2_s_efter_vakning_utan_tal(monkeypatch):
+    """Step 2b AC: the loop slept 5 s between checks, so a wake just after one went out up to 10 s later
+    (kitchen 2026-11-27: 8.6 s). The check now has its own tick: idle within VAKNA_TIMEOUT_S + 1.2 s."""
+    klocka = _falsk_klocka(monkeypatch)
+    s = Fake()
+    s.sover = False
+    r = _recovery(s, phase="listening")
+    r._phase_emitter._speech_since_wake = False
+    tider = []
+    force = r._phase_emitter.force_idle
+
+    async def force_idle(reason=""):
+        tider.append(klocka.t)
+        await force(reason)
+
+    r._phase_emitter.force_idle = force_idle
+    r._last_wake = klocka.t + 0.5  # the wake lands just after the first 5 s check would have run
+    r._last_input_audio = r._last_wake
+    task = asyncio.create_task(r._sov_loop())
+    for _ in range(200):
+        if s.calls:
+            break
+        await asyncio.sleep(0)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    assert s.calls == ["ner"]
+    assert tider and tider[0] - r._last_wake <= r.VAKNA_TIMEOUT_S + 1.2
+
+
+@pytest.mark.asyncio
+async def test_tal_efter_vakning_ger_fortfarande_ingen_idle(monkeypatch):
+    klocka = _falsk_klocka(monkeypatch)
+    s = Fake()
+    s.sover = False
+    r = _recovery(s, phase="listening")
+    r._phase_emitter._speech_since_wake = True  # he spoke after the wake
+    r._last_wake = klocka.t + 0.5
+    r._last_input_audio = klocka.t + 2
+    task = asyncio.create_task(r._sov_loop())
+    for _ in range(40):  # ~40 ticks of 1 s: well past the 5 s limit, still inside the 30 s quiet rule
+        await asyncio.sleep(0)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    assert s.calls == [] and r._phase_emitter.idle_skickade == []
