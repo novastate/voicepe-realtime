@@ -126,8 +126,9 @@ TURN_LOST_LINE = "Tappade tråden mot Google mitt i. Säg det igen."
 TURN_LOST_WINDOW_S = 45.0
 # Parallel tool calls from one toolCall are answered in ONE send_tool_response (Gemini speaks once per response;
 # two responses gave the same sentence twice, kontoret 2026-11-27 15:20). A slow tool may hold the others at most this
-# long from the first finished answer; then what exists is sent and the rest follows as its own response.
+# long from the first finished answer; then what exists is sent and the late ones are dropped with a log line.
 PARALLELL_TAK_S = 6.0
+PARALLELL_RETRY_S = 0.5  # pause before the one retry of a failed grouped send
 
 
 def to_gemini_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1384,32 +1385,50 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
                 self._parallella[c.tool_call_id] = grupp
         return await super().run_function_calls(function_calls)
 
-    async def _skicka_svar(self, svar: list) -> None:
-        """Send finished tool answers: one FunctionResponse as before, several in one call."""
+    async def _skicka_svar(self, svar: list) -> bool:
+        """Send finished tool answers: one FunctionResponse as before, several in one call. True when sent."""
         if not self._session or self._disconnecting or not svar:
-            return
+            return False
         # Pipecat swallows send failures; only an actual successful send answers the call.
         try:
             await self._session.send_tool_response(function_responses=svar[0] if len(svar) == 1 else list(svar))
         except Exception as error:
             await self._handle_send_error(error)
-        else:
-            for r in svar:
-                getattr(self, "_unanswered_tools", set()).discard(r.id)
-            self._kedja_t = time.monotonic()   # US-263: the chain's quiet is counted from the result
+            return False
+        for r in svar:
+            getattr(self, "_unanswered_tools", set()).discard(r.id)
+        self._kedja_t = time.monotonic()   # US-263: the chain's quiet is counted from the result
+        return True
 
     async def _tom_grupp(self, grupp: dict) -> None:
+        """Send the held answers. They stay in the group until a send succeeds: one retry, then drop and release."""
         tak, grupp["tak"] = grupp["tak"], None
         if tak is not None and tak is not asyncio.current_task():
             tak.cancel()
-        svar, grupp["svar"] = grupp["svar"], []
-        await self._skicka_svar(svar)
+        svar = list(grupp["svar"])
+        if not svar:
+            return
+        if not await self._skicka_svar(svar):
+            await asyncio.sleep(PARALLELL_RETRY_S)
+            if not await self._skicka_svar(svar):
+                logger.error(f"❌ parallella verktygssvar kunde inte skickas ({len(svar)} st), släpper dem")
+                for r in svar:  # do not keep the connection busy forever on answers that cannot go
+                    getattr(self, "_unanswered_tools", set()).discard(r.id)
+        grupp["svar"] = []
 
     async def _grupp_tak(self, grupp: dict) -> None:
         await asyncio.sleep(PARALLELL_TAK_S)
         grupp["tak"] = None
-        logger.warning(f"⏱️ parallella verktyg: skickar {len(grupp['svar'])} svar, {len(grupp['vantar'])} saknas efter {PARALLELL_TAK_S:.0f} s")
+        saknas = set(grupp["vantar"])
+        logger.warning(f"⏱️ parallella verktyg: skickar {len(grupp['svar'])} svar, {len(saknas)} saknas efter {PARALLELL_TAK_S:.0f} s")
+        # What Gemini does with a response for a call from an EARLIER toolCall, sent after it has already answered and
+        # maybe started a new turn, is not defined by pipecat 0.97 (_tool_result just forwards it) and is not measured
+        # live. Better nothing than a strange extra answer: the late ones are dropped (see _tool_result), not sent.
+        grupp["sluppna"] = saknas
+        grupp["vantar"] = set()
         await self._tom_grupp(grupp)
+        for i in saknas:  # they never block the connection after the cap
+            getattr(self, "_unanswered_tools", set()).discard(i)
 
     async def _tool_result(self, tool_call_id, tool_name, tool_result_message):
         if not self._session or self._disconnecting:
@@ -1418,6 +1437,10 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         grupp = getattr(self, "_parallella", {}).pop(tool_call_id, None)
         if grupp is None:
             await self._skicka_svar([svar])
+            return
+        if tool_call_id in grupp.get("sluppna", ()):
+            logger.warning(f"⏱️ sent verktygssvar ({tool_name}) efter taket: släpps, skickas inte")
+            getattr(self, "_unanswered_tools", set()).discard(tool_call_id)
             return
         grupp["vantar"].discard(tool_call_id)
         grupp["svar"].append(svar)

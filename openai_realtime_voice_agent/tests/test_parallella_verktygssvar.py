@@ -57,17 +57,16 @@ async def test_a_lone_call_is_sent_unchanged(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_a_slow_tool_does_not_block_forever(monkeypatch):
+async def test_a_slow_tool_does_not_block_and_its_late_answer_is_dropped(monkeypatch):
     monkeypatch.setattr(gemini_live, "PARALLELL_TAK_S", 0.05)
     service = await _tjanst(monkeypatch, "a", "b")
     await service._tool_result("a", "snabb", {"ok": 1})
     await asyncio.sleep(0.2)
     skick = _skickade(service)
     assert len(skick) == 1 and _ids(skick[0]) == ["a"]  # the cap sent what existed
-    assert service._unanswered_tools == {"b"}
-    await service._tool_result("b", "langsam", {"ok": 2})  # the rest goes as a new answer
-    skick = _skickade(service)
-    assert len(skick) == 2 and _ids(skick[1]) == ["b"]
+    assert not service._unanswered_tools  # the late one no longer holds the connection
+    await service._tool_result("b", "langsam", {"ok": 2})
+    assert service._session.send_tool_response.await_count == 1  # dropped, not sent as a strange extra answer
     assert not service._unanswered_tools
 
 
@@ -82,13 +81,37 @@ async def test_no_cap_send_after_everything_was_sent(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_failed_send_keeps_all_calls_unanswered(monkeypatch):
+async def test_failed_grouped_send_is_retried_once_and_succeeds(monkeypatch):
+    monkeypatch.setattr(gemini_live, "PARALLELL_RETRY_S", 0.01)
+    service = await _tjanst(monkeypatch, "a", "b")
+    service._session.send_tool_response.side_effect = [RuntimeError("socket closed"), None]
+    service._handle_send_error = AsyncMock()
+    await service._tool_result("a", "x", {})
+    await service._tool_result("b", "y", {})
+    skick = _skickade(service)
+    assert len(skick) == 2 and _ids(skick[0]) == _ids(skick[1]) == ["a", "b"]  # the same answers, not lost
+    assert not service._unanswered_tools
+
+
+@pytest.mark.asyncio
+async def test_grouped_send_failing_twice_is_logged_and_released(monkeypatch):
+    monkeypatch.setattr(gemini_live, "PARALLELL_RETRY_S", 0.01)
     service = await _tjanst(monkeypatch, "a", "b")
     service._session.send_tool_response.side_effect = RuntimeError("socket closed")
     service._handle_send_error = AsyncMock()
     await service._tool_result("a", "x", {})
     await service._tool_result("b", "y", {})
-    assert service._unanswered_tools == {"a", "b"}
+    assert service._session.send_tool_response.await_count == 2
+    assert not service._unanswered_tools  # released, the connection is not held forever
+
+
+@pytest.mark.asyncio
+async def test_failed_single_send_stays_unanswered_as_before(monkeypatch):
+    service = await _tjanst(monkeypatch, "a")
+    service._session.send_tool_response.side_effect = RuntimeError("socket closed")
+    service._handle_send_error = AsyncMock()
+    await service._tool_result("a", "x", {})
+    assert service._unanswered_tools == {"a"}
 
 
 @pytest.mark.asyncio
@@ -103,9 +126,16 @@ async def test_new_connection_drops_held_responses(monkeypatch):
 
 
 def test_fel_text_counts_as_error():
-    assert _is_error("Fel [Comms, okant_verktyg]: Det verktyget finns inte för dig.")
-    assert _is_error({"result": "Fel [Comms, okant_verktyg]: nej"})
+    fel = "Fel [Comms, okand_skill, tillfälligt: nej]: Den skillen finns inte för dig."
+    assert _is_error(fel)
+    assert _is_error({"result": fel})
     assert _is_error({"error": "x"})
+    assert _is_error("Fel [Kalendern, core_nere, tillfälligt: ja]: Kalendern svarar inte just nu.")
+
+
+def test_legit_text_starting_with_fel_is_not_an_error():
+    assert not _is_error("Fel [1] i raden är rättat, notan stämmer.")
+    assert not _is_error("Fel [sic] i originalet, citatet står kvar.")
+    assert not _is_error({"result": "Fel [ i mitten av raden"})
     assert not _is_error("Klart: spelar P3 i Kontor.")
-    assert not _is_error({"result": "Allt är Fel [ i mitten"})
     assert not _is_error({"result": "Klart"})

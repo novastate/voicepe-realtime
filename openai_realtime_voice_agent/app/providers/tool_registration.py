@@ -241,17 +241,19 @@ def ha_misslyckades(result):
 NAMN_OK = re.compile(r"[A-Za-z0-9_]{1,64}")
 
 
-FEL_PREFIX = "Fel ["  # Comms felsvar: "Fel [Comms, okant_verktyg]: ..." (kontoret 2026-11-27: telemetrin sa "ok")
+# Comms felsvar (Backend/Comms/src/fel-led.ts felText): "Fel [<komponent>, <kod>, tillfälligt: ja|nej]: <text>".
+# MCP bär ingen strukturerad felflagga hit, så matchningen är den exakta formen, inte vilken text som helst som börjar med "Fel [".
+FEL_FORM = re.compile(r"Fel \[[^,\]\n]{1,40}, [a-z0-9_]{1,40}(?:, tillfälligt: (?:ja|nej))?\]: ")
 
 
 def _is_error(result) -> bool:
     if isinstance(result, str):
-        return result.lstrip().startswith(FEL_PREFIX)
+        return FEL_FORM.match(result.lstrip()) is not None
     if not isinstance(result, dict):
         return False
     if "error" in result:
         return True
-    return any(isinstance(result.get(k), str) and result[k].lstrip().startswith(FEL_PREFIX)
+    return any(isinstance(result.get(k), str) and FEL_FORM.match(result[k].lstrip()) is not None
                for k in ("result", "value", "text", "content"))
 
 
