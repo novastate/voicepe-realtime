@@ -1,6 +1,7 @@
 name: Test Add-on
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
