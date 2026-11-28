@@ -1424,6 +1424,7 @@ class ResilientGeminiLiveService(SovlageMixin, LocalTurnsMixin, ToolRegistration
         # What Gemini does with a response for a call from an EARLIER toolCall, sent after it has already answered and
         # maybe started a new turn, is not defined by pipecat 0.97 (_tool_result just forwards it) and is not measured
         # live. Better nothing than a strange extra answer: the late ones are dropped (see _tool_result), not sent.
+        # So: answers arriving after PARALLELL_TAK_S (6 s) are lost, with a log line (CHANGELOG, steg 4b).
         grupp["sluppna"] = saknas
         grupp["vantar"] = set()
         await self._tom_grupp(grupp)

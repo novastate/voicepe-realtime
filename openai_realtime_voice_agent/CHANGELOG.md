@@ -4,6 +4,8 @@ All notable changes to this add-on. Newest first.
 
 ## Unreleased (fork)
 
+- **Röst steg 4b (#153):** när modellen ropar på flera verktyg i ett `toolCall` skickas svaren i EN `send_tool_response`, så Gemini svarar en gång (två svar gav samma mening två gånger, kontoret 2026-11-27 15:20). Ett långsamt verktyg håller de andra högst `PARALLELL_TAK_S` (6 s) från första färdiga svaret. Därefter skickas de svar som finns, och ett verktygssvar som kommer EFTER taket **släpps och skickas aldrig**; det loggas som `sent verktygssvar (<verktyg>) efter taket: släpps, skickas inte`. Det är alltså inte ett nytt svar. Vad Gemini gör med ett svar på ett gammalt anrops-id är inte mätt live, så ett verktyg som tar över 6 s kan förlora sitt svar i drift. Prov: `tests/test_parallella_verktygssvar.py`.
+
 - **US-488:** Idag-blocket släpper väder- respektive kalenderraden när uppgiften inte kunnat förnyas på mer än 3 timmar (`IDAG_MAX_AGE_SECONDS`, standard 10800), så modellen tar verktygen i stället för att svara snabbt ur en gammal prognos. Raden kommer tillbaka när en hämtning lyckas. Datumraden och verktygsanvisningen står kvar. Tidpunkten räknas per del från senaste lyckade hämtning (`fetched_at` sätts även vid fel).
 
 - **US-489:** En journalrad per högtalare och timme: `📊 tim kontoret turer=3 utan_ljud=1 median_ms=1200 max_ms=2400 anslutningar=2`, med `tyst` efter 24 timmar i rad utan en enda tur. Bara siffror och enhets-id. Se `app/tim_sammanfattning.py`. Ny kontroll: `journalctl -u raawr-rostagent --since -2h | grep "tim "`.

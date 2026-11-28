@@ -392,3 +392,21 @@ def test_steg4_kontrakt_comms_tabell_ger_rost_agare_hus_oversikt_men_inte_andra(
         assert "hus_oversikt" not in rost.get(roll, []), roll
     if "gast" in rost:
         assert "hus_oversikt" not in rost["gast"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lage", ["b", "c"])
+async def test_klockan_nu_ar_registrerad_pa_tjansten_och_svarar(monkeypatch, lage):
+    """#150 (revision 2026-11-28): the test above reads only the tool LIST, so taking away `register_klockan_tool(service)`
+    left it green. Here the real service must hold a handler under the name, the name must be in EGNA (the real set,
+    not a literal), and the handler must answer with the time."""
+    _, service = await _connect(_app(monkeypatch, lage))
+    assert "klockan_nu" in skills.EGNA
+    handler = service._functions["klockan_nu"].handler  # what pipecat calls when the model asks for the clock
+    svar = []
+
+    async def result_callback(v, *a, **k):
+        svar.append(v)
+
+    await handler(types.SimpleNamespace(result_callback=result_callback))
+    assert svar and svar[0]["tid"]
