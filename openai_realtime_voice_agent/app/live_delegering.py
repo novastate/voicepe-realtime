@@ -42,7 +42,7 @@ def _env_float(name: str, default: float) -> float:
 
 
 DUBBLETT_S = _env_float("LIVE11_DUBBLETT_S", 20.0)   # the same request again this soon is a retry, not a new order
-LANGSAM_S = _env_float("LIVE11_LANGSAM_S", 6.0)       # no result by then: one short spoken progress line
+LANGSAM_S = _env_float("LIVE11_LANGSAM_S", 10.0)      # no result by then: one progress line, only if Live said nothing
 TAK_S = _env_float("LIVE11_BACKEND_TAK_S", 90.0)      # the whole backend answer, at most
 MAX_TECKEN = 1500                                     # what fits well inside one 500-token append
 
@@ -58,6 +58,9 @@ GAMMALT_RAM = ("Svar på en tidigare fråga som användaren sedan har följt upp
 FEL_TEXT = ("Husets backend svarade inte (orsak: {orsak}). Säg kort att du inte fick något svar och påstå inte att "
             "något är gjort. Om användaren bad om en åtgärd: säg att du inte vet om den blev utförd.")
 LANGSAM_TEXT = "Uppgiften tar en stund. Säg en gång, kort, att du återkommer. Påstå inget om resultatet."
+# Live has already said its own acknowledgement: nothing more is said; the silent append also cancels any further
+# automatic acknowledgement (live-delegation: "Any thinking or commentary append cancels all pending acknowledgements").
+PAGAR_TYST = "Uppgiften pågår fortfarande. Säg inget mer om att du kollar; vänta tyst på resultatet."
 OKLAR_TEXT = "Delegeringen saknade en fråga som gick att uppfatta. Be användaren säga det igen, kort."
 DUBBLETT_PAGAR = "Samma uppgift pågår redan. Skicka den inte igen; vänta på resultatet."
 DUBBLETT_KLAR = "Samma uppgift gjordes nyss och ska inte göras igen. Det blev så här:\n\"\"\"\n{text}\n\"\"\""
@@ -148,8 +151,10 @@ class Delegering:
     """Runs client delegations for one Live service. `skicka` sends a client event to the current Live session."""
 
     def __init__(self, skicka: Skicka, backend: Backend = fraga_comms, klocka: Callable[[], float] = time.monotonic,
-                 vakt: Optional[Callable[[str], Optional[str]]] = None, tagg: str = "-"):
+                 vakt: Optional[Callable[[str], Optional[str]]] = None, tagg: str = "-",
+                 talat_sedan: Optional[Callable[[float], bool]] = None):
         self.skicka, self.backend, self.klocka, self.vakt = skicka, backend, klocka, vakt
+        self.talat_sedan = talat_sedan   # t -> True when Live has spoken since monotonic time t (its own ack)
         self.spar = f"📈 live11[{tagg}] delegering"
         self.gen = 0
         self.uppdrag: List[Uppdrag] = []
@@ -188,7 +193,7 @@ class Delegering:
 
     # --- the delegation -----------------------------------------------------------------------------------------------
 
-    async def skapad(self, delegation_id: str, tur_text: str) -> Optional[Uppdrag]:
+    async def skapad(self, delegation_id: str, tur_text: str, kontext: str = "") -> Optional[Uppdrag]:
         """session.delegation.created. `tur_text` is what the user said since the previous delegation."""
         self.kanda_ids.add(delegation_id)
         text = (tur_text or "").strip()
@@ -226,6 +231,12 @@ class Delegering:
                                           DUBBLETT_KLAR.format(text=self._svarstext(gammal)))
                 return None
         fraga = text
+        if kontext:
+            # CTX-01/T03: the backend gets what was just said, so "Fredag" or "Gävle" means something. The TASK is only
+            # the current turn; older questions are context, never repeated as orders (trial 2026-11-28 13:17: weather
+            # and house merged into one request).
+            fraga = (f"Samtalet just före (sammanhang, inte en order):\n{citat(kontext)[-800:]}\n"
+                     f"Aktuell begäran från användaren: {text}")
         senaste = [u for u in pagar if u.status == "pagar"]   # the replaced ones are inside its question already
         if senaste:
             # T10/T20: the newer words are a follow-up or a correction of the running task. The backend gets both, and the
@@ -234,6 +245,8 @@ class Delegering:
             fraga = (f"Sammanhang, inte en order: en tidigare begäran pågår redan i ett eget anrop. Utför ingen åtgärd "
                      f"ur den här raden: {tidigare}\n"
                      f"Användarens nya tillägg eller rättelse, som gäller nu: {text}")
+            if kontext:
+                fraga = f"Samtalet just före (sammanhang, inte en order):\n{citat(kontext)[-800:]}\n" + fraga
         u = Uppdrag(op=next(self._nr), delegation_id=delegation_id, fraga=fraga, gen=self.gen, start_t=nu, text=text)
         for gammal in senaste:
             gammal.status, gammal.ersatt_av = "ersatt", u.op
@@ -321,9 +334,16 @@ class Delegering:
             logger.warning(f"⚠️ live11: result could not be sent to Live ({type(e).__name__}); kept in state")
 
     async def _langsam(self, u: Uppdrag) -> None:
+        """TASK-02: at most ONE filler per delegation. Live's automatic acknowledgement is that filler; ours is said only
+        when Live said nothing at all since the delegation began (trial 2026-11-28: ack + our line = 2-3 fillers)."""
         await asyncio.sleep(LANGSAM_S)
-        if u.status == "pagar":
-            logger.info(f"{self.spar} op={u.op} langsam efter {LANGSAM_S:g} s")
+        if u.status != "pagar":
+            return
+        if self.talat_sedan is not None and self.talat_sedan(u.start_t):
+            logger.info(f"{self.spar} op={u.op} langsam efter {LANGSAM_S:g} s: Live har redan kvitterat, tyst")
+            await self._till_live("session.thinking.append", u, PAGAR_TYST)
+        else:
+            logger.info(f"{self.spar} op={u.op} langsam efter {LANGSAM_S:g} s: en lägesrad")
             await self._till_live("session.commentary.append", u, LANGSAM_TEXT)
 
     def sammanfattning(self, max_n: int = 5) -> str:

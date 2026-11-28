@@ -69,13 +69,49 @@ minnet om familjen, kalendern, väder, nyheter, sport, sökning på nätet och d
 kräver aktuell information, en åtgärd i huset, minne eller analys. Delegera inte enkla samtalsfrågor, småprat eller
 frågor om det som just sagts. Fortsätt lyssna medan arbetet pågår. Ge relevanta uppdateringar och återge verifierade
 resultat. Påstå aldrig att en åtgärd lyckats innan backend har bekräftat det. Skilj på att sluta prata och att
-avbryta en uppgift: ber användaren dig avbryta uppgiften, delegera det. Lås, larm och garage sköter du aldrig själv."""
+avbryta en uppgift: ber användaren dig avbryta uppgiften, delegera det. Lås, larm och garage sköter du aldrig själv.
+Håll isär flera uppgifter: svara på en i taget och blanda inte ihop deras resultat.
+
+Ton: Kort betyder få ord, inte burdus. Svär inte och använd inga grova ord, även om personligheten är rak."""
 
 _SPAR = "📈 live11"
 
 # Listening sounds (T04). They only RAISE how long Live must have been silent before the app drops its own queue; they
 # never cut and never decide a turn: Live does.
 BACKCHANNEL = frozenset({"mm", "mmm", "mhm", "hm", "hmm", "ja", "jaa", "jo", "aa", "a", "okej", "ok", "precis", "japp"})
+
+
+def rost_falt(rost: str):
+    """A built-in voice is its name as a string ("marin"); a saved custom voice (prompt-to-voice) is an object with its
+    id: {"id": "voice_..."} (custom-voices guide; SDK types: Union[str, BuiltInVoice, CustomVoice{id}])."""
+    rost = (rost or "marin").strip()
+    return {"id": rost} if rost.startswith("voice_") else rost.lower()
+
+
+def _rostbeskrivning() -> str:
+    """The custom-voices guide: include the voice's original description in the instructions for its performance."""
+    b = (os.environ.get("OPENAI_LIVE11_VOICE_BESKRIVNING") or "").strip()
+    return f"\n\nRÖST: {b}" if b else ""
+
+
+def _rost_fil() -> str:
+    return os.environ.get("LIVE11_ROST_FIL", "/data/live11_rost_nr.json")
+
+
+def _las_rost_nr() -> int:
+    try:
+        with open(_rost_fil()) as f:
+            return int(json.load(f).get("nr", -1))
+    except Exception:
+        return -1
+
+
+def _skriv_rost_nr(nr: int) -> None:
+    try:
+        with open(_rost_fil(), "w") as f:
+            json.dump({"nr": nr}, f)
+    except Exception as e:
+        logger.debug(f"live11: voice rotation not saved ({e!r})")
 
 
 def re_ord(text: str) -> List[str]:
@@ -129,7 +165,8 @@ class OpenAILive11Service(OpenAILiveService):
         self._spar = f"{_SPAR}[{getattr(options, 'rum', '') or '-'}]"   # one process serves every room: tag the lines
         self._turns = None                      # never local turns: Live hears everything
         self.delegering = Delegering(self._send, vakt=lambda t: self.vakt(t) if self.vakt else None,
-                                     tagg=getattr(options, "rum", "") or "-")
+                                     tagg=getattr(options, "rum", "") or "-",
+                                     talat_sedan=lambda t: getattr(self, "_forra_svar_t", 0.0) > t)
         self.historik: List[Dict[str, str]] = []   # CTX-01: [{"roll", "text", "status"}], newest last
         self._anv: List[tuple] = []             # (start_ms, end_ms, text) user transcript not yet given to a delegation
         self._svarstext_anv = ""                # user words heard after this reply's first sound (interruption evidence)
@@ -157,8 +194,8 @@ class OpenAILive11Service(OpenAILiveService):
         o = self._options
         cfg: Dict[str, Any] = {
             "model": o.model or DEFAULT_MODEL,
-            "instructions": (o.instructions or "") + LIVE11_POLICY,
-            "audio": {"format": {"type": "audio/pcm", "rate": IN_RATE}, "output": {"voice": self._rost()}},
+            "instructions": (o.instructions or "") + LIVE11_POLICY + _rostbeskrivning(),
+            "audio": {"format": {"type": "audio/pcm", "rate": IN_RATE}, "output": {"voice": rost_falt(self._rost())}},
             "delegation": {"type": "client",
                            "acknowledgement_delay_ms": int(_env_float("LIVE11_ACK_MS", 800.0))},
         }
@@ -171,12 +208,18 @@ class OpenAILive11Service(OpenAILiveService):
         """The voice for the session about to start. OPENAI_LIVE11_VOICES="marin,gleam,halo" takes the next one on every
         new session (an A/B by ear in one trial, no restart); otherwise OPENAI_LIVE11_VOICE / the option, else marin.
         The voice cannot change inside a session (SDK: 'cannot change after startup')."""
-        lista = [v.strip().lower() for v in (os.environ.get("OPENAI_LIVE11_VOICES") or "").split(",") if v.strip()]
+        lista = [v.strip() for v in (os.environ.get("OPENAI_LIVE11_VOICES") or "").split(",") if v.strip()]
+        egen = (os.environ.get("OPENAI_LIVE11_VOICE_ID") or "").strip()
         if lista:
-            self._rost_nr = getattr(self, "_rost_nr", -1) + 1
-            rost = lista[self._rost_nr % len(lista)]
+            # The place in the list survives a restart (trial 2026-11-28: two sessions after a restart both got marin).
+            nr = _las_rost_nr() + 1
+            _skriv_rost_nr(nr)
+            rost = lista[nr % len(lista)]
+        elif egen:
+            rost = egen
         else:
-            rost = (self._options.voice or "marin").strip().lower()
+            rost = (self._options.voice or "marin").strip()
+        self.rost = rost
         logger.info(f"{self._spar} röst={rost}")
         return rost
 
@@ -220,7 +263,12 @@ class OpenAILive11Service(OpenAILiveService):
         if typ == "session.started":
             self._session_t0 = time.monotonic()
             self._started.set()
-            logger.info(f"{self._spar} session start gen={self.delegering.gen} seed={len(self._config.get('input') or [])}")
+            sess = ev.get("session") or {}
+            self.session_id = str(sess.get("id") or "-")
+            server_rost = ((sess.get("audio") or {}).get("output") or {}).get("voice")
+            logger.info(f"{self._spar} session start id={self.session_id} modell={sess.get('model') or self._config.get('model')} "
+                        f"röst_begärd={getattr(self, 'rost', '-')} röst_server={json.dumps(server_rost) if server_rost else '-'} "
+                        f"gen={self.delegering.gen} seed={len(self._config.get('input') or [])}")
             await self._slapp_fore_start()
             self._starta_fyllning()
         elif typ == "session.output_audio.delta":
@@ -229,6 +277,7 @@ class OpenAILive11Service(OpenAILiveService):
             d = ev.get("delta") or ""
             if d:
                 self._bjorn += d
+                self._bjorn_ms = (getattr(self, "_bjorn_ms", []) + [int(ev.get("start_ms") or 0)])[-200:]
                 self._svarsprak(d)
                 await self.push_frame(TTSTextFrame(text=d, aggregated_by="sentence"))
         elif typ == "session.input_transcript.delta":
@@ -275,16 +324,26 @@ class OpenAILive11Service(OpenAILiveService):
         # then take the words on the session timeline up to the delegation's offset (both are session ms), so two
         # delegations close together each get their own words (adversarial review 2026-11-28).
         await asyncio.sleep(_env_float("LIVE11_TEXT_VANTA_MS", 400.0) / 1000.0)
-        await self.delegering.skapad(did, self._ta_text(ev.get("offset_ms")))
+        text = self._ta_text(ev.get("offset_ms"))
+        await self.delegering.skapad(did, text, self._kontext())
 
     def _ta_text(self, offset_ms) -> str:
+        """The CURRENT turn: the user's words from Björn's last words before the delegation up to its offset (session ms).
+        Older words are history (context), not part of the task (trial 2026-11-28: weather + house in one request)."""
         if isinstance(offset_ms, int) and any(s_ms or e_ms for s_ms, e_ms, _ in self._anv):
             grans = offset_ms + _env_float("LIVE11_TEXT_SLACK_MS", 500.0)
-            tagna = [x for x in self._anv if x[0] <= grans]
+            fore = [m for m in getattr(self, "_bjorn_ms", []) if m < offset_ms]
+            bjorn_sist = max(fore) if fore else -1
+            tagna = [x for x in self._anv if x[0] <= grans and x[1] > bjorn_sist]
             self._anv = [x for x in self._anv if x[0] > grans]
         else:
             tagna, self._anv = self._anv, []
         return "".join(t for _, _, t in tagna).strip()
+
+    def _kontext(self) -> str:
+        """The last few lines of the dialogue, for the backend (CTX-01: only what is relevant, never the whole log)."""
+        rader = [f"{'Användaren' if h['roll'] == 'user' else 'Björn'}: {h['text'][:200]}" for h in self.historik[-4:]]
+        return "\n".join(rader)
 
     def tur_text(self) -> str:
         return self._anv_tur
@@ -309,6 +368,7 @@ class OpenAILive11Service(OpenAILiveService):
             self._noll_sedan = 0.0
         if pcm and not self._reply_open:
             self._spelstart_t = time.monotonic()
+            logger.info(f"{self._spar} svar start session={getattr(self, 'session_id', '-')} röst={getattr(self, 'rost', '-')}")
             self._svarstext_anv = ""
             if self._anv_tur.strip():
                 self._historik_anv()
@@ -574,7 +634,10 @@ class OpenAILive11Service(OpenAILiveService):
             self._fyll_task.cancel()
             self._fyll_task = None
         self._fore_start = []
-        logger.info(f"{self._spar} sammanfattning {self.matning.rad()} ops={len(self.delegering.uppdrag)}")
+        rad = f"{self.matning.rad()} ops={len(self.delegering.uppdrag)}"
+        if rad != getattr(self, "_senaste_sammanfattning", None):   # stop/cancel/sleep all end here: one line each
+            self._senaste_sammanfattning = rad
+            logger.info(f"{self._spar} sammanfattning {rad}")
         await super()._disconnect()
 
 

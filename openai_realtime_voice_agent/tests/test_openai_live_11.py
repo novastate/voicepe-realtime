@@ -31,6 +31,7 @@ def egna_liggare(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_LIVE_REPLY_GAP_MS", "1500")   # production's value: the interruption runs as on the device
     monkeypatch.setenv("LIVE11_PREBUF_S", "0")
     monkeypatch.setenv("LIVE11_TEXT_VANTA_MS", "20")
+    monkeypatch.setenv("LIVE11_ROST_FIL", str(tmp_path / "rost.json"))
     yield
     openai_live._Las.agare = None
 
@@ -148,6 +149,27 @@ def test_rosten_skickas_i_sessionen_och_kan_roteras_utan_kod(monkeypatch):
     assert s.session_config()["audio"]["output"] == {"voice": "gleam"}
     monkeypatch.setenv("OPENAI_LIVE11_VOICES", "marin, gleam,halo")
     assert [s.session_config()["audio"]["output"]["voice"] for _ in range(4)] == ["marin", "gleam", "halo", "marin"]
+
+
+def test_rotationen_overlever_en_omstart(monkeypatch):
+    """Trial 2026-11-28: a restart between two sessions gave marin both times. The place in the list is kept on disk."""
+    monkeypatch.setenv("OPENAI_LIVE11_VOICES", "marin,gleam,halo")
+    forsta = _service("ws://x").session_config()["audio"]["output"]["voice"]
+    andra = _service("ws://x").session_config()["audio"]["output"]["voice"]   # a new process's service
+    assert (forsta, andra) == ("marin", "gleam")
+
+
+def test_egen_rost_skickas_som_objekt_med_id(monkeypatch):
+    """custom-voices guide: a saved voice is {"id": "voice_..."}; a built-in one is its name. Description in instructions."""
+    monkeypatch.setenv("OPENAI_LIVE11_VOICE_ID", "voice_abc123XYZ")
+    monkeypatch.setenv("OPENAI_LIVE11_VOICE_BESKRIVNING", "Varm, lugn svensk kvinnoröst.")
+    cfg = _service("ws://x").session_config()
+    assert cfg["audio"]["output"] == {"voice": {"id": "voice_abc123XYZ"}}
+    assert cfg["instructions"].endswith("RÖST: Varm, lugn svensk kvinnoröst.")
+    monkeypatch.delenv("OPENAI_LIVE11_VOICE_ID")
+    opts = ProviderOptions(api_key="k", model="", voice="voice_fromenv", instructions="x")
+    assert build_service(OPENAI_LIVE_11, opts, []).session_config()["audio"]["output"] == {"voice": {"id": "voice_fromenv"}}
+    assert openai_live_11.rost_falt("Marin") == "marin"
 
 
 def test_session_start_ar_live_11_med_klientdelegering():
@@ -554,6 +576,72 @@ async def test_delegering_utan_text_ber_om_upprepning():
     d = Delegering(lambda ev: _samla(sent, ev), backend=be)
     assert await d.skapad("d1", "  ") is None
     assert be.fragor == [] and sent[-1]["delegation_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_hogst_en_utfyllnad_nar_live_redan_kvitterat(monkeypatch):
+    """Trial 2026-11-28: Live's own 'Kikar snabbt.' + our progress line = two or three fillers. When Live has spoken
+    since the delegation began, our line is silent (thinking), never spoken."""
+    monkeypatch.setattr(live_delegering, "LANGSAM_S", 0.05)
+    sent = []
+    be = FakeBackend(hall=True)
+    d = Delegering(lambda ev: _samla(sent, ev), backend=be, talat_sedan=lambda t: True)
+    u = await d.skapad("d1", "Hur ser det ut i huset?")
+    await asyncio.sleep(0.15)
+    assert not any(e["type"] == "session.commentary.append" for e in sent)
+    assert [e["content"] for e in sent if e["type"] == "session.thinking.append"] == [live_delegering.PAGAR_TYST]
+    be.slapp.set()
+    await u.task
+    assert [e["type"] for e in sent].count("session.commentary.append") == 1   # only the result
+
+
+def test_lagesraden_kommer_forst_efter_tio_sekunder():
+    assert live_delegering.LANGSAM_S >= 10.0
+
+
+@pytest.mark.asyncio
+async def test_aktuell_tur_ar_uppgiften_och_det_tidigare_ar_sammanhang():
+    """Trial 2026-11-28 13:17: weather questions and 'hur ser det ut i huset' went to Core as ONE request. The task is the
+    turn after Björn's last words; what came before goes as context only."""
+    fake = FakeLive()
+    server, url = await _server(fake)
+    async with server:
+        be = FakeBackend()
+        s = _service(url, be)
+        await s.vakna()
+        await fake.send(type="session.input_transcript.delta", delta="vad blir vädret i morgon", start_ms=100, end_ms=900)
+        await fake.send(type="session.output_audio.delta", delta=_ljud())
+        await fake.send(type="session.output_transcript.delta", delta="Mulet och kallt.", start_ms=1200, end_ms=2000)
+        await fake.send(type="session.input_transcript.delta", delta="hur ser det ut i huset", start_ms=3000, end_ms=3800)
+        await fake.send(type="session.delegation.created", event_id="e", offset_ms=4000,
+                        delegation={"id": "del_h", "target": "client", "type": "delegation"})
+        assert await _vant(lambda: be.fragor)
+        uppgift = be.fragor[0].split("Aktuell begäran från användaren:")[-1]
+        assert uppgift.strip() == "hur ser det ut i huset"
+        assert "vädret" not in uppgift
+        assert s.delegering.uppdrag[-1].text == "hur ser det ut i huset"
+        await s.sova("klar")
+
+
+@pytest.mark.asyncio
+async def test_sessionens_id_och_serverns_rost_loggas(caplog):
+    import logging
+    caplog.set_level(logging.INFO)
+    fake = FakeLive()
+    server, url = await _server(fake)
+    async with server:
+        s = _service(url)
+        await s.vakna()
+        assert await _vant(lambda: "session start id=s1" in caplog.text)
+        assert "röst_begärd=marin" in caplog.text
+        await fake.send(type="session.output_audio.delta", delta=_ljud())
+        assert await _vant(lambda: "svar start session=s1 röst=marin" in caplog.text)
+        await s.sova("klar")
+
+
+def test_policyn_forbjuder_svordomar_och_blandade_uppgifter():
+    pol = openai_live_11.LIVE11_POLICY
+    assert "Svär inte" in pol and "blanda inte ihop" in pol
 
 
 @pytest.mark.asyncio
