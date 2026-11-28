@@ -137,6 +137,9 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
     # Live has no silent context restore and no speaker note (yet).
     _session = None
     _context = None
+    # The first-sound buffer's knob (see _ljud_ut); openai_live_11 keeps its own, smaller one.
+    PREBUF_ENV, PREBUF_DEFAULT = "OPENAI_LIVE_PREBUF_S", 0.7
+    PREBUF_MAX_ENV, PREBUF_MAX_DEFAULT = "OPENAI_LIVE_PREBUF_MAX_S", 1.2
     _needs_turn_complete_message = False
 
     # Bana 0 hooks, same as Gemini (see gemini_live.py).
@@ -405,7 +408,7 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
         if not self._reply_open:
             self._reply_open = True
             self._svar_start_t, self._ljud_bytes = time.monotonic(), 0
-            self._pre, self._pre_s = ([] if _env_float("OPENAI_LIVE_PREBUF_S", 0.7) > 0 else None), 0.0
+            self._pre, self._pre_s = ([] if _env_float(self.PREBUF_ENV, self.PREBUF_DEFAULT) > 0 else None), 0.0
             if self.tider is not None:
                 self.tider.mark("modell")  # the first real sound from the engine
             self.cancel_silence_ack()
@@ -428,13 +431,13 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
             return await self.push_frame(TTSAudioRawFrame(audio=pcm, sample_rate=OUT_RATE, num_channels=1))
         self._pre.append(pcm)
         self._pre_s += len(pcm) / (2.0 * OUT_RATE)
-        if self._pre_s >= _env_float("OPENAI_LIVE_PREBUF_S", 0.7):
+        if self._pre_s >= _env_float(self.PREBUF_ENV, self.PREBUF_DEFAULT):
             await self._slapp_forbuffer()
         elif self._pre_task is None:
             self._pre_task = asyncio.get_running_loop().create_task(self._slapp_forbuffer_senare())
 
     async def _slapp_forbuffer_senare(self) -> None:
-        await asyncio.sleep(_env_float("OPENAI_LIVE_PREBUF_MAX_S", 1.2))
+        await asyncio.sleep(_env_float(self.PREBUF_MAX_ENV, self.PREBUF_MAX_DEFAULT))
         self._pre_task = None
         await self._slapp_forbuffer()
 

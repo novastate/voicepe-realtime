@@ -20,23 +20,26 @@ XAI = "xai"
 # side of every branch below (no raw Realtime events; it sleeps instead of
 # being repaired - providers/openai_live.py).
 OPENAI_LIVE = "openai_live"
-PROVIDERS = (OPENAI, GEMINI, XAI, OPENAI_LIVE)
+# gpt-live-1.1 (branch live-gpt-11, 2026-11-28): native full duplex, Live's own turn-taking, client delegation to
+# Comms/Core. Only when named (VOICE_PROVIDER / VOICE_PROVIDERS / DEVICE_PROVIDERS); nothing else changes.
+OPENAI_LIVE_11 = "openai_live_11"
+PROVIDERS = (OPENAI, GEMINI, XAI, OPENAI_LIVE, OPENAI_LIVE_11)
 
 # What each engine wants the microphone audio to be. The device produces
 # 16 kHz; OpenAI needs it raised, Gemini takes it as it is. Both answer with
 # 24 kHz, which is what the pipeline already plays.
-_INPUT_RATE = {OPENAI: 24000, GEMINI: 16000, XAI: 24000, OPENAI_LIVE: 24000}
+_INPUT_RATE = {OPENAI: 24000, GEMINI: 16000, XAI: 24000, OPENAI_LIVE: 24000, OPENAI_LIVE_11: 24000}
 
 # pipecat's OpenAI Realtime service has no reconnect logic; a dead socket
 # floods ErrorFrames forever. The Gemini service has _reconnect,
 # _handle_connection_error and session resumption, so it repairs itself and
 # ConnectionRecovery must keep its hands off.
-_SELF_HEALS = {OPENAI: False, GEMINI: True, XAI: False, OPENAI_LIVE: True}
+_SELF_HEALS = {OPENAI: False, GEMINI: True, XAI: False, OPENAI_LIVE: True, OPENAI_LIVE_11: True}
 
 # Raw client events are OpenAI Realtime's own protocol. Gemini Live has no
 # equivalent, so anything sent that way reaches one engine and vanishes on the
 # other -- which is how the speaker's name silently stopped reaching the model.
-_CLIENT_EVENTS = {OPENAI: True, GEMINI: False, XAI: True, OPENAI_LIVE: False}
+_CLIENT_EVENTS = {OPENAI: True, GEMINI: False, XAI: True, OPENAI_LIVE: False, OPENAI_LIVE_11: False}
 
 
 @dataclass
@@ -221,6 +224,9 @@ def build_service(provider: str, options: ProviderOptions, tools: List[Dict[str,
     elif provider == OPENAI_LIVE:
         from app.providers import openai_live
         service = openai_live.build(options, tools)
+    elif provider == OPENAI_LIVE_11:
+        from app.providers import openai_live_11
+        service = openai_live_11.build(options, tools)
     else:
         from app.providers import gemini_live
         service = gemini_live.build(options, tools)
