@@ -141,6 +141,15 @@ def test_device_providers_valjer_per_enhet(monkeypatch):
     assert device_provider("koket") == GEMINI
 
 
+def test_rosten_skickas_i_sessionen_och_kan_roteras_utan_kod(monkeypatch):
+    """Henrik 2026-11-28: the voice is chosen by env. OPENAI_LIVE11_VOICES rotates per new session for an A/B."""
+    opts = ProviderOptions(api_key="k", model="", voice="Gleam", instructions="x")
+    s = build_service(OPENAI_LIVE_11, opts, [])
+    assert s.session_config()["audio"]["output"] == {"voice": "gleam"}
+    monkeypatch.setenv("OPENAI_LIVE11_VOICES", "marin, gleam,halo")
+    assert [s.session_config()["audio"]["output"]["voice"] for _ in range(4)] == ["marin", "gleam", "halo", "marin"]
+
+
 def test_session_start_ar_live_11_med_klientdelegering():
     """Contract per the SDK types: model, one audio.format, delegation client, no tools, policies after the persona."""
     s = _service("ws://x")

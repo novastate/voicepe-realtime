@@ -158,7 +158,7 @@ class OpenAILive11Service(OpenAILiveService):
         cfg: Dict[str, Any] = {
             "model": o.model or DEFAULT_MODEL,
             "instructions": (o.instructions or "") + LIVE11_POLICY,
-            "audio": {"format": {"type": "audio/pcm", "rate": IN_RATE}, "output": {"voice": o.voice or "marin"}},
+            "audio": {"format": {"type": "audio/pcm", "rate": IN_RATE}, "output": {"voice": self._rost()}},
             "delegation": {"type": "client",
                            "acknowledgement_delay_ms": int(_env_float("LIVE11_ACK_MS", 800.0))},
         }
@@ -166,6 +166,19 @@ class OpenAILive11Service(OpenAILiveService):
         if seed:
             cfg["input"] = seed
         return cfg
+
+    def _rost(self) -> str:
+        """The voice for the session about to start. OPENAI_LIVE11_VOICES="marin,gleam,halo" takes the next one on every
+        new session (an A/B by ear in one trial, no restart); otherwise OPENAI_LIVE11_VOICE / the option, else marin.
+        The voice cannot change inside a session (SDK: 'cannot change after startup')."""
+        lista = [v.strip().lower() for v in (os.environ.get("OPENAI_LIVE11_VOICES") or "").split(",") if v.strip()]
+        if lista:
+            self._rost_nr = getattr(self, "_rost_nr", -1) + 1
+            rost = lista[self._rost_nr % len(lista)]
+        else:
+            rost = (self._options.voice or "marin").strip().lower()
+        logger.info(f"{self._spar} röst={rost}")
+        return rost
 
     def _seed(self) -> List[Dict[str, Any]]:
         """Recent dialogue and the operations' state, as text history (<= 128 messages, 8192 tokens by default)."""
