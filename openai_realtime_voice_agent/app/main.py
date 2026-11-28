@@ -180,14 +180,14 @@ async def probe_engine(provider: str) -> bool:
     """
     import httpx
 
-    from app.providers import GEMINI, OPENAI, OPENAI_LIVE, XAI
+    from app.providers import GEMINI, OPENAI, OPENAI_LIVE, OPENAI_LIVE_11, XAI
 
     params = None
     if provider == XAI:
         key = (os.environ.get("XAI_API_KEY") or "").strip()
         url = "https://api.x.ai/v1/models"
         headers = {"Authorization": f"Bearer {key}"}
-    elif provider in (OPENAI, OPENAI_LIVE):
+    elif provider in (OPENAI, OPENAI_LIVE, OPENAI_LIVE_11):
         key = (os.environ.get("OPENAI_API_KEY") or "").strip()
         url = "https://api.openai.com/v1/models"
         headers = {"Authorization": f"Bearer {key}"}
@@ -739,6 +739,9 @@ class Application:
         # OpenAI Live (0.28.0, raawr US-025): the same key as OpenAI.
         self.openai_live_model = os.environ.get("OPENAI_LIVE_MODEL", "").strip() or "gpt-live-1"
         self.openai_live_voice = os.environ.get("OPENAI_LIVE_VOICE", "").strip() or "marin"
+        # gpt-live-1.1 prototype (branch live-gpt-11): its own model and voice knobs, the same key.
+        self.openai_live11_model = os.environ.get("OPENAI_LIVE11_MODEL", "").strip() or "gpt-live-1.1"
+        self.openai_live11_voice = os.environ.get("OPENAI_LIVE11_VOICE", "").strip() or self.openai_live_voice
         self.xai_api_key = os.environ.get("XAI_API_KEY", "").strip()
         self.xai_model = os.environ.get("XAI_MODEL", "").strip() or "grok-voice-latest"
         self.xai_voice = os.environ.get("XAI_VOICE", "").strip() or "rex"
@@ -832,8 +835,20 @@ class Application:
             A ProviderOptions. The instructions are the same for both engines,
             memory included -- only the key, model and voice differ.
         """
-        from app.providers import GEMINI, OPENAI_LIVE, XAI, ProviderOptions
+        from app.providers import GEMINI, OPENAI_LIVE, OPENAI_LIVE_11, XAI, ProviderOptions
 
+        if provider == OPENAI_LIVE_11:
+            # Björn's own text (Core's soul, bjorn_karna) + the language rule + today. Not the tool-bound additions
+            # (fraga_core, klockan_nu, memory tools, AVBROTT): Live has no tools here; it delegates to Core, and its
+            # conversation policies are added by the engine (openai_live_11.LIVE11_POLICY).
+            return ProviderOptions(
+                api_key=self.openai_api_key,
+                model=self.openai_live11_model,
+                voice=self.openai_live11_voice,
+                instructions=self.instructions + SPRAKLAS + self.idag.block(),
+                max_output_tokens=self.max_output_tokens,
+                gemini_turn_silence_ms=self.gemini_turn_silence_ms,
+            )
         instructions = self._instructions(rum)
         if provider == OPENAI_LIVE:
             return ProviderOptions(
@@ -1109,7 +1124,7 @@ class Application:
                 except Exception as e:
                     logger.warning(f"⚠️ Idag: no weather/calendar for this session ({e!r})")
                 options = self.provider_options(provider, rum)
-            if connection.ha_verktyg_saknas:
+            if connection.ha_verktyg_saknas and provider != "openai_live_11":   # 1.1 has no HA tools of its own
                 options.instructions += HA_VERKTYG_SAKNAS
             options.rum = rum
             service = build_service(provider, options, all_tools)

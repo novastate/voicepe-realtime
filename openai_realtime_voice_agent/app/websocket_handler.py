@@ -68,6 +68,37 @@ def tur_utan_vackning(sedan_idle_s: float, sedan_vakning_s: float, grans_s: "flo
 TUR_TEXT_VANTA_S = 1.0   # GEMINI_EGEN_TUR: a tool call just after an interruption waits this long for the engine's own text of the turn
 
 
+def koppla_live11(service, connection, phase_emitter, serializer) -> None:
+    """VOICE_PROVIDER=openai_live_11: Live runs the conversation; what stays ours is the same as under GEMINI_EGEN_TUR.
+
+    - The room is not sent when nobody woke him and no reply is recent (silence is sent instead: the stream stays
+      continuous, OPS-01).
+    - The device's phase while he replies, and the interruption mark the echo guard reads.
+    - The echo guard on delegations (TASK-03): a request that sounds like his own last reply, or unclear speech right
+      after an interruption, is not handed to Core (eko_vakt.veto_verktyg, the same rule the tools have elsewhere).
+    """
+    def _vaken() -> bool:
+        sedan_idle = time.monotonic() - phase_emitter.idle_since if getattr(phase_emitter, "idle_since", 0.0) else -1.0
+        rec = getattr(connection, "recovery", None)
+        sedan_vakning = time.monotonic() - rec._last_wake if rec is not None else 0.0
+        return not tur_utan_vackning(sedan_idle, sedan_vakning, None, serializer.sedan_svar())
+
+    def _motor_avbrott() -> None:
+        connection.barge_in_t = time.monotonic()
+        connection.barge_tur = True
+
+    def _vakt(text: str):
+        t = getattr(connection, "barge_in_t", None)
+        hans = next((h["text"] for h in reversed(getattr(service, "historik", [])) if h.get("roll") == "assistant"), "")
+        return eko_vakt.veto_verktyg(phase_emitter.phase, getattr(phase_emitter, "idle_since", 0.0),
+                                     (time.monotonic() - t) if t else None, text, hans)
+
+    service.slapp_ljud = _vaken
+    service.svarar = lambda: phase_emitter.phase == "replying"
+    service.on_motor_avbrott = _motor_avbrott
+    service.vakt = _vakt
+
+
 def koppla_egen_tur(service, connection, phase_emitter, serializer) -> None:
     """GEMINI_EGEN_TUR (the engine runs the turns in this room): what is still ours.
 
@@ -150,7 +181,7 @@ def idle_debounce_for(provider: str) -> float:
             return max(0.0, float(env) / 1000.0)
         except ValueError:
             pass
-    return 1.5 if provider == OPENAI_LIVE else 0.6
+    return 1.5 if provider in (OPENAI_LIVE, "openai_live_11") else 0.6
 
 class SessionActivityTracker(FrameProcessor):
     """Processor that tracks session activity by monitoring audio frames."""
@@ -2164,6 +2195,9 @@ class WebSocketHandler:
             if hasattr(openai_service, "on_user_turn_pre_end"):
                 openai_service.on_user_turn_pre_end = _pre_end
             serializer.is_replying = lambda: phase_emitter.phase == "replying"
+
+        if getattr(openai_service, "live11", False) and serializer is not None:
+            koppla_live11(openai_service, connection, phase_emitter, serializer)
 
         # Google dropped the socket with a turn in flight (1011, 2026-10-02
         # 14:30:47: the wake got nothing back). The engine reconnects on its
