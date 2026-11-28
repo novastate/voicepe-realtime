@@ -858,3 +858,43 @@ async def test_tal_efter_vakning_ger_fortfarande_ingen_idle(monkeypatch):
     except asyncio.CancelledError:
         pass
     assert s.calls == [] and r._phase_emitter.idle_skickade == []
+
+
+# --- the other sleep rules stay on their own time (#152, revision 2026-11-28) ---
+# Wake-without-speech is checked every VAKNA_KOLL_S; budget, max length and the quiet rule only every SOV_CHECK_S.
+
+def _regel(namn, s, r, egen_budget, monkeypatch):
+    now = time.monotonic()
+    if namn == "budget":
+        monkeypatch.setenv("MOLN_MAX_MINUTER_PER_DAG", "1")
+        egen_budget.lagg_till(60)
+        r._last_input_audio = r._last_wake = now  # mid-conversation
+    elif namn == "maxtid":
+        monkeypatch.setenv("VOICE_SESSION_MAX_SECONDS", "60")
+        s._uppkopplad_sedan -= 61
+        r._last_input_audio = r._last_wake = now
+    else:  # tyst
+        monkeypatch.setenv("SOV_EFTER_S", "5")
+        r._last_wake = now - 10
+        r._last_input_audio = now - 8  # he did speak after the wake (else wake-without-speech would be the rule that fires)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("namn", ["budget", "maxtid", "tyst"])
+async def test_ovriga_sovregler_ligger_kvar_pa_sin_takt(namn, egen_budget, monkeypatch):
+    """Budget, max length and the quiet rule must not run on the fast wake-check tick: not before SOV_CHECK_S, and
+    on it. (Mutant: dropping `full and` from the branches made them fire on every wake-check tick.)"""
+    s = Fake()
+    await s.vakna()
+    r = _recovery(s)
+    r.SOV_CHECK_S = 0.4
+    r.VAKNA_KOLL_S = 0.01
+    _regel(namn, s, r, egen_budget, monkeypatch)
+    task = asyncio.create_task(r._sov_loop())
+    try:
+        await asyncio.sleep(0.2)  # many wake-check ticks, no full tick yet
+        assert s.sover is False and s.calls == [("upp", False)], namn
+        await asyncio.sleep(0.5)  # the full tick has come
+        assert s.sover is True and s.calls[-1] == "ner", namn
+    finally:
+        task.cancel()
