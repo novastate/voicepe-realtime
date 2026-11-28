@@ -85,7 +85,15 @@ def rost_falt(rost: str):
     """A built-in voice is its name as a string ("marin"); a saved custom voice (prompt-to-voice) is an object with its
     id: {"id": "voice_..."} (custom-voices guide; SDK types: Union[str, BuiltInVoice, CustomVoice{id}])."""
     rost = (rost or "marin").strip()
-    return {"id": rost} if rost.startswith("voice_") else rost.lower()
+    if egen_rost(rost):
+        return {"id": rost}   # verified by MB on gpt-live-1.1: a bare id string is refused ("Voice session access denied")
+    if rost.lower().startswith("voice_"):
+        logger.warning(f"⚠️ live11: voice {rost!r} looks like an id but does not start with 'voice_': sent as a name")
+    return rost.lower()
+
+
+def egen_rost(rost: str) -> bool:
+    return (rost or "").strip().startswith("voice_")
 
 
 def _rostbeskrivning() -> str:
@@ -106,12 +114,20 @@ def _las_rost_nr() -> int:
         return -1
 
 
+_ROST_MINNE = {"nr": -1}   # the fallback when the file cannot be written: rotation per process, never stuck on one
+
+
+def _las_rost_nr_minne() -> int:
+    return max(_las_rost_nr(), _ROST_MINNE["nr"])
+
+
 def _skriv_rost_nr(nr: int) -> None:
+    _ROST_MINNE["nr"] = nr
     try:
         with open(_rost_fil(), "w") as f:
             json.dump({"nr": nr}, f)
     except Exception as e:
-        logger.debug(f"live11: voice rotation not saved ({e!r})")
+        logger.warning(f"⚠️ live11: voice rotation not saved to {_rost_fil()} ({type(e).__name__}); kept in memory")
 
 
 def re_ord(text: str) -> List[str]:
@@ -166,7 +182,7 @@ class OpenAILive11Service(OpenAILiveService):
         self._turns = None                      # never local turns: Live hears everything
         self.delegering = Delegering(self._send, vakt=lambda t: self.vakt(t) if self.vakt else None,
                                      tagg=getattr(options, "rum", "") or "-",
-                                     talat_sedan=lambda t: getattr(self, "_forra_svar_t", 0.0) > t)
+                                     talat_sedan=lambda t: self._reply_open and self._spelstart_t > t)
         self.historik: List[Dict[str, str]] = []   # CTX-01: [{"roll", "text", "status"}], newest last
         self._anv: List[tuple] = []             # (start_ms, end_ms, text) user transcript not yet given to a delegation
         self._svarstext_anv = ""                # user words heard after this reply's first sound (interruption evidence)
@@ -192,10 +208,11 @@ class OpenAILive11Service(OpenAILiveService):
 
     def session_config(self) -> Dict[str, Any]:
         o = self._options
+        rost = self._rost()   # first: the instructions carry an own voice's description, never a built-in's (review r1)
         cfg: Dict[str, Any] = {
             "model": o.model or DEFAULT_MODEL,
-            "instructions": (o.instructions or "") + LIVE11_POLICY + _rostbeskrivning(),
-            "audio": {"format": {"type": "audio/pcm", "rate": IN_RATE}, "output": {"voice": rost_falt(self._rost())}},
+            "instructions": (o.instructions or "") + LIVE11_POLICY + (_rostbeskrivning() if egen_rost(rost) else ""),
+            "audio": {"format": {"type": "audio/pcm", "rate": IN_RATE}, "output": {"voice": rost_falt(rost)}},
             "delegation": {"type": "client",
                            "acknowledgement_delay_ms": int(_env_float("LIVE11_ACK_MS", 800.0))},
         }
@@ -212,7 +229,7 @@ class OpenAILive11Service(OpenAILiveService):
         egen = (os.environ.get("OPENAI_LIVE11_VOICE_ID") or "").strip()
         if lista:
             # The place in the list survives a restart (trial 2026-11-28: two sessions after a restart both got marin).
-            nr = _las_rost_nr() + 1
+            nr = _las_rost_nr_minne() + 1
             _skriv_rost_nr(nr)
             rost = lista[nr % len(lista)]
         elif egen:
@@ -323,26 +340,45 @@ class OpenAILive11Service(OpenAILiveService):
         # The event carries no task text. The transcript of what was said can come a moment after it: wait briefly,
         # then take the words on the session timeline up to the delegation's offset (both are session ms), so two
         # delegations close together each get their own words (adversarial review 2026-11-28).
+        t0 = time.monotonic()   # what Live says from now on counts as its acknowledgement (review r1)
         await asyncio.sleep(_env_float("LIVE11_TEXT_VANTA_MS", 400.0) / 1000.0)
         text = self._ta_text(ev.get("offset_ms"))
-        await self.delegering.skapad(did, text, self._kontext())
+        await self.delegering.skapad(did, text, self._kontext(), start_t=t0)
 
     def _ta_text(self, offset_ms) -> str:
         """The CURRENT turn: the user's words from Björn's last words before the delegation up to its offset (session ms).
         Older words are history (context), not part of the task (trial 2026-11-28: weather + house in one request)."""
         if isinstance(offset_ms, int) and any(s_ms or e_ms for s_ms, e_ms, _ in self._anv):
             grans = offset_ms + _env_float("LIVE11_TEXT_SLACK_MS", 500.0)
-            fore = [m for m in getattr(self, "_bjorn_ms", []) if m < offset_ms]
-            bjorn_sist = max(fore) if fore else -1
-            tagna = [x for x in self._anv if x[0] <= grans and x[1] > bjorn_sist]
+            grans_bjorn = self._bjorn_segment_start(offset_ms)
+            # A word belongs to this turn when it STARTED after Björn's last utterance began: words said over him
+            # (barge-in) count, the question he was answering does not. Without timestamps on his transcript: all.
+            tagna = [x for x in self._anv if x[0] <= grans and x[0] > grans_bjorn]
+            if not tagna and grans_bjorn >= 0:
+                tagna = [x for x in self._anv if x[0] <= grans]   # never an empty task because of the boundary
             self._anv = [x for x in self._anv if x[0] > grans]
         else:
             tagna, self._anv = self._anv, []
         return "".join(t for _, _, t in tagna).strip()
 
+    def _bjorn_segment_start(self, offset_ms: int) -> int:
+        """Session ms at which Björn's last utterance before `offset_ms` began (deltas less than 1.5 s apart are one
+        utterance); -1 when there is none or his transcript carries no timestamps (the SDK types say it does)."""
+        fore = sorted(m for m in getattr(self, "_bjorn_ms", []) if 0 < m < offset_ms)
+        if not fore:
+            return -1
+        start = fore[-1]
+        for m in reversed(fore[:-1]):
+            if start - m > 1500:
+                break
+            start = m
+        return start
+
     def _kontext(self) -> str:
         """The last few lines of the dialogue, for the backend (CTX-01: only what is relevant, never the whole log)."""
         rader = [f"{'Användaren' if h['roll'] == 'user' else 'Björn'}: {h['text'][:200]}" for h in self.historik[-4:]]
+        while rader and sum(len(r) + 1 for r in rader) > 800:
+            rader.pop(0)   # whole lines only, oldest first
         return "\n".join(rader)
 
     def tur_text(self) -> str:

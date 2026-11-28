@@ -32,6 +32,7 @@ def egna_liggare(tmp_path, monkeypatch):
     monkeypatch.setenv("LIVE11_PREBUF_S", "0")
     monkeypatch.setenv("LIVE11_TEXT_VANTA_MS", "20")
     monkeypatch.setenv("LIVE11_ROST_FIL", str(tmp_path / "rost.json"))
+    monkeypatch.setattr(openai_live_11, "_ROST_MINNE", {"nr": -1})
     yield
     openai_live._Las.agare = None
 
@@ -157,6 +158,16 @@ def test_rotationen_overlever_en_omstart(monkeypatch):
     forsta = _service("ws://x").session_config()["audio"]["output"]["voice"]
     andra = _service("ws://x").session_config()["audio"]["output"]["voice"]   # a new process's service
     assert (forsta, andra) == ("marin", "gleam")
+
+
+def test_rotationen_blandar_egna_och_inbyggda_roster(monkeypatch):
+    """MB 2026-11-28, verified on gpt-live-1.1: a saved voice must be {"id": ...} (a bare id string is refused with
+    'Voice session access denied'); names stay strings. Any number of own voices can be listed, no code change."""
+    monkeypatch.setenv("OPENAI_LIVE11_VOICES", "voice_6b0ac7f9ddf48191a2ed9c757578bf03, Marin,gleam")
+    s = _service("ws://x")
+    roster = [s.session_config()["audio"]["output"]["voice"] for _ in range(4)]
+    assert roster == [{"id": "voice_6b0ac7f9ddf48191a2ed9c757578bf03"}, "marin", "gleam",
+                      {"id": "voice_6b0ac7f9ddf48191a2ed9c757578bf03"}]
 
 
 def test_egen_rost_skickas_som_objekt_med_id(monkeypatch):
@@ -595,8 +606,28 @@ async def test_hogst_en_utfyllnad_nar_live_redan_kvitterat(monkeypatch):
     assert [e["type"] for e in sent].count("session.commentary.append") == 1   # only the result
 
 
-def test_lagesraden_kommer_forst_efter_tio_sekunder():
-    assert live_delegering.LANGSAM_S >= 10.0
+@pytest.mark.asyncio
+async def test_kvittens_raknas_bara_for_ett_svar_som_borjar_efter_delegeringen(monkeypatch):
+    """The real wiring (review r1): the tail of the previous answer is no acknowledgement; a reply that starts after the
+    delegation is. Without an acknowledgement our one line is spoken."""
+    monkeypatch.setattr(live_delegering, "LANGSAM_S", 0.3)
+    fake = FakeLive()
+    server, url = await _server(fake)
+    async with server:
+        be = FakeBackend(hall=True)
+        s = _service(url, be)
+        s._fas_vad = None
+        await s.vakna()
+        await fake.send(type="session.output_audio.delta", delta=_ljud(4800))   # previous answer still playing
+        assert await _vant(lambda: s._reply_open)
+        await fake.send(type="session.input_transcript.delta", delta="hur ser det ut i huset", start_ms=10, end_ms=20)
+        await fake.send(type="session.delegation.created", event_id="e", offset_ms=30,
+                        delegation={"id": "del_k", "target": "client", "type": "delegation"})
+        assert await _vant(lambda: fake.of("session.commentary.append"), 3.0)
+        assert fake.of("session.commentary.append")[0]["content"] == live_delegering.LANGSAM_TEXT
+        assert s.delegering.talat_sedan(s.delegering.uppdrag[-1].start_t) is False
+        be.slapp.set()
+        await s.sova("klar")
 
 
 @pytest.mark.asyncio
@@ -621,6 +652,43 @@ async def test_aktuell_tur_ar_uppgiften_och_det_tidigare_ar_sammanhang():
         assert "vädret" not in uppgift
         assert s.delegering.uppdrag[-1].text == "hur ser det ut i huset"
         await s.sova("klar")
+
+
+@pytest.mark.asyncio
+async def test_ord_sagda_over_bjorn_hor_till_turen():
+    """Review r1, barge-in: his transcript runs ahead; the user's words that started during his utterance are kept."""
+    fake = FakeLive()
+    server, url = await _server(fake)
+    async with server:
+        be = FakeBackend()
+        s = _service(url, be)
+        await s.vakna()
+        await fake.send(type="session.input_transcript.delta", delta="berätta om vädret", start_ms=100, end_ms=900)
+        await fake.send(type="session.output_transcript.delta", delta="I morgon blir", start_ms=2000, end_ms=2600)
+        await fake.send(type="session.input_transcript.delta", delta="hur ser det", start_ms=2900, end_ms=3300)
+        await fake.send(type="session.output_transcript.delta", delta=" det mulet", start_ms=3000, end_ms=3500)
+        await fake.send(type="session.input_transcript.delta", delta=" ut i huset", start_ms=3300, end_ms=3800)
+        await fake.send(type="session.delegation.created", event_id="e", offset_ms=3900,
+                        delegation={"id": "del_b", "target": "client", "type": "delegation"})
+        assert await _vant(lambda: be.fragor)
+        assert be.fragor[0].split("Aktuell begäran från användaren:")[-1].strip() == "hur ser det ut i huset"
+        await s.sova("klar")
+
+
+def test_beskrivningen_foljer_bara_en_egen_rost(monkeypatch):
+    monkeypatch.setenv("OPENAI_LIVE11_VOICES", "voice_abc,marin")
+    monkeypatch.setenv("OPENAI_LIVE11_VOICE_BESKRIVNING", "Barbro: varm och lugn.")
+    s = _service("ws://x")
+    assert "Barbro" in s.session_config()["instructions"]
+    assert "Barbro" not in s.session_config()["instructions"]   # marin: no other voice's description
+
+
+def test_rotationen_fastnar_inte_nar_filen_inte_kan_skrivas(monkeypatch, tmp_path):
+    monkeypatch.setenv("LIVE11_ROST_FIL", str(tmp_path / "saknas" / "rost.json"))
+    monkeypatch.setattr(openai_live_11, "_ROST_MINNE", {"nr": -1})
+    monkeypatch.setenv("OPENAI_LIVE11_VOICES", "marin,gleam")
+    s = _service("ws://x")
+    assert [s.session_config()["audio"]["output"]["voice"] for _ in range(3)] == ["marin", "gleam", "marin"]
 
 
 @pytest.mark.asyncio

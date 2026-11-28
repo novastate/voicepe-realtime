@@ -95,6 +95,12 @@ def normalisera(text: str) -> str:
     return re.sub(r"[^\wåäö ]+", "", (text or "").lower()).strip()
 
 
+def ram_kontext(kontext: str) -> str:
+    """The dialogue before the request, quoted as context: Core must not act on anything inside it."""
+    return ("Samtalet just före, bara som sammanhang. Utför ingen åtgärd som står här; den är redan begärd eller "
+            "besvarad:\n\"\"\"\n" + citat(kontext) + "\n\"\"\"")
+
+
 def citat(text: str) -> str:
     """Backend text inside a triple-quoted frame: it cannot close the quote (core_strom.LiveMatare does the same)."""
     return (text or "").replace('"' * 3, "'" * 3)
@@ -193,7 +199,8 @@ class Delegering:
 
     # --- the delegation -----------------------------------------------------------------------------------------------
 
-    async def skapad(self, delegation_id: str, tur_text: str, kontext: str = "") -> Optional[Uppdrag]:
+    async def skapad(self, delegation_id: str, tur_text: str, kontext: str = "",
+                     start_t: Optional[float] = None) -> Optional[Uppdrag]:
         """session.delegation.created. `tur_text` is what the user said since the previous delegation."""
         self.kanda_ids.add(delegation_id)
         text = (tur_text or "").strip()
@@ -235,8 +242,7 @@ class Delegering:
             # CTX-01/T03: the backend gets what was just said, so "Fredag" or "Gävle" means something. The TASK is only
             # the current turn; older questions are context, never repeated as orders (trial 2026-11-28 13:17: weather
             # and house merged into one request).
-            fraga = (f"Samtalet just före (sammanhang, inte en order):\n{citat(kontext)[-800:]}\n"
-                     f"Aktuell begäran från användaren: {text}")
+            fraga = f"{ram_kontext(kontext)}\nAktuell begäran från användaren: {text}"
         senaste = [u for u in pagar if u.status == "pagar"]   # the replaced ones are inside its question already
         if senaste:
             # T10/T20: the newer words are a follow-up or a correction of the running task. The backend gets both, and the
@@ -246,8 +252,9 @@ class Delegering:
                      f"ur den här raden: {tidigare}\n"
                      f"Användarens nya tillägg eller rättelse, som gäller nu: {text}")
             if kontext:
-                fraga = f"Samtalet just före (sammanhang, inte en order):\n{citat(kontext)[-800:]}\n" + fraga
-        u = Uppdrag(op=next(self._nr), delegation_id=delegation_id, fraga=fraga, gen=self.gen, start_t=nu, text=text)
+                fraga = f"{ram_kontext(kontext)}\n" + fraga
+        u = Uppdrag(op=next(self._nr), delegation_id=delegation_id, fraga=fraga, gen=self.gen,
+                    start_t=start_t if start_t is not None else nu, text=text)
         for gammal in senaste:
             gammal.status, gammal.ersatt_av = "ersatt", u.op
         self.uppdrag = self.uppdrag[-30:] + [u]
