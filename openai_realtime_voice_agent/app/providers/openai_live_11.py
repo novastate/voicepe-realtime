@@ -67,8 +67,8 @@ automatiskt det avbrutna svaret. Reagera inte på eget högtalarljud, tv, musik 
 Delegation policy: Husets backend kan: styra huset (ljus, media, scener, värme, timers), läsa husets läge,
 minnet om familjen, kalendern, väder, nyheter, sport, sökning på nätet och djupare analys. Delegera när frågan
 kräver aktuell information, en åtgärd i huset, minne eller analys. Delegera inte enkla samtalsfrågor, småprat eller
-frågor om det som just sagts. Fortsätt lyssna medan arbetet pågår. Ge relevanta uppdateringar och återge verifierade
-resultat. Påstå aldrig att en åtgärd lyckats innan backend har bekräftat det. Skilj på att sluta prata och att
+frågor om det som just sagts. Fortsätt lyssna medan arbetet pågår. Säg högst en kort sak medan du väntar och upprepa
+aldrig att du kollar. Återge verifierade resultat. Påstå aldrig att en åtgärd lyckats innan backend har bekräftat det. Skilj på att sluta prata och att
 avbryta en uppgift: ber användaren dig avbryta uppgiften, delegera det. Lås, larm och garage sköter du aldrig själv.
 Håll isär flera uppgifter: svara på en i taget och blanda inte ihop deras resultat.
 
@@ -87,13 +87,11 @@ def rost_falt(rost: str):
     rost = (rost or "marin").strip()
     if egen_rost(rost):
         return {"id": rost}   # verified by MB on gpt-live-1.1: a bare id string is refused ("Voice session access denied")
-    if rost.lower().startswith("voice_"):
-        logger.warning(f"⚠️ live11: voice {rost!r} looks like an id but does not start with 'voice_': sent as a name")
     return rost.lower()
 
 
 def egen_rost(rost: str) -> bool:
-    return (rost or "").strip().startswith("voice_")
+    return (rost or "").strip().lower().startswith("voice_")
 
 
 def _rostbeskrivning() -> str:
@@ -182,7 +180,7 @@ class OpenAILive11Service(OpenAILiveService):
         self._turns = None                      # never local turns: Live hears everything
         self.delegering = Delegering(self._send, vakt=lambda t: self.vakt(t) if self.vakt else None,
                                      tagg=getattr(options, "rum", "") or "-",
-                                     talat_sedan=lambda t: self._reply_open and self._spelstart_t > t)
+                                     talat_sedan=lambda t: self._spelstart_t > t)   # a reply BEGAN after t
         self.historik: List[Dict[str, str]] = []   # CTX-01: [{"roll", "text", "status"}], newest last
         self._anv: List[tuple] = []             # (start_ms, end_ms, text) user transcript not yet given to a delegation
         self._svarstext_anv = ""                # user words heard after this reply's first sound (interruption evidence)
@@ -294,7 +292,7 @@ class OpenAILive11Service(OpenAILiveService):
             d = ev.get("delta") or ""
             if d:
                 self._bjorn += d
-                self._bjorn_ms = (getattr(self, "_bjorn_ms", []) + [int(ev.get("start_ms") or 0)])[-200:]
+                self._bjorn_ms = (getattr(self, "_bjorn_ms", []) + [(int(ev.get("start_ms") or 0), d)])[-200:]
                 self._svarsprak(d)
                 await self.push_frame(TTSTextFrame(text=d, aggregated_by="sentence"))
         elif typ == "session.input_transcript.delta":
@@ -364,15 +362,20 @@ class OpenAILive11Service(OpenAILiveService):
     def _bjorn_segment_start(self, offset_ms: int) -> int:
         """Session ms at which Björn's last utterance before `offset_ms` began (deltas less than 1.5 s apart are one
         utterance); -1 when there is none or his transcript carries no timestamps (the SDK types say it does)."""
-        fore = sorted(m for m in getattr(self, "_bjorn_ms", []) if 0 < m < offset_ms)
-        if not fore:
-            return -1
-        start = fore[-1]
-        for m in reversed(fore[:-1]):
-            if start - m > 1500:
-                break
-            start = m
-        return start
+        fore = sorted((m, t) for m, t in getattr(self, "_bjorn_ms", []) if 0 < m < offset_ms)
+        # Utterances: deltas less than LIVE11_YTTRANDE_GAP_MS apart. A short one ("mm", "ja") is a listening sound, not
+        # an answer: it is no boundary, or "släck kontoret ... mm ... och tänd i köket" loses its first half (Grok r1).
+        gap = _env_float("LIVE11_YTTRANDE_GAP_MS", 1000.0)
+        yttranden: List[List] = []
+        for m, t in fore:
+            if yttranden and m - yttranden[-1][1] <= gap:
+                yttranden[-1][1], yttranden[-1][2] = m, yttranden[-1][2] + t
+            else:
+                yttranden.append([m, m, t])
+        for start, _, text in reversed(yttranden):
+            if len(re_ord(text)) > 2:
+                return start
+        return -1
 
     def _kontext(self) -> str:
         """The last few lines of the dialogue, for the backend (CTX-01: only what is relevant, never the whole log)."""

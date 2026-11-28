@@ -181,6 +181,7 @@ def test_egen_rost_skickas_som_objekt_med_id(monkeypatch):
     opts = ProviderOptions(api_key="k", model="", voice="voice_fromenv", instructions="x")
     assert build_service(OPENAI_LIVE_11, opts, []).session_config()["audio"]["output"] == {"voice": {"id": "voice_fromenv"}}
     assert openai_live_11.rost_falt("Marin") == "marin"
+    assert openai_live_11.rost_falt("Voice_Ab1") == {"id": "Voice_Ab1"}
 
 
 def test_session_start_ar_live_11_med_klientdelegering():
@@ -672,6 +673,50 @@ async def test_ord_sagda_over_bjorn_hor_till_turen():
                         delegation={"id": "del_b", "target": "client", "type": "delegation"})
         assert await _vant(lambda: be.fragor)
         assert be.fragor[0].split("Aktuell begäran från användaren:")[-1].strip() == "hur ser det ut i huset"
+        await s.sova("klar")
+
+
+@pytest.mark.asyncio
+async def test_ett_mm_fran_bjorn_delar_inte_en_order_i_tva():
+    """Grok r1: 'släck kontoret' -> Björn 'mm' -> 'och tänd i köket': both halves are the task."""
+    fake = FakeLive()
+    server, url = await _server(fake)
+    async with server:
+        be = FakeBackend()
+        s = _service(url, be)
+        await s.vakna()
+        await fake.send(type="session.output_transcript.delta", delta="Hej, vad vill du?", start_ms=50, end_ms=600)
+        await fake.send(type="session.input_transcript.delta", delta="släck kontoret", start_ms=2000, end_ms=2800)
+        await fake.send(type="session.output_transcript.delta", delta="Mm.", start_ms=3000, end_ms=3200)
+        await fake.send(type="session.input_transcript.delta", delta=" och tänd i köket", start_ms=3300, end_ms=4200)
+        await fake.send(type="session.delegation.created", event_id="e", offset_ms=4300,
+                        delegation={"id": "del_m", "target": "client", "type": "delegation"})
+        assert await _vant(lambda: be.fragor)
+        assert be.fragor[0].split("Aktuell begäran från användaren:")[-1].strip() == "släck kontoret och tänd i köket"
+        await s.sova("klar")
+
+
+@pytest.mark.asyncio
+async def test_en_kort_kvittens_som_redan_tystnat_raknas_anda(monkeypatch):
+    """Grok r1: Live's 'Kikar snabbt.' has ended (reply closed) when the 10 s check runs; it still counts."""
+    monkeypatch.setenv("OPENAI_LIVE_REPLY_GAP_MS", "50")
+    monkeypatch.setattr(live_delegering, "LANGSAM_S", 0.4)
+    fake = FakeLive()
+    server, url = await _server(fake)
+    async with server:
+        be = FakeBackend(hall=True)
+        s = _service(url, be)
+        s._fas_vad = None
+        await s.vakna()
+        await fake.send(type="session.input_transcript.delta", delta="hur ser det ut i huset", start_ms=10, end_ms=20)
+        await fake.send(type="session.delegation.created", event_id="e", offset_ms=30,
+                        delegation={"id": "del_q", "target": "client", "type": "delegation"})
+        await asyncio.sleep(0.05)
+        await fake.send(type="session.output_audio.delta", delta=_ljud(2400))   # "Kikar snabbt."
+        assert await _vant(lambda: fake.of("session.thinking.append"), 3.0)
+        assert not s._reply_open
+        assert not fake.of("session.commentary.append")
+        be.slapp.set()
         await s.sova("klar")
 
 
