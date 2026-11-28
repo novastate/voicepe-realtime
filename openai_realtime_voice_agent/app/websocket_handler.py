@@ -89,7 +89,9 @@ def koppla_live11(service, connection, phase_emitter, serializer) -> None:
 
     def _vakt(text: str):
         t = getattr(connection, "barge_in_t", None)
-        hans = next((h["text"] for h in reversed(getattr(service, "historik", [])) if h.get("roll") == "assistant"), "")
+        # What he is saying now counts too, not only his finished replies (Grok 2026-11-28).
+        hans = getattr(service, "_bjorn", "") or next(
+            (h["text"] for h in reversed(getattr(service, "historik", [])) if h.get("roll") == "assistant"), "")
         return eko_vakt.veto_verktyg(phase_emitter.phase, getattr(phase_emitter, "idle_since", 0.0),
                                      (time.monotonic() - t) if t else None, text, hans)
 

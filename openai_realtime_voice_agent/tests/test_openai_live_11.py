@@ -28,7 +28,7 @@ def egna_liggare(tmp_path, monkeypatch):
     monkeypatch.setattr(SovlageMixin, "budget", Budget(path=str(tmp_path / "moln.json"), today=lambda: "d"))
     monkeypatch.setattr(openai_live, "OPENAI_BUDGET", Budget(path=str(tmp_path / "oa.json"), today=lambda: "d"))
     openai_live._Las.agare = None
-    monkeypatch.setenv("OPENAI_LIVE_REPLY_GAP_MS", "300")
+    monkeypatch.setenv("OPENAI_LIVE_REPLY_GAP_MS", "1500")   # production's value: the interruption runs as on the device
     monkeypatch.setenv("LIVE11_PREBUF_S", "0")
     monkeypatch.setenv("LIVE11_TEXT_VANTA_MS", "20")
     yield
@@ -264,21 +264,65 @@ async def test_fragans_sena_transkript_avbryter_inte_svaret_den_fick():
 
 
 @pytest.mark.asyncio
-async def test_ett_mm_medan_live_fortsatter_prata_avbryter_inte():
-    """T04: Live keeps the floor (audio keeps coming): nothing is dropped, whatever the transcript says."""
+async def test_ett_mm_medan_live_pausar_kort_avbryter_inte():
+    """T04, the review's scenario: 0.9 s into the reply he says "mm", Live pauses 300 ms (zeros) and carries on.
+    Nothing is dropped. Without the listening-sound rule this cut the reply (LIVE11_AVBROTT_TYST_BC_MS=0 shows it)."""
     fake = FakeLive()
     server, url = await _server(fake)
     async with server:
         s = _service(url)
         s._fas_vad = None
         await s.vakna()
-        for _ in range(5):
-            await fake.send(type="session.output_audio.delta", delta=_ljud(240))
-            await fake.send(type="session.input_transcript.delta", delta="mm", start_ms=0, end_ms=1)
-            await asyncio.sleep(0.05)
+        await fake.send(type="session.output_audio.delta", delta=_ljud(24000))   # 1 s of reply
+        await asyncio.sleep(0.9)
+        await fake.send(type="session.input_transcript.delta", delta="mm", start_ms=900, end_ms=1000)
+        await asyncio.sleep(0.3)
+        await fake.send(type="session.output_audio.delta", delta=_ljud(tyst=True))
         await asyncio.sleep(0.05)
+        await fake.send(type="session.output_audio.delta", delta=_ljud(2400))
+        await asyncio.sleep(0.1)
         assert not any(isinstance(f, InterruptionFrame) for f in s.frames)
-        assert len([f for f in s.frames if isinstance(f, TTSAudioRawFrame)]) == 5
+        assert s._reply_open
+        await s.sova("klar")
+
+
+@pytest.mark.asyncio
+async def test_samma_paus_med_riktiga_ord_ar_ett_avbrott():
+    """The counterpart: the same timing with words that take the floor drops the old reply (CONV-01)."""
+    fake = FakeLive()
+    server, url = await _server(fake)
+    async with server:
+        s = _service(url)
+        s._fas_vad = None
+        await s.vakna()
+        await fake.send(type="session.output_audio.delta", delta=_ljud(48000))   # 2 s of reply
+        await asyncio.sleep(0.9)
+        await fake.send(type="session.input_transcript.delta", delta="nej, nästa fredag", start_ms=900, end_ms=1000)
+        await asyncio.sleep(0.1)
+        await fake.send(type="session.output_audio.delta", delta=_ljud(tyst=True))
+        assert await _vant(lambda: any(isinstance(f, InterruptionFrame) for f in s.frames))
+        await s.sova("klar")
+
+
+@pytest.mark.asyncio
+async def test_avbrott_utan_lokal_detektor_stanger_lyssnar_lage(monkeypatch):
+    """After a cut on the transcript alone the device is not left in "listening" (Grok, review 2026-11-28)."""
+    from pipecat.frames.frames import UserStoppedSpeakingFrame
+    monkeypatch.setenv("LIVE11_TEXT_EFTER_S", "0.05")
+    monkeypatch.setenv("LIVE11_AVBROTT_TYST_MS", "50")
+    fake = FakeLive()
+    server, url = await _server(fake)
+    async with server:
+        s = _service(url)
+        s._fas_vad = None
+        await s.vakna()
+        await fake.send(type="session.output_audio.delta", delta=_ljud())
+        await asyncio.sleep(0.1)
+        await fake.send(type="session.input_transcript.delta", delta="vänta lite nu", start_ms=1, end_ms=2)
+        await asyncio.sleep(0.1)
+        await fake.send(type="session.output_audio.delta", delta=_ljud(tyst=True))
+        assert await _vant(lambda: any(isinstance(f, InterruptionFrame) for f in s.frames))
+        assert await _vant(lambda: any(isinstance(f, UserStoppedSpeakingFrame) for f in s.frames), 3.0)
         await s.sova("klar")
 
 
@@ -394,6 +438,98 @@ async def test_tyst_ar_inte_avbryt_men_avbryt_sokningen_ar_det():
 
 
 @pytest.mark.asyncio
+async def test_glom_inte_ar_ett_tillagg_inte_ett_avbrott():
+    sent = []
+    be = FakeBackend(hall=True)
+    d = Delegering(lambda ev: _samla(sent, ev), backend=be)
+    u1 = await d.skapad("d1", "Tänd i köket.")
+    await asyncio.sleep(0)
+    assert await d.skapad("dx", "avbryt inte, fortsätt") is not None   # not a cancel either
+    u2 = await d.skapad("d2", "och glöm inte hallen")
+    assert u2 is not None and "glöm inte hallen" in u2.fraga
+    assert not u1.task.cancelled() and u1.kor()
+    be.slapp.set()
+    await u1.task
+    await u2.task
+
+
+@pytest.mark.asyncio
+async def test_avbryt_stoppar_aven_en_ersatt_uppgift_som_kor():
+    """Review: a replaced task still runs; 'avbryt' must stop it too, or the user is told something false."""
+    sent = []
+    be = FakeBackend(hall=True)
+    d = Delegering(lambda ev: _samla(sent, ev), backend=be)
+    u1 = await d.skapad("d1", "Sök tågtider till Uppsala.")
+    await asyncio.sleep(0)
+    u2 = await d.skapad("d2", "bara direkttåg")
+    await asyncio.sleep(0)
+    await d.skapad("d3", "Avbryt sökningen.")
+    for u in (u1, u2):
+        with pytest.raises(asyncio.CancelledError):
+            await u.task
+        assert u.status == "avbruten"
+    assert d.pagaende() == []
+
+
+@pytest.mark.asyncio
+async def test_omforsok_efter_en_foljdfraga_kor_inte_atgarden_igen():
+    """Review: 'Tänd i hallen.' -> 'och i köket' -> 'Tänd i hallen.' again: the hall is not asked for twice."""
+    sent = []
+    be = FakeBackend(aktioner=[{"tool": "HassTurnOn", "utfall": "ok"}], hall=True)
+    d = Delegering(lambda ev: _samla(sent, ev), backend=be)
+    await d.skapad("d1", "Tänd i hallen.")
+    await asyncio.sleep(0)
+    await d.skapad("d2", "och i köket")
+    await asyncio.sleep(0.01)
+    assert await d.skapad("d3", "Tänd i hallen.") is None
+    assert len(be.fragor) == 2
+    be.slapp.set()
+    for u in d.uppdrag:
+        await u.task
+
+
+@pytest.mark.asyncio
+async def test_tva_delegeringar_tatt_far_var_sina_ord():
+    """Review: two delegations close together each take the words up to their own offset_ms."""
+    fake = FakeLive()
+    server, url = await _server(fake)
+    async with server:
+        be = FakeBackend()
+        s = _service(url, be)
+        await s.vakna()
+        await fake.send(type="session.input_transcript.delta", delta="tänd i köket", start_ms=100, end_ms=900)
+        await fake.send(type="session.delegation.created", event_id="e1", offset_ms=1000,
+                        delegation={"id": "del_1", "target": "client", "type": "delegation"})
+        await fake.send(type="session.input_transcript.delta", delta=" och vad är klockan", start_ms=1800, end_ms=2600)
+        await fake.send(type="session.delegation.created", event_id="e2", offset_ms=2700,
+                        delegation={"id": "del_2", "target": "client", "type": "delegation"})
+        assert await _vant(lambda: len(be.fragor) == 2)
+        assert be.fragor[0] == "tänd i köket"
+        assert "vad är klockan" in be.fragor[1] and "tänd i köket" not in be.fragor[1].split("gäller nu:")[-1]
+        await s.sova("klar")
+
+
+def test_ekovakten_ar_kopplad_till_hans_senaste_replik():
+    """The real wiring (koppla_live11): his own last words heard back over his reply are not delegated."""
+    import time as _t
+    from types import SimpleNamespace
+    from app.websocket_handler import koppla_live11
+    s = _service("ws://x")
+    s.historik = [{"roll": "assistant", "text": "Lampan i köket är tänd nu.", "status": "klar"}]
+    pe = SimpleNamespace(phase="replying", idle_since=_t.monotonic())
+    ser = SimpleNamespace(sedan_svar=lambda: 0.5)
+    conn = SimpleNamespace(recovery=None, barge_in_t=None)
+    koppla_live11(s, conn, pe, ser)
+    assert s.vakt("Lampan i köket är tänd nu.")
+    assert s.vakt("släck i hallen") is None
+    s._bjorn = "Jag låser upp dörren"   # still being said: his own words over the mic are not an order
+    assert s.vakt("jag låser upp dörren")
+    assert s.slapp_ljud() is True and s.svarar() is True
+    s.on_motor_avbrott()
+    assert conn.barge_tur is True
+
+
+@pytest.mark.asyncio
 async def test_ekovakten_stoppar_en_delegering_av_hans_egna_ord():
     sent = []
     be = FakeBackend()
@@ -454,6 +590,21 @@ async def test_bortfall_ateransluter_med_historiken_och_gammalt_resultat_blir_ko
         assert len(be.fragor) == 1   # not run again
         assert s.sover is False
         await s.sova("klar")
+
+
+@pytest.mark.asyncio
+async def test_journalraderna_innehaller_inga_ord(caplog):
+    """OPS-02 on the lines actually written: a whole delegation and an interruption, and no user or backend words."""
+    import logging
+    caplog.set_level(logging.INFO)
+    sent = []
+    d = Delegering(lambda ev: _samla(sent, ev), backend=FakeBackend(svar="Hemligt svar om banken."), tagg="kontoret")
+    u = await d.skapad("d1", "Vad är koden till larmet?")
+    await u.task
+    text = caplog.text
+    assert "live11[kontoret] delegering slut" in text
+    for ord_ in ("koden", "larmet", "Hemligt", "banken"):
+        assert ord_ not in text
 
 
 def test_telemetrin_innehaller_inga_ord():
