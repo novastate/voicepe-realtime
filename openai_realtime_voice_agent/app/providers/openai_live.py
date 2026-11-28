@@ -139,6 +139,7 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
     _context = None
     # The first-sound buffer's knob (see _ljud_ut); openai_live_11 keeps its own, smaller one.
     PREBUF_ENV, PREBUF_DEFAULT = "OPENAI_LIVE_PREBUF_S", 0.7
+    PREBUF_MAX_ENV, PREBUF_MAX_DEFAULT = "OPENAI_LIVE_PREBUF_MAX_S", 1.2
     _needs_turn_complete_message = False
 
     # Bana 0 hooks, same as Gemini (see gemini_live.py).
@@ -436,7 +437,7 @@ class OpenAILiveService(SovlageMixin, LocalTurnsMixin, ToolRegistrationMixin, LL
             self._pre_task = asyncio.get_running_loop().create_task(self._slapp_forbuffer_senare())
 
     async def _slapp_forbuffer_senare(self) -> None:
-        await asyncio.sleep(_env_float("OPENAI_LIVE_PREBUF_MAX_S", 1.2))
+        await asyncio.sleep(_env_float(self.PREBUF_MAX_ENV, self.PREBUF_MAX_DEFAULT))
         self._pre_task = None
         await self._slapp_forbuffer()
 

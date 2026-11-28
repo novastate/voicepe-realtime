@@ -369,6 +369,59 @@ async def test_avbrott_utan_lokal_detektor_stanger_lyssnar_lage(monkeypatch):
         await s.sova("klar")
 
 
+@pytest.mark.asyncio
+async def test_pauser_inne_i_ett_svar_spelas_tystnaden_efter_slanges(monkeypatch, caplog):
+    """Round 2: Live streams at 1.00x with zeros in its pauses. Dropping them emptied the speaker at every pause
+    (177 underruns in 2 min). Zeros inside a reply are played; zeros long after its last sound are not."""
+    import logging
+    caplog.set_level(logging.INFO)
+    monkeypatch.setenv("OPENAI_LIVE_REPLY_GAP_MS", "400")
+    monkeypatch.setenv("LIVE11_NOLLOR_MAX_S", "0.2")
+    fake = FakeLive()
+    server, url = await _server(fake)
+    async with server:
+        s = _service(url)
+        s._fas_vad = None
+        await s.vakna()
+        await fake.send(type="session.output_audio.delta", delta=_ljud(2400))
+        await fake.send(type="session.output_audio.delta", delta=_ljud(2400, tyst=True))   # a pause in the reply
+        await fake.send(type="session.output_audio.delta", delta=_ljud(2400))
+        assert await _vant(lambda: len([f for f in s.frames if isinstance(f, TTSAudioRawFrame)]) == 3)
+        tyst = [f for f in s.frames if isinstance(f, TTSAudioRawFrame) and not any(f.audio)]
+        assert len(tyst) == 1
+        await asyncio.sleep(0.3)
+        await fake.send(type="session.output_audio.delta", delta=_ljud(2400, tyst=True))   # after the reply: not played
+        await asyncio.sleep(0.05)
+        assert len([f for f in s.frames if isinstance(f, TTSAudioRawFrame)]) == 3
+        assert await _vant(lambda: "ström svar=klart" in caplog.text, 2.0)
+        assert "pauser_spelade=0.1s" in caplog.text and "takt=" in caplog.text
+        await s.sova("klar")
+
+
+@pytest.mark.asyncio
+async def test_avstangt_slanger_pauserna_som_forut(monkeypatch):
+    monkeypatch.setenv("LIVE11_NOLLOR_I_SVAR", "0")
+    fake = FakeLive()
+    server, url = await _server(fake)
+    async with server:
+        s = _service(url)
+        s._fas_vad = None
+        await s.vakna()
+        await fake.send(type="session.output_audio.delta", delta=_ljud(2400))
+        await fake.send(type="session.output_audio.delta", delta=_ljud(2400, tyst=True))
+        await fake.send(type="session.output_audio.delta", delta=_ljud(2400))
+        assert await _vant(lambda: len([f for f in s.frames if isinstance(f, TTSAudioRawFrame)]) == 2)
+        await asyncio.sleep(0.05)
+        assert not any(not any(f.audio) for f in s.frames if isinstance(f, TTSAudioRawFrame))
+        await s.sova("klar")
+
+
+def test_policyn_haller_svaren_korta_och_tonlaget_jamnt():
+    pol = openai_live_11.LIVE11_POLICY
+    assert "Högst två eller tre meningar" in pol and "aldrig en monolog" in pol
+    assert "samma röstläge, tonhöjd och tempo" in pol and "personlighet" in pol
+
+
 # --- TASK-01..03: client delegation through the backend ------------------------------------------------------------------
 
 @pytest.mark.asyncio

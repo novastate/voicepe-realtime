@@ -58,7 +58,8 @@ LIVE11_POLICY = """
 SAMTAL I HÖGTALAREN: Tala naturlig svenska, som en person i rummet, inte som ett uppslagsverk. Ge det konkreta
 svaret först, men låt det vara en hel, varm mening eller två, aldrig bara ett telegram. Låt din personlighet synas:
 humor, en egen reaktion, en liten kommentar när det passar. Variera hur du börjar och avslutar. Håll det lugnt och
-utan utfyllnad. Utveckla när användaren vill ha mer. Det här går före alla tidigare önskemål om att vara kort.
+utan utfyllnad. Högst två eller tre meningar per svar, aldrig en monolog; utveckla bara när användaren ber om mer.
+Håll samma röstläge, tonhöjd och tempo genom hela svaret, från första till sista ordet.
 
 Backchannel policy: Använd sparsamma, naturliga lyssningsljud när det hjälper. Ta inte över samtalet medan
 användaren formulerar sin tanke. Ett kort mm eller ja från användaren kan vara en bekräftelse, inte en ny fråga.
@@ -170,6 +171,7 @@ class OpenAILive11Service(OpenAILiveService):
 
     live11 = True
     PREBUF_ENV, PREBUF_DEFAULT = "LIVE11_PREBUF_S", 0.3   # AUDIO-03: a short queue is one that can be interrupted
+    PREBUF_MAX_ENV, PREBUF_MAX_DEFAULT = "LIVE11_PREBUF_MAX_S", 2.0   # Live sends at 1.00x: a 1.5 s hold takes 1.5 s
     _fas_vad: Optional[LocalTurns] = None
     slapp_ljud = None        # set by the handler: False = nobody woke him and no reply is recent -> silence is sent
     svarar = None            # set by the handler: True while his reply is playing
@@ -405,11 +407,19 @@ class OpenAILive11Service(OpenAILiveService):
             if not self._noll_sedan:
                 self._noll_sedan = time.monotonic()
             await self._kolla_avbrott("tystnad")
+            if (self._reply_open and os.environ.get("LIVE11_NOLLOR_I_SVAR", "1") != "0"
+                    and time.monotonic() - self._sista_ljud_t < _env_float("LIVE11_NOLLOR_MAX_S", 1.2)):
+                # Round 2: a pause INSIDE a reply is part of it. Dropped, the speaker ran dry at every pause and its
+                # cushion never came back (Live streams at exactly 1.00x: 177 underruns in 2 min, 2026-11-28 13:44).
+                self._strom_bit(pcm, noll=True)
+                await self._ljud_ut(pcm)
             return
         if pcm:
             self._noll_sedan = 0.0
         if pcm and not self._reply_open:
             self._spelstart_t = time.monotonic()
+            self._strom = {"t0": self._spelstart_t, "ljud": 0.0, "brist": 0.0, "lucka": 0.0, "sena": 0,
+                           "pauser": 0.0, "sist": None, "dur": 0.0}
             logger.info(f"{self._spar} svar start session={getattr(self, 'session_id', '-')} röst={getattr(self, 'rost', '-')}")
             self._svarstext_anv = ""
             if self._anv_tur.strip():
@@ -419,7 +429,36 @@ class OpenAILive11Service(OpenAILiveService):
         if pcm:
             self.matning.genererat_s += len(pcm) / (2.0 * OUT_RATE)
             self._senast_aktiv_t = time.monotonic()
+            self._strom_bit(pcm, noll=False)
         await super()._audio_out(pcm)
+
+    def _strom_bit(self, pcm: bytes, noll: bool) -> None:
+        """Round 2, OPS-02: how Live's stream arrives within one reply. `brist` = how far the wall clock got ahead of
+        the audio received (the cushion the speaker needs); `sena` = chunks more than 30 ms later than the previous
+        one's length; `pauser` = silence inside the reply that is now played instead of dropped."""
+        st = getattr(self, "_strom", None)
+        if st is None:
+            return
+        nu = time.monotonic()
+        dur = len(pcm) / (2.0 * OUT_RATE)
+        st["brist"] = max(st["brist"], (nu - st["t0"]) - st["ljud"])
+        if st["sist"] is not None:
+            lucka = nu - st["sist"]
+            st["lucka"] = max(st["lucka"], lucka)
+            if lucka > st["dur"] + 0.03:
+                st["sena"] += 1
+        st["ljud"] += dur
+        st["pauser"] += dur if noll else 0.0
+        st["sist"], st["dur"] = nu, dur
+
+    def _logga_strom(self, slut: str) -> None:
+        st, self._strom = getattr(self, "_strom", None), None
+        if not st or st["sist"] is None:
+            return
+        vagg = max(1e-6, st["sist"] - st["t0"])
+        logger.info(f"{self._spar} ström svar={slut} ljud={st['ljud']:.1f}s vägg={vagg:.1f}s takt={st['ljud'] / vagg:.2f}x "
+                    f"max_brist={st['brist']:.2f}s max_lucka={st['lucka'] * 1000:.0f}ms sena_bitar={st['sena']} "
+                    f"pauser_spelade={st['pauser']:.1f}s förbuffert={_env_float(self.PREBUF_ENV, self.PREBUF_DEFAULT):.1f}s")
 
     def _senast_svar_t(self) -> float:
         return getattr(self, "_forra_svar_t", 0.0)
@@ -497,6 +536,7 @@ class OpenAILive11Service(OpenAILiveService):
             self._pre_task.cancel()
             self._pre_task = None
         self._reply_open = False
+        self._logga_strom("avbrutet")
         if self._bjorn.strip():
             self._historik_bjorn("avbrutet")
         if self.on_motor_avbrott is not None:
@@ -523,8 +563,10 @@ class OpenAILive11Service(OpenAILiveService):
 
     async def _end_reply_later(self):
         await super()._end_reply_later()
-        if not self._reply_open and self._bjorn.strip():
-            self._historik_bjorn("klar")
+        if not self._reply_open:
+            self._logga_strom("klart")
+            if self._bjorn.strip():
+                self._historik_bjorn("klar")
 
     # --- input -----------------------------------------------------------------------------------------------------
 
